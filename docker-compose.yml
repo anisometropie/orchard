@@ -28,13 +28,15 @@ services:
     command: ["/data/orchard.mbtiles"]
     restart: unless-stopped
 
-  # 3. Frontend (React + MapLibre)
-  frontend:
+  # 3. Static frontend
+  nginx:
     image: nginx:alpine
+    restart: unless-stopped
     ports:
       - "8080:80"
+    environment:
+      # Browser-facing URL, supplied by the deployment's .env file.
+      MARTIN_URL: ${MARTIN_URL:?Set MARTIN_URL in .env}
     volumes:
+      - ./nginx.conf:/etc/nginx/templates/default.conf.template:ro
       - ./frontend:/usr/share/nginx/html:ro
-    depends_on:
-      - martin
-    restart: unless-stopped

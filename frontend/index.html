@@ -69,7 +69,9 @@
         style="width: 100%; margin-top: 4px"
       />
     </div>
+    <script src="/config.js"></script>
     <script>
+      const MARTIN_URL = window.MARTIN_URL;
       const map = new maplibregl.Map({
         container: "map",
         style: {
@@ -85,7 +87,7 @@
             },
             orchard: {
               type: "vector",
-              tiles: ["http://localhost:3000/orchard/{z}/{x}/{y}"],
+              tiles: [`${MARTIN_URL.replace(/\/$/, "")}/orchard/{z}/{x}/{y}`],
               minzoom: 0,
               maxzoom: 20,
             },
