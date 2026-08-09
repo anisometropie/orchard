@@ -1,0 +1,297 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Orchard</title>
+    <meta charset="utf-8" />
+    <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+    <link
+      href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        margin: 0;
+      }
+      #map {
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div
+      id="date-filter"
+      style="
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        background: white;
+        padding: 12px 16px;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        z-index: 10;
+        font-family: sans-serif;
+        width: 280px;
+      "
+    >
+      <label
+        style="
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 8px;
+          font-weight: 600;
+        "
+      >
+        <input type="checkbox" id="date-filter-enabled" checked />
+        Filter by planting date
+      </label>
+
+      <div id="date-label" style="font-size: 13px; margin-bottom: 8px">
+        All dates
+      </div>
+
+      <input
+        type="range"
+        id="date-min"
+        min="0"
+        max="1000"
+        value="0"
+        style="width: 100%"
+      />
+      <input
+        type="range"
+        id="date-max"
+        min="0"
+        max="1000"
+        value="1000"
+        style="width: 100%; margin-top: 4px"
+      />
+    </div>
+    <script>
+      const map = new maplibregl.Map({
+        container: "map",
+        style: {
+          version: 8,
+          sources: {
+            "ign-ortho": {
+              type: "raster",
+              tiles: [
+                "https://data.geopf.fr/wmts?REQUEST=GetTile&SERVICE=WMTS&VERSION=1.0.0&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/jpeg&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&TILEMATRIX={z}&TILECOL={x}&TILEROW={y}",
+              ],
+              tileSize: 256,
+              attribution: "© IGN",
+            },
+            orchard: {
+              type: "vector",
+              tiles: ["http://localhost:3000/orchard/{z}/{x}/{y}"],
+              minzoom: 0,
+              maxzoom: 20,
+            },
+          },
+          layers: [
+            {
+              id: "ign-ortho",
+              type: "raster",
+              source: "ign-ortho",
+            },
+            {
+              id: "trees",
+              type: "circle",
+              source: "orchard",
+              "source-layer": "treeswgs84",
+              paint: {
+                "circle-radius": [
+                  "case",
+                  ["<", ["to-number", ["get", "adult_height"]], 1.4],
+                  3,
+                  ["<", ["to-number", ["get", "adult_height"]], 6],
+                  6,
+                  9,
+                ],
+                "circle-color": [
+                  "match",
+                  ["get", "Line"],
+                  "1. Haut haut haut",
+                  "#e6194b",
+                  "2. Haut haut",
+                  "#3cb44b",
+                  "3. Haut",
+                  "#ffe119",
+                  "4. Milieu haut",
+                  "#4363d8",
+                  "5. Milieu bas",
+                  "#f58231",
+                  "6. Milieu bas bas",
+                  "#911eb4",
+                  "7. Bas haut",
+                  "#46f0f0",
+                  "8. Bas",
+                  "#f032e6",
+                  "9. Bas bas",
+                  "#bcf60c",
+                  "10. Bas bas bas",
+                  "#fabebe",
+                  "11. Entrée",
+                  "#008080",
+                  "12. Entrée centre",
+                  "#e6beff",
+                  "13. Côté bambous",
+                  "#9a6324",
+                  "#808080",
+                ],
+                "circle-stroke-width": [
+                  "case",
+                  ["==", ["get", "pioneer"], true],
+                  2,
+                  1,
+                ],
+                "circle-stroke-color": [
+                  "case",
+                  ["==", ["get", "pioneer"], true],
+                  "#000000",
+                  "#ffffff",
+                ],
+              },
+            },
+          ],
+        },
+        center: [0.5, 0.5],
+        zoom: 20,
+        maxZoom: 24,
+      });
+
+      let treeTooltip;
+
+      function createTreeTooltip(properties) {
+        const tooltip = document.createElement("div");
+
+        [
+          ["Name", properties.name],
+          ["Latin name", properties.latin_name],
+          ["Date", properties.date],
+        ].forEach(([label, value]) => {
+          if (value == null || value === "") return;
+
+          const field = document.createElement("div");
+          const labelElement = document.createElement("strong");
+          labelElement.textContent = `${label}: `;
+          field.append(labelElement, document.createTextNode(value));
+          tooltip.append(field);
+        });
+
+        return tooltip;
+      }
+
+      map.on("mouseenter", "trees", (event) => {
+        map.getCanvas().style.cursor = "pointer";
+
+        const feature = event.features[0];
+        treeTooltip?.remove();
+        treeTooltip = new maplibregl.Popup({
+          closeButton: false,
+          closeOnClick: false,
+          offset: 10,
+        })
+          .setLngLat(feature.geometry.coordinates)
+          .setDOMContent(createTreeTooltip(feature.properties))
+          .addTo(map);
+      });
+
+      map.on("mouseleave", "trees", () => {
+        map.getCanvas().style.cursor = "";
+        treeTooltip?.remove();
+        treeTooltip = undefined;
+      });
+
+      map.on("load", () => {
+        map.addSource("orchard-photo", {
+          type: "image",
+          url: "drone-clean.png",
+          coordinates: [
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 0.0],
+            [0.0, 0.0],
+          ],
+        });
+
+        map.addLayer(
+          {
+            id: "orchard-photo-layer",
+            type: "raster",
+            source: "orchard-photo",
+            paint: {
+              "raster-opacity": 0.9,
+            },
+          },
+          "trees",
+        );
+      });
+
+      // ===== Date range filter =====
+      const dateMinSlider = document.getElementById("date-min");
+      const dateMaxSlider = document.getElementById("date-max");
+      const dateLabel = document.getElementById("date-label");
+      const dateFilterEnabled = document.getElementById("date-filter-enabled");
+
+      const minDate = new Date("2021-04-01");
+      const maxDate = new Date("2024-12-31");
+      const totalDays = (maxDate - minDate) / (1000 * 60 * 60 * 24);
+
+      function daysToDate(days) {
+        const d = new Date(minDate);
+        d.setDate(d.getDate() + Number(days));
+        return d;
+      }
+
+      function formatDate(d) {
+        return d.toISOString().slice(0, 10);
+      }
+
+      function applyDateFilter() {
+        if (!dateFilterEnabled.checked) {
+          map.setFilter("trees", null);
+          dateLabel.textContent = "All dates";
+          dateMinSlider.disabled = true;
+          dateMaxSlider.disabled = true;
+          return;
+        }
+
+        dateMinSlider.disabled = false;
+        dateMaxSlider.disabled = false;
+
+        let minVal = Number(dateMinSlider.value);
+        let maxVal = Number(dateMaxSlider.value);
+
+        if (minVal > maxVal) {
+          [minVal, maxVal] = [maxVal, minVal];
+          dateMinSlider.value = minVal;
+          dateMaxSlider.value = maxVal;
+        }
+
+        const from = daysToDate(minVal);
+        const to = daysToDate(maxVal);
+
+        dateLabel.textContent = `${formatDate(from)} → ${formatDate(to)}`;
+
+        map.setFilter("trees", [
+          "all",
+          [">=", ["get", "date"], formatDate(from)],
+          ["<=", ["get", "date"], formatDate(to)],
+        ]);
+      }
+
+      dateMinSlider.addEventListener("input", applyDateFilter);
+      dateMaxSlider.addEventListener("input", applyDateFilter);
+      dateFilterEnabled.addEventListener("change", applyDateFilter);
+
+      // Init
+      dateMinSlider.max = totalDays;
+      dateMaxSlider.max = totalDays;
+      dateMaxSlider.value = totalDays;
+      applyDateFilter();
+    </script>
+  </body>
+</html>

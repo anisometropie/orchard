@@ -1,0 +1,40 @@
+services:
+  # 1. Generate Vector Tiles (run once or when data changes)
+  tippecanoe:
+    image: versatiles/versatiles-tippecanoe:latest
+    volumes:
+      - ./data:/data
+    working_dir: /data
+    entrypoint: ["tippecanoe"]
+    command:
+      - -o
+      - /data/orchard.mbtiles
+      - -Z12
+      - -z20
+      - --no-feature-limit
+      - --no-tile-size-limit
+      - --drop-rate=0
+      - --force
+      - /data/trees-wgs84.geojson
+    profiles: ["generate"] # only runs when you ask for it
+
+  # 2. Martin – serves Mapbox Vector Tiles
+  martin:
+    image: ghcr.io/maplibre/martin:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+    command: ["/data/orchard.mbtiles"]
+    restart: unless-stopped
+
+  # 3. Frontend (React + MapLibre)
+  frontend:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - martin
+    restart: unless-stopped
