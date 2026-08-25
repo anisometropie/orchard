@@ -1,42 +1,9 @@
 services:
-  # 1. Generate Vector Tiles (run once or when data changes)
-  tippecanoe:
-    image: versatiles/versatiles-tippecanoe:latest
-    volumes:
-      - ./data:/data
-    working_dir: /data
-    entrypoint: ["tippecanoe"]
-    command:
-      - -o
-      - /data/orchard.mbtiles
-      - -Z12
-      - -z20
-      - --no-feature-limit
-      - --no-tile-size-limit
-      - --drop-rate=0
-      - --force
-      - /data/trees-wgs84.geojson
-    profiles: ["generate"] # only runs when you ask for it
-
-  # 2. Martin – serves Mapbox Vector Tiles
-  martin:
-    image: ghcr.io/maplibre/martin:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/data
-    command: ["/data/orchard.mbtiles"]
-    restart: unless-stopped
-
-  # 3. Static frontend
   nginx:
     image: nginx:alpine
     restart: unless-stopped
     ports:
       - "8080:80"
-    environment:
-      # Browser-facing URL, supplied by the deployment's .env file.
-      MARTIN_URL: ${MARTIN_URL:?Set MARTIN_URL in .env}
     volumes:
       - ./nginx.conf:/etc/nginx/templates/default.conf.template:ro
       - ./frontend:/usr/share/nginx/html:ro

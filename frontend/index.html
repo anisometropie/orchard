@@ -69,9 +69,7 @@
         style="width: 100%; margin-top: 4px"
       />
     </div>
-    <script src="/config.js"></script>
     <script>
-      const MARTIN_URL = window.MARTIN_URL;
       const map = new maplibregl.Map({
         container: "map",
         style: {
@@ -86,10 +84,8 @@
               attribution: "© IGN",
             },
             orchard: {
-              type: "vector",
-              tiles: [`${MARTIN_URL.replace(/\/$/, "")}/orchard/{z}/{x}/{y}`],
-              minzoom: 0,
-              maxzoom: 20,
+              type: "geojson",
+              data: { type: "FeatureCollection", features: [] },
             },
           },
           layers: [
@@ -102,7 +98,6 @@
               id: "trees",
               type: "circle",
               source: "orchard",
-              "source-layer": "treeswgs84",
               paint: {
                 "circle-radius": [
                   "case",
@@ -114,7 +109,7 @@
                 ],
                 "circle-color": [
                   "match",
-                  ["get", "Line"],
+                  ["get", "row_name"],
                   "1. Haut haut haut",
                   "#e6194b",
                   "2. Haut haut",
@@ -145,13 +140,13 @@
                 ],
                 "circle-stroke-width": [
                   "case",
-                  ["==", ["get", "pioneer"], true],
+                  ["in", "pioneer", ["get", "roles"]],
                   2,
                   1,
                 ],
                 "circle-stroke-color": [
                   "case",
-                  ["==", ["get", "pioneer"], true],
+                  ["in", "pioneer", ["get", "roles"]],
                   "#000000",
                   "#ffffff",
                 ],
@@ -280,8 +275,8 @@
 
         map.setFilter("trees", [
           "all",
-          [">=", ["get", "date"], formatDate(from)],
-          ["<=", ["get", "date"], formatDate(to)],
+          [">=", ["get", "planted_on"], formatDate(from)],
+          ["<=", ["get", "planted_on"], formatDate(to)],
         ]);
       }
 
