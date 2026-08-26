@@ -4,7 +4,7 @@ use orchard_api::hexagon::ports::{OrchardTransaction, OrchardUnitOfWork};
 use postgres::{Client, NoTls};
 
 #[test]
-fn when_a_legacy_tree_import_transaction_commits_postgres_persists_its_complete_map_record() {
+fn commit_persists_tree() {
     let database_url = std::env::var("ORCHARD_TEST_DATABASE_URL")
         .expect("ORCHARD_TEST_DATABASE_URL must point to the dedicated test database");
     let mut verification_connection = Client::connect(&database_url, NoTls).unwrap();

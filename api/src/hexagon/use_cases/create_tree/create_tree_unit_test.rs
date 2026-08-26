@@ -3,7 +3,7 @@ use orchard_api::hexagon::models::Tree;
 use orchard_api::hexagon::use_cases::create_tree::{TreeCreationRequested, create_tree};
 
 #[test]
-fn when_an_orchardist_creates_a_fruit_tree_it_is_saved_with_its_orchard_details() {
+fn save_new_tree() {
     let (mut trees, observed_trees) = InMemoryOrchardStorage::new();
 
     let created_tree = create_tree(

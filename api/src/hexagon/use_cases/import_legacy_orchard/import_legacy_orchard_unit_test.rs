@@ -7,7 +7,7 @@ use orchard_api::hexagon::use_cases::import_legacy_orchard::{
 };
 
 #[test]
-fn when_a_legacy_geojson_tree_is_imported_it_preserves_its_map_and_orchard_details() {
+fn import_one_tree() {
     let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
 
     let import_result = import_legacy_orchard(
@@ -53,7 +53,7 @@ fn when_a_legacy_geojson_tree_is_imported_it_preserves_its_map_and_orchard_detai
 }
 
 #[test]
-fn when_several_legacy_geojson_trees_are_imported_they_commit_as_one_orchard_batch() {
+fn import_tree_batch() {
     let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
 
     let import_result = import_legacy_orchard(
@@ -133,7 +133,7 @@ fn when_several_legacy_geojson_trees_are_imported_they_commit_as_one_orchard_bat
 }
 
 #[test]
-fn when_a_later_legacy_tree_cannot_be_saved_the_entire_import_batch_is_rolled_back() {
+fn roll_back_batch_on_save_failure() {
     let (mut orchard_unit_of_work, observed_orchard) =
         InMemoryOrchardStorage::failing_when_saving_tree_with_legacy_feature_id(3);
 
@@ -200,7 +200,7 @@ fn when_a_later_legacy_tree_cannot_be_saved_the_entire_import_batch_is_rolled_ba
 }
 
 #[test]
-fn when_a_later_legacy_tree_cannot_be_saved_previously_imported_trees_remain_unchanged() {
+fn preserve_existing_trees_on_save_failure() {
     let existing_tree = Tree {
         legacy_feature_id: Some(400),
         longitude: 0.22,
@@ -285,7 +285,7 @@ fn when_a_later_legacy_tree_cannot_be_saved_previously_imported_trees_remain_unc
 }
 
 #[test]
-fn when_a_legacy_feature_was_already_imported_the_batch_is_rejected_without_duplicates() {
+fn reject_duplicate_legacy_feature() {
     let existing_tree = Tree {
         legacy_feature_id: Some(1),
         longitude: 0.72,
@@ -352,8 +352,7 @@ fn when_a_legacy_feature_was_already_imported_the_batch_is_rejected_without_dupl
 }
 
 #[test]
-fn when_a_tree_is_saved_through_the_repository_its_legacy_id_is_visible_to_the_import_transaction()
-{
+fn repository_tree_is_visible_to_import() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let existing_tree = Tree {
         legacy_feature_id: Some(1),
@@ -403,7 +402,7 @@ fn when_a_tree_is_saved_through_the_repository_its_legacy_id_is_visible_to_the_i
 }
 
 #[test]
-fn when_the_import_transaction_cannot_commit_no_staged_legacy_tree_is_persisted() {
+fn roll_back_batch_on_commit_failure() {
     let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::failing_on_commit();
 
     let import_result = import_legacy_orchard(
@@ -452,7 +451,7 @@ fn when_the_import_transaction_cannot_commit_no_staged_legacy_tree_is_persisted(
 }
 
 #[test]
-fn when_a_live_pioneer_has_no_legacy_planting_date_its_role_and_missing_date_are_preserved() {
+fn preserve_pioneer_without_planting_date() {
     let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
 
     let import_result = import_legacy_orchard(
@@ -498,7 +497,7 @@ fn when_a_live_pioneer_has_no_legacy_planting_date_its_role_and_missing_date_are
 }
 
 #[test]
-fn when_an_import_transaction_cannot_start_no_legacy_tree_is_persisted() {
+fn reject_import_when_transaction_cannot_start() {
     let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::failing_to_begin();
 
     let import_result = import_legacy_orchard(
@@ -530,7 +529,7 @@ fn when_an_import_transaction_cannot_start_no_legacy_tree_is_persisted() {
 }
 
 #[test]
-fn when_existing_legacy_features_cannot_be_checked_the_import_fails_without_persisting_trees() {
+fn reject_import_when_legacy_feature_check_fails() {
     let (mut orchard_unit_of_work, observed_orchard) =
         InMemoryOrchardStorage::failing_when_checking_legacy_feature_ids();
 

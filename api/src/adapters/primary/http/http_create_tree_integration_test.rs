@@ -4,7 +4,7 @@ use orchard_api::hexagon::models::Tree;
 use reqwest::StatusCode;
 
 #[tokio::test]
-async fn when_a_post_request_creates_a_tree_it_returns_created_and_saves_the_tree() {
+async fn create_tree_http() {
     let (trees, observed_trees) = InMemoryOrchardStorage::new();
     let server = start_http_server(trees).await;
 
