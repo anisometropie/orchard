@@ -9,7 +9,9 @@ fn when_a_legacy_tree_import_transaction_commits_postgres_persists_its_complete_
         .expect("ORCHARD_TEST_DATABASE_URL must point to the dedicated test database");
     let mut verification_connection = Client::connect(&database_url, NoTls).unwrap();
     verification_connection
-        .batch_execute(include_str!("../../../db/migrations/001_create_trees.sql"))
+        .batch_execute(include_str!(
+            "../../../../db/migrations/001_create_trees.sql"
+        ))
         .unwrap();
     verification_connection
         .batch_execute("TRUNCATE TABLE trees")

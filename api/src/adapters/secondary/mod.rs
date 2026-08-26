@@ -1,5 +1,5 @@
-mod in_memory_orchard_unit_of_work;
-mod postgres_orchard_unit_of_work;
+mod in_memory_orchard_storage;
+mod postgres_orchard_storage;
 
-pub use in_memory_orchard_unit_of_work::InMemoryOrchardStorage;
-pub use postgres_orchard_unit_of_work::PostgresOrchardStorage;
+pub use in_memory_orchard_storage::InMemoryOrchardStorage;
+pub use postgres_orchard_storage::PostgresOrchardStorage;

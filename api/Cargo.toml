@@ -21,11 +21,11 @@ reqwest = { version = "0.12", features = ["json"] }
 
 [[test]]
 name = "http_create_tree_integration"
-path = "src/adapters/primary/http_create_tree_integration_test.rs"
+path = "src/adapters/primary/http/http_create_tree_integration_test.rs"
 
 [[test]]
 name = "geojson_legacy_orchard_import_integration"
-path = "src/adapters/primary/geojson_legacy_orchard_import_integration_test.rs"
+path = "src/adapters/primary/geojson_legacy_orchard_import/geojson_legacy_orchard_import_integration_test.rs"
 
 [[test]]
 name = "create_tree_unit"
@@ -36,6 +36,6 @@ name = "import_legacy_orchard_unit"
 path = "src/hexagon/use_cases/import_legacy_orchard/import_legacy_orchard_unit_test.rs"
 
 [[test]]
-name = "postgres_orchard_unit_of_work_integration"
-path = "src/adapters/secondary/postgres_orchard_unit_of_work_integration_test.rs"
+name = "postgres_orchard_storage_integration"
+path = "src/adapters/secondary/postgres_orchard_storage/postgres_orchard_storage_integration_test.rs"
 required-features = ["postgres-integration"]
