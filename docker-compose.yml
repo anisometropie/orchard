@@ -1,4 +1,31 @@
 services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: orchard
+      POSTGRES_USER: orchard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - orchard-db-data:/var/lib/postgresql/data
+      - ./api/db/migrations:/docker-entrypoint-initdb.d:ro
+
+  db-test:
+    image: postgis/postgis:16-3.4
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: orchard_test
+      POSTGRES_USER: orchard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./api/db/migrations:/docker-entrypoint-initdb.d:ro
+
   nginx:
     image: nginx:alpine
     restart: unless-stopped
@@ -7,3 +34,6 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/templates/default.conf.template:ro
       - ./frontend:/usr/share/nginx/html:ro
+
+volumes:
+  orchard-db-data:

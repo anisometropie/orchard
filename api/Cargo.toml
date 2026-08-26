@@ -6,8 +6,12 @@ edition = "2024"
 [lib]
 path = "src/lib.rs"
 
+[features]
+postgres-integration = []
+
 [dependencies]
 axum = "0.8"
+postgres = "0.19"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
@@ -20,5 +24,18 @@ name = "http_create_tree_integration"
 path = "src/adapters/primary/http_create_tree_integration_test.rs"
 
 [[test]]
+name = "geojson_legacy_orchard_import_integration"
+path = "src/adapters/primary/geojson_legacy_orchard_import_integration_test.rs"
+
+[[test]]
 name = "create_tree_unit"
 path = "src/hexagon/use_cases/create_tree/create_tree_unit_test.rs"
+
+[[test]]
+name = "import_legacy_orchard_unit"
+path = "src/hexagon/use_cases/import_legacy_orchard/import_legacy_orchard_unit_test.rs"
+
+[[test]]
+name = "postgres_orchard_unit_of_work_integration"
+path = "src/adapters/secondary/postgres_orchard_unit_of_work_integration_test.rs"
+required-features = ["postgres-integration"]

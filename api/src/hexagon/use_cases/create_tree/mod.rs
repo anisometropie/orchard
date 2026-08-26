@@ -13,13 +13,19 @@ pub struct TreeCreationRequested {
 
 pub fn create_tree<R: TreeRepository>(event: TreeCreationRequested, trees: &mut R) -> Tree {
     let tree = Tree {
+        legacy_feature_id: None,
         longitude: event.longitude,
         latitude: event.latitude,
         name: event.name,
         latin_name: event.latin_name,
+        planted_on: None,
+        row_name: None,
         roles: event.roles,
+        is_alive: true,
         harvest_start_day: event.harvest_start_day,
         harvest_end_day: event.harvest_end_day,
+        adult_height_meters: None,
+        adult_width_meters: None,
     };
     trees.save(tree.clone());
     tree
