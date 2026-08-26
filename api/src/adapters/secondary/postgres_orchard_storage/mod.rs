@@ -12,12 +12,8 @@ pub struct PostgresOrchardStorage {
     database_url: String,
 }
 
-pub struct PostgresTransactionTreeRepository {
-    client: Client,
-}
-
 pub struct PostgresOrchardTransaction {
-    trees: PostgresTransactionTreeRepository,
+    client: Client,
     completed: bool,
 }
 
@@ -57,13 +53,13 @@ impl OrchardUnitOfWork for PostgresOrchardStorage {
             .batch_execute("BEGIN")
             .map_err(|_| OrchardTransactionError::CouldNotBegin)?;
         Ok(PostgresOrchardTransaction {
-            trees: PostgresTransactionTreeRepository { client },
+            client,
             completed: false,
         })
     }
 }
 
-impl TreeRepository for PostgresTransactionTreeRepository {
+impl TreeRepository for PostgresOrchardTransaction {
     fn has_legacy_feature_id(
         &mut self,
         legacy_feature_id: u32,
@@ -77,18 +73,14 @@ impl TreeRepository for PostgresTransactionTreeRepository {
 }
 
 impl OrchardTransaction for PostgresOrchardTransaction {
-    fn trees(&mut self) -> &mut dyn TreeRepository {
-        &mut self.trees
-    }
-
     fn commit(mut self) -> Result<(), OrchardTransactionError> {
-        match self.trees.client.batch_execute("COMMIT") {
+        match self.client.batch_execute("COMMIT") {
             Ok(()) => {
                 self.completed = true;
                 Ok(())
             }
             Err(_) => {
-                let _ = self.trees.client.batch_execute("ROLLBACK");
+                let _ = self.client.batch_execute("ROLLBACK");
                 self.completed = true;
                 Err(OrchardTransactionError::CouldNotCommit)
             }
@@ -96,7 +88,7 @@ impl OrchardTransaction for PostgresOrchardTransaction {
     }
 
     fn rollback(mut self) {
-        let _ = self.trees.client.batch_execute("ROLLBACK");
+        let _ = self.client.batch_execute("ROLLBACK");
         self.completed = true;
     }
 }
@@ -104,7 +96,7 @@ impl OrchardTransaction for PostgresOrchardTransaction {
 impl Drop for PostgresOrchardTransaction {
     fn drop(&mut self) {
         if !self.completed {
-            let _ = self.trees.client.batch_execute("ROLLBACK");
+            let _ = self.client.batch_execute("ROLLBACK");
         }
     }
 }

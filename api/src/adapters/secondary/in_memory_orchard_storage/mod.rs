@@ -20,15 +20,11 @@ pub struct InMemoryOrchardObserver {
     trees: Arc<Mutex<Vec<Tree>>>,
 }
 
-struct InMemoryTransactionTreeRepository {
+pub struct InMemoryOrchardTransaction {
     committed_trees: Arc<Mutex<Vec<Tree>>>,
     staged_trees: Vec<Tree>,
     failing_legacy_feature_id: Option<u32>,
     fail_when_checking_legacy_feature_ids: bool,
-}
-
-pub struct InMemoryOrchardTransaction {
-    trees: InMemoryTransactionTreeRepository,
     fail_on_commit: bool,
 }
 
@@ -114,18 +110,16 @@ impl OrchardUnitOfWork for InMemoryOrchardStorage {
             return Err(OrchardTransactionError::CouldNotBegin);
         }
         Ok(InMemoryOrchardTransaction {
-            trees: InMemoryTransactionTreeRepository {
-                committed_trees: Arc::clone(&self.trees),
-                staged_trees: Vec::new(),
-                failing_legacy_feature_id: self.failing_legacy_feature_id,
-                fail_when_checking_legacy_feature_ids: self.fail_when_checking_legacy_feature_ids,
-            },
+            committed_trees: Arc::clone(&self.trees),
+            staged_trees: Vec::new(),
+            failing_legacy_feature_id: self.failing_legacy_feature_id,
+            fail_when_checking_legacy_feature_ids: self.fail_when_checking_legacy_feature_ids,
             fail_on_commit: self.fail_on_commit,
         })
     }
 }
 
-impl TreeRepository for InMemoryTransactionTreeRepository {
+impl TreeRepository for InMemoryOrchardTransaction {
     fn has_legacy_feature_id(
         &mut self,
         legacy_feature_id: u32,
@@ -150,19 +144,14 @@ impl TreeRepository for InMemoryTransactionTreeRepository {
 }
 
 impl OrchardTransaction for InMemoryOrchardTransaction {
-    fn trees(&mut self) -> &mut dyn TreeRepository {
-        &mut self.trees
-    }
-
     fn commit(self) -> Result<(), OrchardTransactionError> {
         if self.fail_on_commit {
             return Err(OrchardTransactionError::CouldNotCommit);
         }
-        self.trees
-            .committed_trees
+        self.committed_trees
             .lock()
             .unwrap()
-            .extend(self.trees.staged_trees);
+            .extend(self.staged_trees);
         Ok(())
     }
 

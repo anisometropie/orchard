@@ -6,8 +6,7 @@ pub enum OrchardTransactionError {
     CouldNotCommit,
 }
 
-pub trait OrchardTransaction {
-    fn trees(&mut self) -> &mut dyn TreeRepository;
+pub trait OrchardTransaction: TreeRepository {
     fn commit(self) -> Result<(), OrchardTransactionError>;
     fn rollback(self);
 }

@@ -1,5 +1,5 @@
 use crate::hexagon::models::Tree;
-use crate::hexagon::ports::{OrchardTransaction, OrchardUnitOfWork};
+use crate::hexagon::ports::{OrchardTransaction, OrchardUnitOfWork, TreeRepository};
 
 pub struct LegacyTreeSnapshot {
     pub legacy_feature_id: u32,
@@ -43,7 +43,7 @@ where
     let mut imported_tree_count = 0;
     for legacy_tree in request.trees {
         let legacy_feature_id = legacy_tree.legacy_feature_id;
-        match transaction.trees().has_legacy_feature_id(legacy_feature_id) {
+        match transaction.has_legacy_feature_id(legacy_feature_id) {
             Ok(true) => {
                 transaction.rollback();
                 return Err(LegacyOrchardImportError::LegacyFeatureAlreadyImported {
@@ -56,11 +56,7 @@ where
                 return Err(LegacyOrchardImportError::ExistingLegacyFeaturesCouldNotBeChecked);
             }
         }
-        if transaction
-            .trees()
-            .save(map_legacy_tree(legacy_tree))
-            .is_err()
-        {
+        if transaction.save(map_legacy_tree(legacy_tree)).is_err() {
             transaction.rollback();
             return Err(LegacyOrchardImportError::TreeCouldNotBeSaved { legacy_feature_id });
         }
