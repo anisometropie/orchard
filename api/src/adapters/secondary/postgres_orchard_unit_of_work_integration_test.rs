@@ -1,6 +1,6 @@
-use orchard_api::adapters::secondary::PostgresOrchardUnitOfWork;
+use orchard_api::adapters::secondary::PostgresOrchardStorage;
 use orchard_api::hexagon::models::Tree;
-use orchard_api::hexagon::ports::{OrchardImportTransaction, OrchardUnitOfWork};
+use orchard_api::hexagon::ports::{OrchardTransaction, OrchardUnitOfWork};
 use postgres::{Client, NoTls};
 
 #[test]
@@ -29,10 +29,10 @@ fn when_a_legacy_tree_import_transaction_commits_postgres_persists_its_complete_
         adult_height_meters: Some(5.0),
         adult_width_meters: Some(4.0),
     };
-    let mut orchard_unit_of_work = PostgresOrchardUnitOfWork::connect(&database_url).unwrap();
+    let mut orchard_unit_of_work = PostgresOrchardStorage::connect(&database_url).unwrap();
 
     let mut transaction = orchard_unit_of_work.begin().unwrap();
-    transaction.save_tree(expected_tree.clone()).unwrap();
+    transaction.trees().save(expected_tree.clone()).unwrap();
     transaction.commit().unwrap();
 
     let persisted_tree = verification_connection

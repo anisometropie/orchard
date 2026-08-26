@@ -1,11 +1,11 @@
-use orchard_api::adapters::secondary::InMemoryTreeRepository;
+use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::bootstrap::start_http_server;
 use orchard_api::hexagon::models::Tree;
 use reqwest::StatusCode;
 
 #[tokio::test]
 async fn when_a_post_request_creates_a_tree_it_returns_created_and_saves_the_tree() {
-    let (trees, observed_trees) = InMemoryTreeRepository::new();
+    let (trees, observed_trees) = InMemoryOrchardStorage::new();
     let server = start_http_server(trees).await;
 
     let response = reqwest::Client::new()
@@ -40,5 +40,5 @@ async fn when_a_post_request_creates_a_tree_it_returns_created_and_saves_the_tre
     };
     assert_eq!(response.status(), StatusCode::CREATED);
     assert_eq!(response.json::<Tree>().await.unwrap(), expected_tree);
-    assert_eq!(observed_trees.saved_trees(), vec![expected_tree]);
+    assert_eq!(observed_trees.trees(), vec![expected_tree]);
 }

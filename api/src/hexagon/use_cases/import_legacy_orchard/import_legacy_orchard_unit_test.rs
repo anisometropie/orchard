@@ -1,5 +1,6 @@
-use orchard_api::adapters::secondary::InMemoryOrchardUnitOfWork;
+use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::Tree;
+use orchard_api::hexagon::ports::TreeRepository;
 use orchard_api::hexagon::use_cases::import_legacy_orchard::{
     LegacyOrchardImportError, LegacyOrchardImportRequested, LegacyTreeSnapshot,
     import_legacy_orchard,
@@ -7,7 +8,7 @@ use orchard_api::hexagon::use_cases::import_legacy_orchard::{
 
 #[test]
 fn when_a_legacy_geojson_tree_is_imported_it_preserves_its_map_and_orchard_details() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardUnitOfWork::new();
+    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
@@ -53,7 +54,7 @@ fn when_a_legacy_geojson_tree_is_imported_it_preserves_its_map_and_orchard_detai
 
 #[test]
 fn when_several_legacy_geojson_trees_are_imported_they_commit_as_one_orchard_batch() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardUnitOfWork::new();
+    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
@@ -134,7 +135,7 @@ fn when_several_legacy_geojson_trees_are_imported_they_commit_as_one_orchard_bat
 #[test]
 fn when_a_later_legacy_tree_cannot_be_saved_the_entire_import_batch_is_rolled_back() {
     let (mut orchard_unit_of_work, observed_orchard) =
-        InMemoryOrchardUnitOfWork::failing_when_saving_tree_with_legacy_feature_id(3);
+        InMemoryOrchardStorage::failing_when_saving_tree_with_legacy_feature_id(3);
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
@@ -216,7 +217,7 @@ fn when_a_later_legacy_tree_cannot_be_saved_previously_imported_trees_remain_unc
         adult_width_meters: Some(4.0),
     };
     let (mut orchard_unit_of_work, observed_orchard) =
-        InMemoryOrchardUnitOfWork::with_existing_trees_failing_when_saving_tree_with_legacy_feature_id(
+        InMemoryOrchardStorage::with_existing_trees_failing_when_saving_tree_with_legacy_feature_id(
             vec![existing_tree.clone()],
             3,
         );
@@ -301,7 +302,7 @@ fn when_a_legacy_feature_was_already_imported_the_batch_is_rejected_without_dupl
         adult_width_meters: Some(4.0),
     };
     let (mut orchard_unit_of_work, observed_orchard) =
-        InMemoryOrchardUnitOfWork::with_existing_trees(vec![existing_tree.clone()]);
+        InMemoryOrchardStorage::with_existing_trees(vec![existing_tree.clone()]);
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
@@ -351,9 +352,59 @@ fn when_a_legacy_feature_was_already_imported_the_batch_is_rejected_without_dupl
 }
 
 #[test]
+fn when_a_tree_is_saved_through_the_repository_its_legacy_id_is_visible_to_the_import_transaction()
+{
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
+    let existing_tree = Tree {
+        legacy_feature_id: Some(1),
+        longitude: 0.72,
+        latitude: 0.24,
+        name: "Pistachier térébinthe".into(),
+        latin_name: Some("Pistacia terebinthus".into()),
+        planted_on: Some("2022-06-23".into()),
+        row_name: Some("10. Bas bas bas".into()),
+        roles: vec![],
+        is_alive: false,
+        harvest_start_day: None,
+        harvest_end_day: None,
+        adult_height_meters: Some(5.0),
+        adult_width_meters: Some(4.0),
+    };
+    orchard_storage.save(existing_tree.clone()).unwrap();
+
+    let import_result = import_legacy_orchard(
+        LegacyOrchardImportRequested {
+            trees: vec![LegacyTreeSnapshot {
+                legacy_feature_id: 1,
+                longitude: 0.72,
+                latitude: 0.24,
+                name: "Pistachier térébinthe".into(),
+                latin_name: "Pistacia terebinthus".into(),
+                planted_on: Some("2022-06-23".into()),
+                row_name: "10. Bas bas bas".into(),
+                is_pioneer: false,
+                is_alive: false,
+                harvest_start_day: None,
+                harvest_end_day: None,
+                adult_height_meters: 5.0,
+                adult_width_meters: 4.0,
+            }],
+        },
+        &mut orchard_storage,
+    );
+
+    assert_eq!(
+        import_result,
+        Err(LegacyOrchardImportError::LegacyFeatureAlreadyImported {
+            legacy_feature_id: 1
+        })
+    );
+    assert_eq!(observed_orchard.trees(), vec![existing_tree]);
+}
+
+#[test]
 fn when_the_import_transaction_cannot_commit_no_staged_legacy_tree_is_persisted() {
-    let (mut orchard_unit_of_work, observed_orchard) =
-        InMemoryOrchardUnitOfWork::failing_on_commit();
+    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::failing_on_commit();
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
@@ -402,7 +453,7 @@ fn when_the_import_transaction_cannot_commit_no_staged_legacy_tree_is_persisted(
 
 #[test]
 fn when_a_live_pioneer_has_no_legacy_planting_date_its_role_and_missing_date_are_preserved() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardUnitOfWork::new();
+    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
@@ -448,8 +499,7 @@ fn when_a_live_pioneer_has_no_legacy_planting_date_its_role_and_missing_date_are
 
 #[test]
 fn when_an_import_transaction_cannot_start_no_legacy_tree_is_persisted() {
-    let (mut orchard_unit_of_work, observed_orchard) =
-        InMemoryOrchardUnitOfWork::failing_to_begin();
+    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::failing_to_begin();
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
@@ -482,7 +532,7 @@ fn when_an_import_transaction_cannot_start_no_legacy_tree_is_persisted() {
 #[test]
 fn when_existing_legacy_features_cannot_be_checked_the_import_fails_without_persisting_trees() {
     let (mut orchard_unit_of_work, observed_orchard) =
-        InMemoryOrchardUnitOfWork::failing_when_checking_legacy_feature_ids();
+        InMemoryOrchardStorage::failing_when_checking_legacy_feature_ids();
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {

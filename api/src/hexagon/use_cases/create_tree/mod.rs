@@ -27,6 +27,8 @@ pub fn create_tree<R: TreeRepository>(event: TreeCreationRequested, trees: &mut 
         adult_height_meters: None,
         adult_width_meters: None,
     };
-    trees.save(tree.clone());
+    trees
+        .save(tree.clone())
+        .expect("tree repository could not save a newly created tree");
     tree
 }

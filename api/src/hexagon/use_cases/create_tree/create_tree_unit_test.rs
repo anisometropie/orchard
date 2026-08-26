@@ -1,10 +1,10 @@
-use orchard_api::adapters::secondary::InMemoryTreeRepository;
+use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::Tree;
 use orchard_api::hexagon::use_cases::create_tree::{TreeCreationRequested, create_tree};
 
 #[test]
 fn when_an_orchardist_creates_a_fruit_tree_it_is_saved_with_its_orchard_details() {
-    let (mut trees, observed_trees) = InMemoryTreeRepository::new();
+    let (mut trees, observed_trees) = InMemoryOrchardStorage::new();
 
     let created_tree = create_tree(
         TreeCreationRequested {
@@ -35,5 +35,5 @@ fn when_an_orchardist_creates_a_fruit_tree_it_is_saved_with_its_orchard_details(
         adult_width_meters: None,
     };
     assert_eq!(created_tree, expected_tree);
-    assert_eq!(observed_trees.saved_trees(), vec![expected_tree]);
+    assert_eq!(observed_trees.trees(), vec![expected_tree]);
 }

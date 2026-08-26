@@ -1,7 +1,5 @@
 mod in_memory_orchard_unit_of_work;
-mod in_memory_tree_repository;
 mod postgres_orchard_unit_of_work;
 
-pub use in_memory_orchard_unit_of_work::InMemoryOrchardUnitOfWork;
-pub use in_memory_tree_repository::InMemoryTreeRepository;
-pub use postgres_orchard_unit_of_work::PostgresOrchardUnitOfWork;
+pub use in_memory_orchard_unit_of_work::InMemoryOrchardStorage;
+pub use postgres_orchard_unit_of_work::PostgresOrchardStorage;
