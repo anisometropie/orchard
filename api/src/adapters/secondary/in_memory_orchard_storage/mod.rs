@@ -16,18 +16,6 @@ pub struct InMemoryOrchardStorage {
     fail_on_commit: bool,
 }
 
-pub struct InMemoryOrchardObserver {
-    trees: Arc<Mutex<Vec<Tree>>>,
-}
-
-pub struct InMemoryOrchardTransaction {
-    committed_trees: Arc<Mutex<Vec<Tree>>>,
-    staged_trees: Vec<Tree>,
-    failing_legacy_feature_id: Option<u32>,
-    fail_when_checking_legacy_feature_ids: bool,
-    fail_on_commit: bool,
-}
-
 impl InMemoryOrchardStorage {
     pub fn new() -> (Self, InMemoryOrchardObserver) {
         Self::with_configuration(Vec::new(), None, false, false, false)
@@ -84,18 +72,6 @@ impl InMemoryOrchardStorage {
 }
 
 impl TreeRepository for InMemoryOrchardStorage {
-    fn has_legacy_feature_id(
-        &mut self,
-        legacy_feature_id: u32,
-    ) -> Result<bool, TreeRepositoryError> {
-        Ok(self
-            .trees
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|tree| tree.legacy_feature_id == Some(legacy_feature_id)))
-    }
-
     fn save(&mut self, tree: Tree) -> Result<(), TreeRepositoryError> {
         self.trees.lock().unwrap().push(tree);
         Ok(())
@@ -119,13 +95,21 @@ impl OrchardUnitOfWork for InMemoryOrchardStorage {
     }
 }
 
-impl TreeRepository for InMemoryOrchardTransaction {
-    fn has_legacy_feature_id(
+pub struct InMemoryOrchardTransaction {
+    committed_trees: Arc<Mutex<Vec<Tree>>>,
+    staged_trees: Vec<Tree>,
+    failing_legacy_feature_id: Option<u32>,
+    fail_when_checking_legacy_feature_ids: bool,
+    fail_on_commit: bool,
+}
+
+impl OrchardTransaction for InMemoryOrchardTransaction {
+    fn is_legacy_tree_already_imported(
         &mut self,
         legacy_feature_id: u32,
-    ) -> Result<bool, TreeRepositoryError> {
+    ) -> Result<bool, OrchardTransactionError> {
         if self.fail_when_checking_legacy_feature_ids {
-            return Err(TreeRepositoryError::CouldNotCheckExistingLegacyFeature);
+            return Err(OrchardTransactionError::CouldNotCheckExistingLegacyTree);
         }
         Ok(self
             .staged_trees
@@ -134,16 +118,14 @@ impl TreeRepository for InMemoryOrchardTransaction {
             .any(|tree| tree.legacy_feature_id == Some(legacy_feature_id)))
     }
 
-    fn save(&mut self, tree: Tree) -> Result<(), TreeRepositoryError> {
+    fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardTransactionError> {
         if tree.legacy_feature_id == self.failing_legacy_feature_id {
-            return Err(TreeRepositoryError::TreeCouldNotBeSaved);
+            return Err(OrchardTransactionError::TreeCouldNotBeSaved);
         }
         self.staged_trees.push(tree);
         Ok(())
     }
-}
 
-impl OrchardTransaction for InMemoryOrchardTransaction {
     fn commit(self) -> Result<(), OrchardTransactionError> {
         if self.fail_on_commit {
             return Err(OrchardTransactionError::CouldNotCommit);
@@ -156,6 +138,10 @@ impl OrchardTransaction for InMemoryOrchardTransaction {
     }
 
     fn rollback(self) {}
+}
+
+pub struct InMemoryOrchardObserver {
+    trees: Arc<Mutex<Vec<Tree>>>,
 }
 
 impl InMemoryOrchardObserver {

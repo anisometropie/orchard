@@ -27,19 +27,10 @@ impl PostgresOrchardStorage {
 }
 
 impl TreeRepository for PostgresOrchardStorage {
-    fn has_legacy_feature_id(
-        &mut self,
-        legacy_feature_id: u32,
-    ) -> Result<bool, TreeRepositoryError> {
-        let mut client = Client::connect(&self.database_url, NoTls)
-            .map_err(|_| TreeRepositoryError::CouldNotCheckExistingLegacyFeature)?;
-        has_legacy_feature_id(&mut client, legacy_feature_id)
-    }
-
     fn save(&mut self, tree: Tree) -> Result<(), TreeRepositoryError> {
         let mut client = Client::connect(&self.database_url, NoTls)
             .map_err(|_| TreeRepositoryError::TreeCouldNotBeSaved)?;
-        save_tree(&mut client, tree)
+        save_tree(&mut client, tree).map_err(|_| TreeRepositoryError::TreeCouldNotBeSaved)
     }
 }
 
@@ -59,20 +50,19 @@ impl OrchardUnitOfWork for PostgresOrchardStorage {
     }
 }
 
-impl TreeRepository for PostgresOrchardTransaction {
-    fn has_legacy_feature_id(
+impl OrchardTransaction for PostgresOrchardTransaction {
+    fn is_legacy_tree_already_imported(
         &mut self,
         legacy_feature_id: u32,
-    ) -> Result<bool, TreeRepositoryError> {
-        has_legacy_feature_id(&mut self.client, legacy_feature_id)
+    ) -> Result<bool, OrchardTransactionError> {
+        is_legacy_tree_already_imported(&mut self.client, legacy_feature_id)
+            .map_err(|_| OrchardTransactionError::CouldNotCheckExistingLegacyTree)
     }
 
-    fn save(&mut self, tree: Tree) -> Result<(), TreeRepositoryError> {
-        save_tree(&mut self.client, tree)
+    fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardTransactionError> {
+        save_tree(&mut self.client, tree).map_err(|_| OrchardTransactionError::TreeCouldNotBeSaved)
     }
-}
 
-impl OrchardTransaction for PostgresOrchardTransaction {
     fn commit(mut self) -> Result<(), OrchardTransactionError> {
         match self.client.batch_execute("COMMIT") {
             Ok(()) => {
@@ -101,20 +91,19 @@ impl Drop for PostgresOrchardTransaction {
     }
 }
 
-fn has_legacy_feature_id(
+fn is_legacy_tree_already_imported(
     client: &mut Client,
     legacy_feature_id: u32,
-) -> Result<bool, TreeRepositoryError> {
+) -> Result<bool, postgres::Error> {
     client
         .query_one(
             "SELECT EXISTS(SELECT 1 FROM trees WHERE legacy_feature_id = $1)",
             &[&(legacy_feature_id as i32)],
         )
         .map(|row| row.get(0))
-        .map_err(|_| TreeRepositoryError::CouldNotCheckExistingLegacyFeature)
 }
 
-fn save_tree(client: &mut Client, tree: Tree) -> Result<(), TreeRepositoryError> {
+fn save_tree(client: &mut Client, tree: Tree) -> Result<(), postgres::Error> {
     let legacy_feature_id = tree.legacy_feature_id.map(|id| id as i32);
     let harvest_start_day = tree.harvest_start_day.map(|day| day as i16);
     let harvest_end_day = tree.harvest_end_day.map(|day| day as i16);
@@ -145,5 +134,4 @@ fn save_tree(client: &mut Client, tree: Tree) -> Result<(), TreeRepositoryError>
             ],
         )
         .map(|_| ())
-        .map_err(|_| TreeRepositoryError::TreeCouldNotBeSaved)
 }
