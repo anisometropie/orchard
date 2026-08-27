@@ -14,7 +14,7 @@ writing the smallest Green implementation.
 
 | Status | Event | Use case | Observable outcome |
 | --- | --- | --- | --- |
-| Not started | `TREE_CREATION_REQUESTED` | Create tree | A valid tree at a map coordinate is persisted. |
+| Implemented | `TREE_CREATION_REQUESTED` | Create tree | A valid tree at a map coordinate is persisted with a reusable plant identity. |
 | Not started | `TREE_FIELD_SUGGESTIONS_REQUESTED` | Suggest tree fields | While entering a tree, an orchardist receives matching known species/cultivar suggestions from the fields already typed and may use suggested Latin name, roles, and harvest start/end days without retyping them. |
 | Not started | `TREE_DETAILS_CHANGED` | Update tree | A selected tree's editable fields change without changing its identity. |
 | Not started | `TREE_SEARCH_REQUESTED` | Search/list trees | Matching trees are returned for name, Latin name, role, harvest day, and danger filters. |
@@ -22,14 +22,38 @@ writing the smallest Green implementation.
 | Not started | `WATERING_RUN_STARTED` | Start watering row | A watering session exists for one orchard row. |
 | Not started | `NEXT_TREE_TO_WATER_REQUESTED` | Get next tree to water | The first unwatered tree in the row's defined order is returned. |
 | Not started | `TREE_WATERED` | Record watering | One tree is recorded as watered in the active run and the next result advances. |
-| Not started | `LEGACY_ORCHARD_IMPORT_REQUESTED` | Import legacy orchard | The existing GeoJSON trees and rows are migrated once with reviewed field mappings. |
+| Implemented | `LEGACY_ORCHARD_IMPORT_REQUESTED` | Import legacy orchard | The existing GeoJSON trees and rows are migrated atomically with reviewed taxonomy mappings. |
 
-## Known species/cultivars — future data requirement
+## Plant identity catalog
 
-Tree entries must not require the orchardist to repeatedly type botanical and
-harvest information already known for a species or cultivar. The future
-architecture needs a separate persisted species/cultivar catalog, distinct from
-the trees planted in this orchard.
+`PlantIdentity` is now a persisted catalog record, separate from planted
+`Tree` records. A tree stores `plant_identity_id`; it does not copy normal
+botanical, cultivar, or trade-name fields.
+
+The catalog currently holds:
+
+- canonical common name;
+- structured botanical taxon, including varieties, subspecies, aggregates,
+  cultivar groups, named hybrids, and hybrid formulae;
+- one cultivar field;
+- optional trade name; and
+- identification confidence.
+
+Legacy `name` and `latin_name` are retained only as raw import provenance on
+the individual tree. An optional historical name/Latin pair is retained when
+the source has one, as is an optional supplier/reference URL. They are not
+normal frontend display fields.
+
+Each imported tree also retains its tree-specific reproductive role when known:
+`female`, `male`, `self_fertile`, or `parthenocarpic`. It is deliberately not a
+catalog identity field yet; a future suggestion/editing use case can decide
+whether and how a cultivar-level default should work.
+
+The import and create-tree use cases find or create the catalog identity inside
+their transaction. Reuse is based on botanical taxon, cultivar, and confidence;
+legacy/common labels do not create duplicate catalog records.
+
+## Suggestions — future use case
 
 The front end will send the field values already entered by the orchardist to a
 suggestion endpoint. It will return possible known species/cultivars and the
@@ -41,18 +65,27 @@ overwrite of entered values.
 Do not design the table, endpoint shape, matching algorithm, or front-end
 interaction until this use case is selected for its own reviewed TDD cycle.
 
-## Technical adapter work, after its owning use case is green
+## Technical adapter work
 
-- HTTP delivery adapter
-- Postgres/PostGIS tree repository
+- HTTP create-tree delivery adapter
+- Postgres/PostGIS orchard storage and migrations
 - image-storage adapter
 - Martin tile-source adapter/configuration
-- database migration adapter
 
 None of these adapters may contain an orchard decision.
 
-## Deferred architecture decision
+## Transaction boundary
 
-Do not introduce a transaction or unit-of-work abstraction yet. Revisit it
-before implementing the first use case that must atomically change more than
-one persistent record or resource, such as a tree plus a photo or audit event.
+The existing orchard unit of work atomically stages/commits a plant identity and
+tree together. It is intentionally limited to this one storage family.
+
+When the first real multi-storage operation arrives—likely tree + photo + audit
+event—stop and design that transaction boundary from that concrete use case.
+
+## Existing populated database — separate migration use case
+
+Migration `002` preserves old tree rows and makes their catalog reference
+nullable. It cannot derive a reviewed plant identity from their old raw labels,
+and the legacy importer correctly rejects already-imported feature IDs. An
+already-populated database therefore needs a dedicated, test-first backfill or
+fresh-reimport use case before it is used by a read/list endpoint.

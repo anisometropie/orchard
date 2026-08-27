@@ -1,16 +1,18 @@
-use crate::hexagon::models::Tree;
+use crate::hexagon::models::{
+    LegacyTreeSource, PlantIdentity, PlantIdentityId, ReproductiveRole, Tree,
+};
 use crate::hexagon::ports::{OrchardTransaction, OrchardUnitOfWork};
 
 pub struct LegacyTreeSnapshot {
-    pub legacy_feature_id: u32,
+    pub legacy_source: LegacyTreeSource,
     pub longitude: f64,
     pub latitude: f64,
-    pub name: String,
-    pub latin_name: String,
+    pub plant_identity: PlantIdentity,
     pub planted_on: Option<String>,
     pub row_name: String,
     pub is_pioneer: bool,
     pub is_alive: bool,
+    pub reproductive_role: Option<ReproductiveRole>,
     pub harvest_start_day: Option<u16>,
     pub harvest_end_day: Option<u16>,
     pub adult_height_meters: f64,
@@ -23,6 +25,7 @@ pub struct LegacyOrchardImportRequested {
 
 #[derive(Debug, PartialEq)]
 pub enum LegacyOrchardImportError {
+    PlantIdentityCouldNotBeResolved { legacy_feature_id: u32 },
     TreeCouldNotBeSaved { legacy_feature_id: u32 },
     LegacyFeatureAlreadyImported { legacy_feature_id: u32 },
     ExistingLegacyFeaturesCouldNotBeChecked,
@@ -42,7 +45,7 @@ where
         .map_err(|_| LegacyOrchardImportError::TransactionCouldNotBegin)?;
     let mut imported_tree_count = 0;
     for legacy_tree in request.trees {
-        let legacy_feature_id = legacy_tree.legacy_feature_id;
+        let legacy_feature_id = legacy_tree.legacy_source.feature_id;
         match transaction.is_legacy_tree_already_imported(legacy_feature_id) {
             Ok(true) => {
                 transaction.rollback();
@@ -56,7 +59,17 @@ where
                 return Err(LegacyOrchardImportError::ExistingLegacyFeaturesCouldNotBeChecked);
             }
         }
-        let tree = map_legacy_tree(legacy_tree);
+        let plant_identity_id =
+            match transaction.find_or_create_plant_identity(legacy_tree.plant_identity.clone()) {
+                Ok(plant_identity_id) => plant_identity_id,
+                Err(_) => {
+                    transaction.rollback();
+                    return Err(LegacyOrchardImportError::PlantIdentityCouldNotBeResolved {
+                        legacy_feature_id,
+                    });
+                }
+            };
+        let tree = map_legacy_tree(legacy_tree, plant_identity_id);
         match transaction.save_tree(tree) {
             Ok(()) => {
                 imported_tree_count += 1;
@@ -73,13 +86,12 @@ where
     Ok(imported_tree_count)
 }
 
-fn map_legacy_tree(legacy_tree: LegacyTreeSnapshot) -> Tree {
+fn map_legacy_tree(legacy_tree: LegacyTreeSnapshot, plant_identity_id: PlantIdentityId) -> Tree {
     Tree {
-        legacy_feature_id: Some(legacy_tree.legacy_feature_id),
+        legacy_source: Some(legacy_tree.legacy_source),
+        plant_identity_id,
         longitude: legacy_tree.longitude,
         latitude: legacy_tree.latitude,
-        name: legacy_tree.name,
-        latin_name: Some(legacy_tree.latin_name),
         planted_on: legacy_tree.planted_on,
         row_name: Some(legacy_tree.row_name),
         roles: if legacy_tree.is_pioneer {
@@ -88,6 +100,7 @@ fn map_legacy_tree(legacy_tree: LegacyTreeSnapshot) -> Tree {
             vec![]
         },
         is_alive: legacy_tree.is_alive,
+        reproductive_role: legacy_tree.reproductive_role,
         harvest_start_day: legacy_tree.harvest_start_day,
         harvest_end_day: legacy_tree.harvest_end_day,
         adult_height_meters: Some(legacy_tree.adult_height_meters),

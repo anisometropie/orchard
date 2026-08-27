@@ -36,6 +36,10 @@ name = "import_legacy_orchard_unit"
 path = "src/hexagon/use_cases/import_legacy_orchard/import_legacy_orchard_unit_test.rs"
 
 [[test]]
+name = "in_memory_orchard_storage_integration"
+path = "src/adapters/secondary/in_memory_orchard_storage/in_memory_orchard_storage_integration_test.rs"
+
+[[test]]
 name = "postgres_orchard_storage_integration"
 path = "src/adapters/secondary/postgres_orchard_storage/postgres_orchard_storage_integration_test.rs"
 required-features = ["postgres-integration"]

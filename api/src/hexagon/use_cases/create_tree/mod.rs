@@ -1,34 +1,61 @@
-use crate::hexagon::models::Tree;
-use crate::hexagon::ports::TreeRepository;
+use crate::hexagon::models::{PlantIdentity, Tree};
+use crate::hexagon::ports::{OrchardTransaction, OrchardUnitOfWork};
 
 pub struct TreeCreationRequested {
     pub longitude: f64,
     pub latitude: f64,
-    pub name: String,
-    pub latin_name: Option<String>,
+    pub plant_identity: PlantIdentity,
     pub roles: Vec<String>,
     pub harvest_start_day: Option<u16>,
     pub harvest_end_day: Option<u16>,
 }
 
-pub fn create_tree<R: TreeRepository>(event: TreeCreationRequested, trees: &mut R) -> Tree {
+#[derive(Debug, PartialEq)]
+pub enum TreeCreationError {
+    PlantIdentityCouldNotBeResolved,
+    TreeCouldNotBeSaved,
+    TransactionCouldNotBegin,
+    TransactionCouldNotCommit,
+}
+
+pub fn create_tree<U>(
+    event: TreeCreationRequested,
+    orchard_unit_of_work: &mut U,
+) -> Result<Tree, TreeCreationError>
+where
+    U: OrchardUnitOfWork,
+{
+    let mut transaction = orchard_unit_of_work
+        .begin()
+        .map_err(|_| TreeCreationError::TransactionCouldNotBegin)?;
+    let plant_identity_id = match transaction.find_or_create_plant_identity(event.plant_identity) {
+        Ok(plant_identity_id) => plant_identity_id,
+        Err(_) => {
+            transaction.rollback();
+            return Err(TreeCreationError::PlantIdentityCouldNotBeResolved);
+        }
+    };
     let tree = Tree {
-        legacy_feature_id: None,
+        legacy_source: None,
+        plant_identity_id,
         longitude: event.longitude,
         latitude: event.latitude,
-        name: event.name,
-        latin_name: event.latin_name,
         planted_on: None,
         row_name: None,
         roles: event.roles,
         is_alive: true,
+        reproductive_role: None,
         harvest_start_day: event.harvest_start_day,
         harvest_end_day: event.harvest_end_day,
         adult_height_meters: None,
         adult_width_meters: None,
     };
-    trees
-        .save(tree.clone())
-        .expect("tree repository could not save a newly created tree");
-    tree
+    if transaction.save_tree(tree.clone()).is_err() {
+        transaction.rollback();
+        return Err(TreeCreationError::TreeCouldNotBeSaved);
+    }
+    transaction
+        .commit()
+        .map_err(|_| TreeCreationError::TransactionCouldNotCommit)?;
+    Ok(tree)
 }

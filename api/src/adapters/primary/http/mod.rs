@@ -3,48 +3,47 @@ use std::sync::{Arc, Mutex};
 use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use serde::Deserialize;
 
-use crate::hexagon::models::Tree;
-use crate::hexagon::ports::TreeRepository;
+use crate::hexagon::models::{PlantIdentity, Tree};
+use crate::hexagon::ports::OrchardUnitOfWork;
 use crate::hexagon::use_cases::create_tree::{TreeCreationRequested, create_tree};
 
 #[derive(Deserialize)]
 pub struct CreateTreeRequest {
     pub longitude: f64,
     pub latitude: f64,
-    pub name: String,
-    pub latin_name: Option<String>,
+    pub plant_identity: PlantIdentity,
     pub roles: Vec<String>,
     pub harvest_start_day: Option<u16>,
     pub harvest_end_day: Option<u16>,
 }
 
-pub fn router<R>(tree_repository: Arc<Mutex<R>>) -> Router
+pub fn router<U>(orchard_unit_of_work: Arc<Mutex<U>>) -> Router
 where
-    R: TreeRepository + Send + 'static,
+    U: OrchardUnitOfWork + Send + 'static,
 {
     Router::new()
-        .route("/trees", post(create_tree_handler::<R>))
-        .with_state(tree_repository)
+        .route("/trees", post(create_tree_handler::<U>))
+        .with_state(orchard_unit_of_work)
 }
 
-async fn create_tree_handler<R>(
-    State(tree_repository): State<Arc<Mutex<R>>>,
+async fn create_tree_handler<U>(
+    State(orchard_unit_of_work): State<Arc<Mutex<U>>>,
     Json(request): Json<CreateTreeRequest>,
-) -> (StatusCode, Json<Tree>)
+) -> Result<(StatusCode, Json<Tree>), StatusCode>
 where
-    R: TreeRepository + Send + 'static,
+    U: OrchardUnitOfWork + Send + 'static,
 {
-    let tree = create_tree(
+    create_tree(
         TreeCreationRequested {
             longitude: request.longitude,
             latitude: request.latitude,
-            name: request.name,
-            latin_name: request.latin_name,
+            plant_identity: request.plant_identity,
             roles: request.roles,
             harvest_start_day: request.harvest_start_day,
             harvest_end_day: request.harvest_end_day,
         },
-        &mut *tree_repository.lock().unwrap(),
-    );
-    (StatusCode::CREATED, Json(tree))
+        &mut *orchard_unit_of_work.lock().unwrap(),
+    )
+    .map(|tree| (StatusCode::CREATED, Json(tree)))
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }

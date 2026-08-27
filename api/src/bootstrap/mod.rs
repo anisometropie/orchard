@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::adapters::primary::http::router;
-use crate::hexagon::ports::TreeRepository;
+use crate::hexagon::ports::OrchardUnitOfWork;
 
 pub struct RunningHttpServer {
     url: String,
@@ -22,9 +22,9 @@ impl Drop for RunningHttpServer {
     }
 }
 
-pub async fn start_http_server<R>(tree_repository: R) -> RunningHttpServer
+pub async fn start_http_server<U>(orchard_unit_of_work: U) -> RunningHttpServer
 where
-    R: TreeRepository + Send + 'static,
+    U: OrchardUnitOfWork + Send + 'static,
 {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
@@ -33,7 +33,7 @@ where
         .local_addr()
         .expect("the orchard HTTP server should report its local address");
     let server_task = tokio::spawn(async move {
-        axum::serve(listener, router(Arc::new(Mutex::new(tree_repository))))
+        axum::serve(listener, router(Arc::new(Mutex::new(orchard_unit_of_work))))
             .await
             .expect("the orchard HTTP server should run");
     });
