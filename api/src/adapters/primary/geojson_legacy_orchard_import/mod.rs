@@ -137,10 +137,14 @@ fn parse_legacy_tree_identity(
     trade_name: Option<String>,
 ) -> Result<PlantIdentity, LegacyPlantIdentityParseError> {
     let (taxon, cultivar) = split_cultivar(legacy_botanical_name)?;
-    let common_name = [cultivar.as_deref(), trade_name.as_deref()]
-        .into_iter()
-        .flatten()
-        .fold(legacy_name, remove_exact_label_suffix)
+    let common_name = cultivar.as_deref().map_or(legacy_name, |cultivar| {
+        remove_quoted_label_suffix(legacy_name, cultivar)
+    });
+    let common_name = trade_name
+        .as_deref()
+        .map_or(common_name, |trade_name| {
+            remove_trade_name_suffix(common_name, trade_name)
+        })
         .into();
     let (botanical_taxon, identification_status) = parse_legacy_botanical_taxon(taxon)?;
 
@@ -153,9 +157,20 @@ fn parse_legacy_tree_identity(
     })
 }
 
-fn remove_exact_label_suffix<'a>(name: &'a str, label: &str) -> &'a str {
+fn remove_quoted_label_suffix<'a>(name: &'a str, label: &str) -> &'a str {
     let suffix = format!(" ‘{label}’");
     name.strip_suffix(&suffix)
+        .filter(|common_name| !common_name.is_empty())
+        .unwrap_or(name)
+}
+
+fn remove_trade_name_suffix<'a>(name: &'a str, trade_name: &str) -> &'a str {
+    let unquoted_suffix = format!(" {trade_name}");
+    name.strip_suffix(&unquoted_suffix)
+        .or_else(|| {
+            let without_quoted_trade_name = remove_quoted_label_suffix(name, trade_name);
+            (without_quoted_trade_name != name).then_some(without_quoted_trade_name)
+        })
         .filter(|common_name| !common_name.is_empty())
         .unwrap_or(name)
 }

@@ -54,6 +54,27 @@ fn sweet_lifeberry() {
 }
 
 #[test]
+fn ombrella() {
+    let parsed = parse_legacy_tree_identity(
+        "Albizia Ombrella",
+        "Albizia julibrissin ‘Boubri’",
+        Some("Ombrella".into()),
+    )
+    .unwrap();
+
+    assert_eq!(
+        parsed,
+        identity(
+            "Albizia",
+            BotanicalTaxon::Named(named_taxon("Albizia", Some("julibrissin"))),
+            Some("Boubri"),
+            Some("Ombrella"),
+            IdentificationStatus::Confirmed,
+        )
+    );
+}
+
+#[test]
 fn thornfree() {
     assert_eq!(
         parse(
