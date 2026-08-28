@@ -1,5 +1,3 @@
-use std::sync::{Mutex, MutexGuard, OnceLock};
-
 use orchard_api::adapters::secondary::PostgresOrchardStorage;
 use orchard_api::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon,
@@ -513,9 +511,23 @@ fn empty_orchard_database() -> (String, Client) {
     (database_url, verification_connection)
 }
 
-fn database_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned_lock| poisoned_lock.into_inner())
+struct DatabaseLock {
+    _connection: Client,
+}
+
+fn database_lock() -> DatabaseLock {
+    const ORCHARD_TEST_DATABASE_LOCK: i64 = 7_208_004_281;
+
+    let database_url = std::env::var("ORCHARD_TEST_DATABASE_URL")
+        .expect("ORCHARD_TEST_DATABASE_URL must point to the dedicated test database");
+    let mut connection = Client::connect(&database_url, NoTls).unwrap();
+    connection
+        .query_one(
+            "SELECT pg_advisory_lock($1)",
+            &[&ORCHARD_TEST_DATABASE_LOCK],
+        )
+        .unwrap();
+    DatabaseLock {
+        _connection: connection,
+    }
 }

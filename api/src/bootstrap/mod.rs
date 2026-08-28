@@ -2,8 +2,27 @@ use std::sync::{Arc, Mutex};
 
 use tokio::{net::TcpListener, task::JoinHandle};
 
+use crate::adapters::primary::geojson_legacy_orchard_import::GeoJsonLegacyOrchardImportError;
 use crate::adapters::primary::http::router;
+use crate::adapters::primary::import_legacy_geojson_file;
+use crate::adapters::primary::legacy_orchard_import_cli::LegacyOrchardImportCommand;
+use crate::adapters::secondary::PostgresOrchardStorage;
 use crate::hexagon::ports::OrchardUnitOfWork;
+
+#[derive(Debug)]
+pub enum LegacyOrchardImportCommandError {
+    CouldNotConnectToDatabase,
+    CouldNotImportOrchard(GeoJsonLegacyOrchardImportError),
+}
+
+pub fn import_legacy_orchard(
+    command: LegacyOrchardImportCommand,
+) -> Result<usize, LegacyOrchardImportCommandError> {
+    let mut orchard_unit_of_work = PostgresOrchardStorage::connect(&command.database_url)
+        .map_err(|_| LegacyOrchardImportCommandError::CouldNotConnectToDatabase)?;
+    import_legacy_geojson_file(&command.geojson_path, &mut orchard_unit_of_work)
+        .map_err(LegacyOrchardImportCommandError::CouldNotImportOrchard)
+}
 
 pub struct RunningHttpServer {
     url: String,

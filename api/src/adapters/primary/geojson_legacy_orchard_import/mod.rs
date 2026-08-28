@@ -8,7 +8,8 @@ use crate::hexagon::models::{
 };
 use crate::hexagon::ports::OrchardUnitOfWork;
 use crate::hexagon::use_cases::import_legacy_orchard::{
-    LegacyOrchardImportRequested, LegacyTreeSnapshot, import_legacy_orchard,
+    LegacyOrchardImportError, LegacyOrchardImportRequested, LegacyTreeSnapshot,
+    import_legacy_orchard,
 };
 
 #[derive(Debug, PartialEq)]
@@ -16,7 +17,7 @@ pub enum GeoJsonLegacyOrchardImportError {
     CouldNotReadGeoJson,
     CouldNotParseGeoJson,
     CouldNotParsePlantIdentity { legacy_feature_id: u32 },
-    CouldNotImportOrchard,
+    CouldNotImportOrchard(LegacyOrchardImportError),
 }
 
 pub fn import_legacy_geojson_file<U>(
@@ -73,7 +74,7 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
     import_legacy_orchard(LegacyOrchardImportRequested { trees }, orchard_unit_of_work)
-        .map_err(|_| GeoJsonLegacyOrchardImportError::CouldNotImportOrchard)
+        .map_err(GeoJsonLegacyOrchardImportError::CouldNotImportOrchard)
 }
 
 #[derive(Deserialize)]

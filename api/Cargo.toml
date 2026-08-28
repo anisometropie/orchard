@@ -43,3 +43,8 @@ path = "src/adapters/secondary/in_memory_orchard_storage/in_memory_orchard_stora
 name = "postgres_orchard_storage_integration"
 path = "src/adapters/secondary/postgres_orchard_storage/postgres_orchard_storage_integration_test.rs"
 required-features = ["postgres-integration"]
+
+[[test]]
+name = "legacy_orchard_import_cli_e2e"
+path = "src/adapters/primary/legacy_orchard_import_cli/legacy_orchard_import_cli_e2e_test.rs"
+required-features = ["postgres-integration"]
