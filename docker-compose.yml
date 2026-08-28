@@ -11,6 +11,26 @@ services:
     volumes:
       - orchard-db-data:/var/lib/postgresql/data
       - ./api/db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchard -d orchard"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  api:
+    build:
+      context: ./api
+    restart: unless-stopped
+    environment:
+      ORCHARD_DATABASE_URL: "postgres://orchard:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/orchard"
+    command: ["runserver", "--address", "0.0.0.0:3000"]
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data:ro
 
   db-test:
     image: postgis/postgis:16-3.4
