@@ -54,6 +54,8 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/templates/default.conf.template:ro
       - ./frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - api
 
 volumes:
   orchard-db-data:

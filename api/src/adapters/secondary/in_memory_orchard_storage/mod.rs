@@ -1,7 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use crate::hexagon::models::{BotanicalTaxon, PlantIdentity, PlantIdentityId, Tree};
-use crate::hexagon::ports::{OrchardTransaction, OrchardTransactionError, OrchardUnitOfWork};
+use crate::hexagon::models::{BotanicalTaxon, OrchardTree, PlantIdentity, PlantIdentityId, Tree};
+use crate::hexagon::ports::{
+    OrchardReadError, OrchardReader, OrchardTransaction, OrchardTransactionError, OrchardUnitOfWork,
+};
 
 /// In-memory transactional orchard storage for use-case and adapter tests.
 pub struct InMemoryOrchardStorage {
@@ -12,6 +14,7 @@ pub struct InMemoryOrchardStorage {
     fail_to_begin: bool,
     fail_when_checking_legacy_feature_ids: bool,
     fail_on_commit: bool,
+    fail_when_reading_trees: bool,
 }
 
 #[derive(Default)]
@@ -31,6 +34,7 @@ struct InMemoryOrchardConfiguration {
     fail_to_begin: bool,
     fail_when_checking_legacy_feature_ids: bool,
     fail_on_commit: bool,
+    fail_when_reading_trees: bool,
 }
 
 impl InMemoryOrchardStorage {
@@ -84,6 +88,14 @@ impl InMemoryOrchardStorage {
         })
     }
 
+    pub fn failing_when_reading_trees() -> Self {
+        Self::with_configuration(InMemoryOrchardConfiguration {
+            fail_when_reading_trees: true,
+            ..Default::default()
+        })
+        .0
+    }
+
     pub fn with_existing_orchard_failing_when_saving_tree_with_legacy_feature_id(
         plant_identities: Vec<PlantIdentity>,
         trees: Vec<Tree>,
@@ -126,6 +138,7 @@ impl InMemoryOrchardStorage {
                 fail_when_checking_legacy_feature_ids: configuration
                     .fail_when_checking_legacy_feature_ids,
                 fail_on_commit: configuration.fail_on_commit,
+                fail_when_reading_trees: configuration.fail_when_reading_trees,
             },
             InMemoryOrchardObserver { orchard },
         )
@@ -151,6 +164,36 @@ impl OrchardUnitOfWork for InMemoryOrchardStorage {
             fail_when_checking_legacy_feature_ids: self.fail_when_checking_legacy_feature_ids,
             fail_on_commit: self.fail_on_commit,
         })
+    }
+}
+
+impl OrchardReader for InMemoryOrchardStorage {
+    fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardReadError> {
+        if self.fail_when_reading_trees {
+            return Err(OrchardReadError::TreesCouldNotBeRead);
+        }
+        let orchard = self.orchard.lock().unwrap();
+        orchard
+            .trees
+            .iter()
+            .map(|tree| {
+                let identity_index = tree
+                    .plant_identity_id
+                    .0
+                    .checked_sub(1)
+                    .and_then(|index| usize::try_from(index).ok())
+                    .ok_or(OrchardReadError::TreesCouldNotBeRead)?;
+                let plant_identity = orchard
+                    .plant_identities
+                    .get(identity_index)
+                    .cloned()
+                    .ok_or(OrchardReadError::TreesCouldNotBeRead)?;
+                Ok(OrchardTree {
+                    tree: tree.clone(),
+                    plant_identity,
+                })
+            })
+            .collect()
     }
 }
 

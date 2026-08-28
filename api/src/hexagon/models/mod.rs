@@ -8,3 +8,9 @@ pub use plant_identity::{
     PlantIdentity, PlantIdentityId,
 };
 pub use tree::{ReproductiveRole, Tree};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OrchardTree {
+    pub tree: Tree,
+    pub plant_identity: PlantIdentity,
+}

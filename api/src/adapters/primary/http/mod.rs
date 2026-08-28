@@ -3,13 +3,22 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+};
 use serde::Deserialize;
+use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle};
 
-use crate::hexagon::models::{PlantIdentity, Tree};
-use crate::hexagon::ports::OrchardUnitOfWork;
+use crate::hexagon::models::{
+    BotanicalTaxon, InfraspecificRank, NamedTaxon, OrchardTree, PlantIdentity, Tree,
+};
+use crate::hexagon::ports::{OrchardReader, OrchardUnitOfWork};
 use crate::hexagon::use_cases::create_tree::{TreeCreationRequested, create_tree};
+use crate::hexagon::use_cases::list_orchard_trees::list_orchard_trees;
 
 #[derive(Deserialize)]
 pub struct CreateTreeRequest {
@@ -23,10 +32,11 @@ pub struct CreateTreeRequest {
 
 pub fn router<U>(orchard_storage: Arc<Mutex<U>>) -> Router
 where
-    U: OrchardUnitOfWork + Send + 'static,
+    U: OrchardUnitOfWork + OrchardReader + Send + 'static,
 {
     Router::new()
         .route("/trees", post(create_tree_handler::<U>))
+        .route("/trees.geojson", get(list_trees_handler::<U>))
         .with_state(orchard_storage)
 }
 
@@ -62,7 +72,7 @@ pub async fn start_http_server<U>(
     address: SocketAddr,
 ) -> Result<RunningHttpServer, std::io::Error>
 where
-    U: OrchardUnitOfWork + Send + 'static,
+    U: OrchardUnitOfWork + OrchardReader + Send + 'static,
 {
     let listener = TcpListener::bind(address).await?;
     let address = listener.local_addr()?;
@@ -76,6 +86,110 @@ where
         url: format!("http://{address}"),
         server_task: Some(server_task),
     })
+}
+
+async fn list_trees_handler<U>(
+    State(orchard_storage): State<Arc<Mutex<U>>>,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: OrchardReader + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || list_orchard_trees(&mut *orchard_storage.lock().unwrap()))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(|trees| Json(orchard_geojson(trees)))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
+    let features = trees.into_iter().map(|orchard_tree| {
+        let Tree {
+            legacy_source,
+            longitude,
+            latitude,
+            planted_on,
+            row_name,
+            roles,
+            is_alive,
+            adult_height_meters,
+            adult_width_meters,
+            ..
+        } = orchard_tree.tree;
+        let name = legacy_source
+            .as_ref()
+            .map(|source| source.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| orchard_tree.plant_identity.common_name.clone());
+        let latin_name = legacy_source
+            .as_ref()
+            .map(|source| source.latin_name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| botanical_name(&orchard_tree.plant_identity));
+
+        json!({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [longitude, latitude]
+            },
+            "properties": {
+                "name": name,
+                "latin_name": latin_name,
+                "planted_on": planted_on,
+                "row_name": row_name,
+                "roles": roles,
+                "is_alive": is_alive,
+                "adult_height": adult_height_meters,
+                "adult_width": adult_width_meters
+            }
+        })
+    });
+
+    json!({
+        "type": "FeatureCollection",
+        "features": features.collect::<Vec<_>>()
+    })
+}
+
+fn botanical_name(plant_identity: &PlantIdentity) -> String {
+    let mut name = match &plant_identity.botanical_taxon {
+        BotanicalTaxon::Named(taxon) => named_taxon(taxon),
+        BotanicalTaxon::HybridFormula { parents } => {
+            format!(
+                "{} × {}",
+                named_taxon(&parents[0]),
+                named_taxon(&parents[1])
+            )
+        }
+    };
+    if let Some(cultivar) = &plant_identity.cultivar {
+        name.push_str(&format!(" ‘{cultivar}’"));
+    }
+    name
+}
+
+fn named_taxon(taxon: &NamedTaxon) -> String {
+    let mut parts = vec![taxon.genus.clone()];
+    if let Some(species) = &taxon.species {
+        if taxon.species_is_hybrid {
+            parts.push("×".into());
+        }
+        parts.push(species.clone());
+    }
+    if let Some(infraspecific) = &taxon.infraspecific {
+        parts.push(match infraspecific.rank {
+            InfraspecificRank::Variety => "var.".into(),
+            InfraspecificRank::Subspecies => "subsp.".into(),
+        });
+        parts.push(infraspecific.name.clone());
+    }
+    if taxon.is_aggregate {
+        parts.push("agg.".into());
+    }
+    if let Some(cultivar_group) = &taxon.cultivar_group {
+        parts.push(format!("{cultivar_group} Group"));
+    }
+    parts.join(" ")
 }
 
 async fn create_tree_handler<U>(

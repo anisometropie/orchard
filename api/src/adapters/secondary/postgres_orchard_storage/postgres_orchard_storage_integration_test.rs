@@ -1,10 +1,12 @@
 use orchard_api::adapters::secondary::PostgresOrchardStorage;
 use orchard_api::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon,
-    LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantIdentity, PlantIdentityId,
-    ReproductiveRole, Tree,
+    LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, OrchardTree, PlantIdentity,
+    PlantIdentityId, ReproductiveRole, Tree,
 };
-use orchard_api::hexagon::ports::{OrchardTransaction, OrchardTransactionError, OrchardUnitOfWork};
+use orchard_api::hexagon::ports::{
+    OrchardReader, OrchardTransaction, OrchardTransactionError, OrchardUnitOfWork,
+};
 use postgres::{Client, NoTls};
 
 #[test]
@@ -117,6 +119,42 @@ fn commit_persists_identity_and_tree() {
     assert_eq!(
         persisted_tree.get::<_, Option<f64>>(13),
         expected_tree.adult_width_meters
+    );
+}
+
+#[test]
+fn read_tree_with_its_identity() {
+    let _database_lock = database_lock();
+    let (database_url, _) = empty_orchard_database();
+    let apple = PlantIdentity {
+        common_name: "Pommier".into(),
+        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+            genus: "Malus".into(),
+            species: Some("domestica".into()),
+            species_is_hybrid: false,
+            infraspecific: None,
+            is_aggregate: false,
+            cultivar_group: None,
+        }),
+        cultivar: None,
+        trade_name: None,
+        identification_status: IdentificationStatus::Confirmed,
+    };
+    let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let mut transaction = orchard_storage.begin().unwrap();
+    let plant_identity_id = transaction
+        .find_or_create_plant_identity(apple.clone())
+        .unwrap();
+    let tree = tree(plant_identity_id, 17);
+    transaction.save_tree(tree.clone()).unwrap();
+    transaction.commit().unwrap();
+
+    assert_eq!(
+        orchard_storage.trees(),
+        Ok(vec![OrchardTree {
+            tree,
+            plant_identity: apple,
+        }])
     );
 }
 

@@ -1,9 +1,12 @@
 use postgres::{Client, NoTls};
 
 use crate::hexagon::models::{
-    IdentificationStatus, PlantIdentity, PlantIdentityId, ReproductiveRole, Tree,
+    IdentificationStatus, LegacyPlantIdentification, LegacyTreeSource, OrchardTree, PlantIdentity,
+    PlantIdentityId, ReproductiveRole, Tree,
 };
-use crate::hexagon::ports::{OrchardTransaction, OrchardTransactionError, OrchardUnitOfWork};
+use crate::hexagon::ports::{
+    OrchardReadError, OrchardReader, OrchardTransaction, OrchardTransactionError, OrchardUnitOfWork,
+};
 
 /// PostgreSQL/PostGIS implementation of the orchard unit of work.
 /// Each transaction owns its database connection.
@@ -39,6 +42,111 @@ impl OrchardUnitOfWork for PostgresOrchardStorage {
             completed: false,
         })
     }
+}
+
+impl OrchardReader for PostgresOrchardStorage {
+    fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardReadError> {
+        let mut client = Client::connect(&self.database_url, NoTls)
+            .map_err(|_| OrchardReadError::TreesCouldNotBeRead)?;
+        client
+            .query(
+                "SELECT
+                    t.legacy_feature_id, t.plant_identity_id,
+                    ST_X(t.location), ST_Y(t.location),
+                    t.legacy_name, t.legacy_latin_name, t.legacy_source_url,
+                    t.legacy_identification_name, t.legacy_identification_latin_name,
+                    t.planted_on::text, t.row_name, t.roles, t.is_alive,
+                    t.reproductive_role, t.harvest_start_day, t.harvest_end_day,
+                    t.adult_height_meters, t.adult_width_meters,
+                    p.common_name, p.botanical_taxon::text, p.cultivar, p.trade_name,
+                    p.identification_status
+                 FROM trees t
+                 JOIN plant_identities p ON p.id = t.plant_identity_id
+                 ORDER BY t.id",
+                &[],
+            )
+            .map_err(|_| OrchardReadError::TreesCouldNotBeRead)?
+            .into_iter()
+            .map(|row| orchard_tree_from_row(&row))
+            .collect()
+    }
+}
+
+fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardReadError> {
+    let legacy_feature_id = row.get::<_, Option<i32>>(0);
+    let legacy_name = row.get::<_, Option<String>>(4);
+    let legacy_latin_name = row.get::<_, Option<String>>(5);
+    let legacy_identification_name = row.get::<_, Option<String>>(7);
+    let legacy_identification_latin_name = row.get::<_, Option<String>>(8);
+    let legacy_source = match (legacy_feature_id, legacy_name, legacy_latin_name) {
+        (Some(feature_id), Some(name), Some(latin_name)) => Some(LegacyTreeSource {
+            feature_id: u32::try_from(feature_id)
+                .map_err(|_| OrchardReadError::TreesCouldNotBeRead)?,
+            name,
+            latin_name,
+            legacy_identification: match (
+                legacy_identification_name,
+                legacy_identification_latin_name,
+            ) {
+                (Some(name), Some(latin_name)) => {
+                    Some(LegacyPlantIdentification { name, latin_name })
+                }
+                _ => None,
+            },
+            source_url: row.get(6),
+        }),
+        (None, None, None) => None,
+        _ => return Err(OrchardReadError::TreesCouldNotBeRead),
+    };
+    let reproductive_role = match row.get::<_, Option<&str>>(13) {
+        Some("female") => Some(ReproductiveRole::Female),
+        Some("male") => Some(ReproductiveRole::Male),
+        Some("self_fertile") => Some(ReproductiveRole::SelfFertile),
+        Some("parthenocarpic") => Some(ReproductiveRole::Parthenocarpic),
+        None => None,
+        Some(_) => return Err(OrchardReadError::TreesCouldNotBeRead),
+    };
+    let identification_status = match row.get::<_, &str>(22) {
+        "confirmed" => IdentificationStatus::Confirmed,
+        "uncertain" => IdentificationStatus::Uncertain,
+        _ => return Err(OrchardReadError::TreesCouldNotBeRead),
+    };
+    let botanical_taxon = serde_json::from_str(&row.get::<_, String>(19))
+        .map_err(|_| OrchardReadError::TreesCouldNotBeRead)?;
+
+    Ok(OrchardTree {
+        tree: Tree {
+            legacy_source,
+            plant_identity_id: PlantIdentityId(
+                u64::try_from(row.get::<_, i64>(1))
+                    .map_err(|_| OrchardReadError::TreesCouldNotBeRead)?,
+            ),
+            longitude: row.get(2),
+            latitude: row.get(3),
+            planted_on: row.get(9),
+            row_name: row.get(10),
+            roles: row.get(11),
+            is_alive: row.get(12),
+            reproductive_role,
+            harvest_start_day: optional_u16(row.get(14))?,
+            harvest_end_day: optional_u16(row.get(15))?,
+            adult_height_meters: row.get(16),
+            adult_width_meters: row.get(17),
+        },
+        plant_identity: PlantIdentity {
+            common_name: row.get(18),
+            botanical_taxon,
+            cultivar: row.get(20),
+            trade_name: row.get(21),
+            identification_status,
+        },
+    })
+}
+
+fn optional_u16(value: Option<i16>) -> Result<Option<u16>, OrchardReadError> {
+    value
+        .map(|value| u16::try_from(value).map_err(|_| OrchardReadError::TreesCouldNotBeRead))
+        .transpose()
 }
 
 impl OrchardTransaction for PostgresOrchardTransaction {
