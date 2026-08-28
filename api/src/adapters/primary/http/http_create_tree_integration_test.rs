@@ -1,5 +1,5 @@
+use orchard_api::adapters::primary::http::start_http_server;
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
-use orchard_api::bootstrap::start_http_server;
 use orchard_api::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, NamedTaxon, PlantIdentity, PlantIdentityId, Tree,
 };
@@ -8,7 +8,9 @@ use reqwest::StatusCode;
 #[tokio::test]
 async fn create_tree_http() {
     let (orchard, observed_orchard) = InMemoryOrchardStorage::new();
-    let server = start_http_server(orchard).await;
+    let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
     let apple = malus_domestica();
 
     let response = reqwest::Client::new()

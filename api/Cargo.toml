@@ -11,6 +11,7 @@ postgres-integration = []
 
 [dependencies]
 axum = "0.8"
+clap = { version = "4.5", features = ["derive"] }
 postgres = "0.19"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -45,6 +46,6 @@ path = "src/adapters/secondary/postgres_orchard_storage/postgres_orchard_storage
 required-features = ["postgres-integration"]
 
 [[test]]
-name = "legacy_orchard_import_cli_e2e"
-path = "src/adapters/primary/legacy_orchard_import_cli/legacy_orchard_import_cli_e2e_test.rs"
+name = "orchard_cli_e2e"
+path = "src/adapters/primary/orchard_cli/orchard_cli_e2e_test.rs"
 required-features = ["postgres-integration"]

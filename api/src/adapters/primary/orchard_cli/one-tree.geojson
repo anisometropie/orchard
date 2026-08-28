@@ -1,0 +1,26 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "fid": 1,
+        "name": "Pistachier térébinthe",
+        "latin_name": "Pistacia terebinthus",
+        "date": "2022-06-23",
+        "Line": "10. Bas bas bas",
+        "pioneer": false,
+        "alive": false,
+        "harvest_date_min": null,
+        "harvest_date_max": null,
+        "adult_height": 5.0,
+        "adult_width": 4.0,
+        "source": null
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [0.72, 0.24]
+      }
+    }
+  ]
+}
