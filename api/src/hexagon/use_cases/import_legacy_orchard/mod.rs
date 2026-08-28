@@ -35,12 +35,12 @@ pub enum LegacyOrchardImportError {
 
 pub fn import_legacy_orchard<U>(
     request: LegacyOrchardImportRequested,
-    orchard_unit_of_work: &mut U,
+    orchard_storage: &mut U,
 ) -> Result<usize, LegacyOrchardImportError>
 where
     U: OrchardUnitOfWork,
 {
-    let mut transaction = orchard_unit_of_work
+    let mut transaction = orchard_storage
         .begin()
         .map_err(|_| LegacyOrchardImportError::TransactionCouldNotBegin)?;
     let mut imported_tree_count = 0;

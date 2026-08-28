@@ -21,13 +21,13 @@ pub struct CreateTreeRequest {
     pub harvest_end_day: Option<u16>,
 }
 
-pub fn router<U>(orchard_unit_of_work: Arc<Mutex<U>>) -> Router
+pub fn router<U>(orchard_storage: Arc<Mutex<U>>) -> Router
 where
     U: OrchardUnitOfWork + Send + 'static,
 {
     Router::new()
         .route("/trees", post(create_tree_handler::<U>))
-        .with_state(orchard_unit_of_work)
+        .with_state(orchard_storage)
 }
 
 pub struct RunningHttpServer {
@@ -58,7 +58,7 @@ impl Drop for RunningHttpServer {
 }
 
 pub async fn start_http_server<U>(
-    orchard_unit_of_work: U,
+    orchard_storage: U,
     address: SocketAddr,
 ) -> Result<RunningHttpServer, std::io::Error>
 where
@@ -67,7 +67,7 @@ where
     let listener = TcpListener::bind(address).await?;
     let address = listener.local_addr()?;
     let server_task = tokio::spawn(async move {
-        axum::serve(listener, router(Arc::new(Mutex::new(orchard_unit_of_work))))
+        axum::serve(listener, router(Arc::new(Mutex::new(orchard_storage))))
             .await
             .expect("the orchard HTTP server should run");
     });
@@ -79,7 +79,7 @@ where
 }
 
 async fn create_tree_handler<U>(
-    State(orchard_unit_of_work): State<Arc<Mutex<U>>>,
+    State(orchard_storage): State<Arc<Mutex<U>>>,
     Json(request): Json<CreateTreeRequest>,
 ) -> Result<(StatusCode, Json<Tree>), StatusCode>
 where
@@ -95,7 +95,7 @@ where
                 harvest_start_day: request.harvest_start_day,
                 harvest_end_day: request.harvest_end_day,
             },
-            &mut *orchard_unit_of_work.lock().unwrap(),
+            &mut *orchard_storage.lock().unwrap(),
         )
     })
     .await

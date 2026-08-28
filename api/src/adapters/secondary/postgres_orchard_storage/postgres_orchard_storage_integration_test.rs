@@ -26,8 +26,8 @@ fn commit_persists_identity_and_tree() {
         trade_name: None,
         identification_status: IdentificationStatus::Confirmed,
     };
-    let mut orchard_unit_of_work = PostgresOrchardStorage::connect(&database_url).unwrap();
-    let mut transaction = orchard_unit_of_work.begin().unwrap();
+    let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let mut transaction = orchard_storage.begin().unwrap();
     let plant_identity_id = transaction
         .find_or_create_plant_identity(john_rivers.clone())
         .unwrap();
@@ -125,8 +125,8 @@ fn persist_legacy_details() {
     let _database_lock = database_lock();
     let (database_url, mut verification_connection) = empty_orchard_database();
 
-    let mut orchard_unit_of_work = PostgresOrchardStorage::connect(&database_url).unwrap();
-    let mut transaction = orchard_unit_of_work.begin().unwrap();
+    let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let mut transaction = orchard_storage.begin().unwrap();
     let boskoop_identity_id = transaction
         .find_or_create_plant_identity(PlantIdentity {
             common_name: "Kiwi".into(),
@@ -298,8 +298,8 @@ fn roll_back_batch() {
     let _database_lock = database_lock();
     let (database_url, mut verification_connection) = empty_orchard_database();
 
-    let mut orchard_unit_of_work = PostgresOrchardStorage::connect(&database_url).unwrap();
-    let mut transaction = orchard_unit_of_work.begin().unwrap();
+    let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let mut transaction = orchard_storage.begin().unwrap();
     let plant_identity_id = transaction
         .find_or_create_plant_identity(PlantIdentity {
             common_name: "Kiwi".into(),

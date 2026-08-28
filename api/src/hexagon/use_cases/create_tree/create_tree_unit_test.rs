@@ -8,7 +8,7 @@ use orchard_api::hexagon::use_cases::create_tree::{
 
 #[test]
 fn save_new_tree() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let apple = malus_domestica();
 
     let created_tree = create_tree(
@@ -20,7 +20,7 @@ fn save_new_tree() {
             harvest_start_day: Some(210),
             harvest_end_day: Some(260),
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     let expected_tree = Tree {
@@ -45,7 +45,7 @@ fn save_new_tree() {
 
 #[test]
 fn reuse_identity() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let apple = malus_domestica();
 
     let first_tree = create_tree(
@@ -57,7 +57,7 @@ fn reuse_identity() {
             harvest_start_day: Some(210),
             harvest_end_day: Some(260),
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     )
     .unwrap();
     let second_tree = create_tree(
@@ -69,7 +69,7 @@ fn reuse_identity() {
             harvest_start_day: Some(210),
             harvest_end_day: Some(260),
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     )
     .unwrap();
 
@@ -81,7 +81,7 @@ fn reuse_identity() {
 
 #[test]
 fn roll_back_on_save_failure() {
-    let (mut orchard_unit_of_work, observed_orchard) =
+    let (mut orchard_storage, observed_orchard) =
         InMemoryOrchardStorage::failing_when_saving_any_tree();
 
     let creation_result = create_tree(
@@ -93,7 +93,7 @@ fn roll_back_on_save_failure() {
             harvest_start_day: Some(210),
             harvest_end_day: Some(260),
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(creation_result, Err(TreeCreationError::TreeCouldNotBeSaved));

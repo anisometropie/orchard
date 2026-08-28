@@ -6,11 +6,11 @@ use orchard_api::hexagon::models::{LegacyPlantIdentification, ReproductiveRole};
 
 #[test]
 fn import_geojson_file() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
 
     let import_result = import_legacy_geojson_file(
         Path::new("../data/trees-wgs84.geojson"),
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     let plant_identities = observed_orchard.plant_identities();
@@ -72,12 +72,12 @@ fn import_geojson_file() {
 
 #[test]
 fn import_trade_names() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
 
     assert_eq!(
         import_legacy_geojson_file(
             Path::new("../data/trees-wgs84.geojson"),
-            &mut orchard_unit_of_work,
+            &mut orchard_storage,
         ),
         Ok(278)
     );

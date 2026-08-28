@@ -22,7 +22,7 @@ pub enum GeoJsonLegacyOrchardImportError {
 
 pub fn import_legacy_geojson_file<U>(
     path: &Path,
-    orchard_unit_of_work: &mut U,
+    orchard_storage: &mut U,
 ) -> Result<usize, GeoJsonLegacyOrchardImportError>
 where
     U: OrchardUnitOfWork,
@@ -73,7 +73,7 @@ where
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    import_legacy_orchard(LegacyOrchardImportRequested { trees }, orchard_unit_of_work)
+    import_legacy_orchard(LegacyOrchardImportRequested { trees }, orchard_storage)
         .map_err(GeoJsonLegacyOrchardImportError::CouldNotImportOrchard)
 }
 

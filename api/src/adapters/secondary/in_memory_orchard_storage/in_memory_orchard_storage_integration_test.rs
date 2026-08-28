@@ -7,8 +7,8 @@ use orchard_api::hexagon::ports::{OrchardTransaction, OrchardTransactionError, O
 
 #[test]
 fn reject_missing_identity() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
-    let mut transaction = orchard_unit_of_work.begin().unwrap();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
+    let mut transaction = orchard_storage.begin().unwrap();
 
     let save_result = transaction.save_tree(tree(PlantIdentityId(1), 64));
 
@@ -23,10 +23,10 @@ fn reject_missing_identity() {
 
 #[test]
 fn reject_duplicate_feature() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let boskoop = plant_identity();
 
-    let mut first_transaction = orchard_unit_of_work.begin().unwrap();
+    let mut first_transaction = orchard_storage.begin().unwrap();
     let plant_identity_id = first_transaction
         .find_or_create_plant_identity(boskoop.clone())
         .unwrap();
@@ -35,7 +35,7 @@ fn reject_duplicate_feature() {
         .unwrap();
     first_transaction.commit().unwrap();
 
-    let mut second_transaction = orchard_unit_of_work.begin().unwrap();
+    let mut second_transaction = orchard_storage.begin().unwrap();
     let plant_identity_id = second_transaction
         .find_or_create_plant_identity(boskoop)
         .unwrap();
@@ -52,11 +52,11 @@ fn reject_duplicate_feature() {
 
 #[test]
 fn reject_stale_transaction() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let boskoop = plant_identity();
 
-    let mut first_transaction = orchard_unit_of_work.begin().unwrap();
-    let mut second_transaction = orchard_unit_of_work.begin().unwrap();
+    let mut first_transaction = orchard_storage.begin().unwrap();
+    let mut second_transaction = orchard_storage.begin().unwrap();
     let first_identity_id = first_transaction
         .find_or_create_plant_identity(boskoop.clone())
         .unwrap();

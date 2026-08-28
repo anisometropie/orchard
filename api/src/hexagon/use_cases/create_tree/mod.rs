@@ -20,12 +20,12 @@ pub enum TreeCreationError {
 
 pub fn create_tree<U>(
     event: TreeCreationRequested,
-    orchard_unit_of_work: &mut U,
+    orchard_storage: &mut U,
 ) -> Result<Tree, TreeCreationError>
 where
     U: OrchardUnitOfWork,
 {
-    let mut transaction = orchard_unit_of_work
+    let mut transaction = orchard_storage
         .begin()
         .map_err(|_| TreeCreationError::TransactionCouldNotBegin)?;
     let plant_identity_id = match transaction.find_or_create_plant_identity(event.plant_identity) {

@@ -37,14 +37,14 @@ fn main() -> ExitCode {
 }
 
 fn import_orchard(database_url: &str, geojson_path: &std::path::Path) -> ExitCode {
-    let mut orchard_unit_of_work = match PostgresOrchardStorage::connect(database_url) {
-        Ok(orchard_unit_of_work) => orchard_unit_of_work,
+    let mut orchard_storage = match PostgresOrchardStorage::connect(database_url) {
+        Ok(orchard_storage) => orchard_storage,
         Err(_) => {
             eprintln!("Import failed: could not connect to the orchard database.");
             return ExitCode::from(1);
         }
     };
-    match import_legacy_geojson_file(geojson_path, &mut orchard_unit_of_work) {
+    match import_legacy_geojson_file(geojson_path, &mut orchard_storage) {
         Ok(imported_tree_count) => {
             println!("Imported {imported_tree_count} trees.");
             ExitCode::SUCCESS
@@ -57,8 +57,8 @@ fn import_orchard(database_url: &str, geojson_path: &std::path::Path) -> ExitCod
 }
 
 fn runserver(database_url: String, address: std::net::SocketAddr) -> ExitCode {
-    let orchard_unit_of_work = match PostgresOrchardStorage::connect(&database_url) {
-        Ok(orchard_unit_of_work) => orchard_unit_of_work,
+    let orchard_storage = match PostgresOrchardStorage::connect(&database_url) {
+        Ok(orchard_storage) => orchard_storage,
         Err(_) => {
             eprintln!("Server failed: could not connect to the orchard database.");
             return ExitCode::from(1);
@@ -73,7 +73,7 @@ fn runserver(database_url: String, address: std::net::SocketAddr) -> ExitCode {
     };
 
     runtime.block_on(async move {
-        match start_http_server(orchard_unit_of_work, address).await {
+        match start_http_server(orchard_storage, address).await {
             Ok(server) => {
                 println!("Listening on {}", server.url());
                 let _ = io::stdout().flush();

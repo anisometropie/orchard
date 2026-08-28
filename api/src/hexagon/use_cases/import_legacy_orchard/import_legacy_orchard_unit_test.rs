@@ -11,7 +11,7 @@ use orchard_api::hexagon::use_cases::import_legacy_orchard::{
 
 #[test]
 fn import_john_rivers() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let john_rivers = john_rivers();
     let expected_identity = john_rivers.plant_identity.clone();
     let expected_tree = imported_tree(&john_rivers, 1);
@@ -20,7 +20,7 @@ fn import_john_rivers() {
         LegacyOrchardImportRequested {
             trees: vec![john_rivers],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(import_result, Ok(1));
@@ -30,7 +30,7 @@ fn import_john_rivers() {
 
 #[test]
 fn import_tree_batch() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let pistachio = pistachio();
     let fig = fig(2);
     let expected_identities = vec![pistachio.plant_identity.clone(), fig.plant_identity.clone()];
@@ -40,7 +40,7 @@ fn import_tree_batch() {
         LegacyOrchardImportRequested {
             trees: vec![pistachio, fig],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(import_result, Ok(2));
@@ -50,7 +50,7 @@ fn import_tree_batch() {
 
 #[test]
 fn reuse_identity() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let first_fig = fig(2);
     let second_fig = fig(249);
     let expected_identity = first_fig.plant_identity.clone();
@@ -60,7 +60,7 @@ fn reuse_identity() {
         LegacyOrchardImportRequested {
             trees: vec![first_fig, second_fig],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(import_result, Ok(2));
@@ -70,7 +70,7 @@ fn reuse_identity() {
 
 #[test]
 fn reuse_identity_with_different_legacy_names() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let first_raspberry = surprise_dautomne(190);
     let second_raspberry = surprise_dautomne(209);
     let expected_identity = first_raspberry.plant_identity.clone();
@@ -83,7 +83,7 @@ fn reuse_identity_with_different_legacy_names() {
         LegacyOrchardImportRequested {
             trees: vec![first_raspberry, second_raspberry],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(import_result, Ok(2));
@@ -93,7 +93,7 @@ fn reuse_identity_with_different_legacy_names() {
 
 #[test]
 fn preserve_reproductive_role_and_historical_identification() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let boskoop = LegacyTreeSnapshot {
         legacy_source: LegacyTreeSource {
             feature_id: 64,
@@ -145,7 +145,7 @@ fn preserve_reproductive_role_and_historical_identification() {
         LegacyOrchardImportRequested {
             trees: vec![boskoop, cranberry],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(import_result, Ok(2));
@@ -181,7 +181,7 @@ fn preserve_reproductive_role_and_historical_identification() {
 
 #[test]
 fn preserve_source_url() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let source_url = "https://www.promessedefleurs.com/fruitiers/petits-fruits/petits-fruits-de-a-a-z/lonicera-kamtschatica-eisbar-baie-de-mai.html";
 
     let import_result = import_legacy_orchard(
@@ -224,7 +224,7 @@ fn preserve_source_url() {
                 adult_width_meters: 1.2,
             }],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(import_result, Ok(1));
@@ -240,14 +240,14 @@ fn preserve_source_url() {
 
 #[test]
 fn roll_back_batch_on_save_failure() {
-    let (mut orchard_unit_of_work, observed_orchard) =
+    let (mut orchard_storage, observed_orchard) =
         InMemoryOrchardStorage::failing_when_saving_tree_with_legacy_feature_id(3);
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
             trees: vec![pistachio(), fig(2), caragana()],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(
@@ -262,14 +262,14 @@ fn roll_back_batch_on_save_failure() {
 
 #[test]
 fn roll_back_when_identity_cannot_be_resolved() {
-    let (mut orchard_unit_of_work, observed_orchard) =
+    let (mut orchard_storage, observed_orchard) =
         InMemoryOrchardStorage::failing_when_resolving_plant_identity_with_genus("Caragana");
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
             trees: vec![pistachio(), fig(2), caragana()],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(
@@ -287,7 +287,7 @@ fn preserve_existing_orchard_on_save_failure() {
     let existing = pistachio();
     let existing_identity = existing.plant_identity.clone();
     let existing_tree = imported_tree(&existing, 1);
-    let (mut orchard_unit_of_work, observed_orchard) =
+    let (mut orchard_storage, observed_orchard) =
         InMemoryOrchardStorage::with_existing_orchard_failing_when_saving_tree_with_legacy_feature_id(
             vec![existing_identity.clone()],
             vec![existing_tree.clone()],
@@ -298,7 +298,7 @@ fn preserve_existing_orchard_on_save_failure() {
         LegacyOrchardImportRequested {
             trees: vec![john_rivers(), fig(2), caragana()],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(
@@ -316,17 +316,16 @@ fn reject_duplicate_legacy_feature() {
     let existing = pistachio();
     let existing_identity = existing.plant_identity.clone();
     let existing_tree = imported_tree(&existing, 1);
-    let (mut orchard_unit_of_work, observed_orchard) =
-        InMemoryOrchardStorage::with_existing_orchard(
-            vec![existing_identity.clone()],
-            vec![existing_tree.clone()],
-        );
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::with_existing_orchard(
+        vec![existing_identity.clone()],
+        vec![existing_tree.clone()],
+    );
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
             trees: vec![fig(2), pistachio()],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(
@@ -341,13 +340,13 @@ fn reject_duplicate_legacy_feature() {
 
 #[test]
 fn roll_back_batch_on_commit_failure() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::failing_on_commit();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::failing_on_commit();
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
             trees: vec![pistachio(), fig(2)],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(
@@ -360,7 +359,7 @@ fn roll_back_batch_on_commit_failure() {
 
 #[test]
 fn preserve_pioneer() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::new();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let caragana = caragana();
     let expected_identity = caragana.plant_identity.clone();
     let expected_tree = imported_tree(&caragana, 1);
@@ -369,7 +368,7 @@ fn preserve_pioneer() {
         LegacyOrchardImportRequested {
             trees: vec![caragana],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(import_result, Ok(1));
@@ -379,13 +378,13 @@ fn preserve_pioneer() {
 
 #[test]
 fn reject_when_transaction_cannot_start() {
-    let (mut orchard_unit_of_work, observed_orchard) = InMemoryOrchardStorage::failing_to_begin();
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::failing_to_begin();
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
             trees: vec![pistachio()],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(
@@ -398,14 +397,14 @@ fn reject_when_transaction_cannot_start() {
 
 #[test]
 fn reject_when_duplicate_check_fails() {
-    let (mut orchard_unit_of_work, observed_orchard) =
+    let (mut orchard_storage, observed_orchard) =
         InMemoryOrchardStorage::failing_when_checking_legacy_feature_ids();
 
     let import_result = import_legacy_orchard(
         LegacyOrchardImportRequested {
             trees: vec![pistachio()],
         },
-        &mut orchard_unit_of_work,
+        &mut orchard_storage,
     );
 
     assert_eq!(
