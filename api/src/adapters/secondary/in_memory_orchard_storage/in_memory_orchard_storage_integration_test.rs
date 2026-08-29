@@ -103,6 +103,7 @@ fn tree(plant_identity_id: PlantIdentityId, legacy_feature_id: u32) -> Tree {
         row_name: None,
         roles: vec!["fruit".into()],
         is_alive: true,
+        is_in_danger: false,
         reproductive_role: None,
         harvest_start_day: None,
         harvest_end_day: None,

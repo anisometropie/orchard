@@ -1,4 +1,4 @@
-use crate::hexagon::models::{OrchardTree, PlantIdentity, PlantIdentityId, Tree};
+use crate::hexagon::models::{OrchardTree, PlantIdentity, PlantIdentityId, Tree, TreeId};
 
 #[derive(Debug, PartialEq)]
 pub enum OrchardStorageError {
@@ -6,6 +6,9 @@ pub enum OrchardStorageError {
     ExistingLegacyTreeCouldNotBeChecked,
     PlantIdentityCouldNotBeResolved,
     TreeCouldNotBeSaved,
+    TreeCouldNotBeRead,
+    TreeDangerCouldNotBeChanged,
+    TreeLifeStatusCouldNotBeChanged,
     AtomicOperationCouldNotCommit,
     TreesCouldNotBeRead,
 }
@@ -27,5 +30,16 @@ pub trait OrchardStorage {
         plant_identity: PlantIdentity,
     ) -> Result<PlantIdentityId, OrchardStorageError>;
     fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardStorageError>;
+    fn tree_is_alive(&mut self, tree_id: TreeId) -> Result<Option<bool>, OrchardStorageError>;
+    fn change_tree_danger(
+        &mut self,
+        tree_id: TreeId,
+        is_in_danger: bool,
+    ) -> Result<(), OrchardStorageError>;
+    fn change_tree_life_status(
+        &mut self,
+        tree_id: TreeId,
+        is_alive: bool,
+    ) -> Result<(), OrchardStorageError>;
     fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardStorageError>;
 }

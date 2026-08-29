@@ -7,10 +7,11 @@ pub use plant_identity::{
     BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon, NamedTaxon,
     PlantIdentity, PlantIdentityId,
 };
-pub use tree::{ReproductiveRole, Tree};
+pub use tree::{ReproductiveRole, Tree, TreeId};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrchardTree {
+    pub id: TreeId,
     pub tree: Tree,
     pub plant_identity: PlantIdentity,
 }

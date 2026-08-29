@@ -38,6 +38,7 @@ where
             row_name: None,
             roles: event.roles,
             is_alive: true,
+            is_in_danger: false,
             reproductive_role: None,
             harvest_start_day: event.harvest_start_day,
             harvest_end_day: event.harvest_end_day,

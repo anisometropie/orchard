@@ -1,6 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use crate::hexagon::models::{BotanicalTaxon, OrchardTree, PlantIdentity, PlantIdentityId, Tree};
+use crate::hexagon::models::{
+    BotanicalTaxon, OrchardTree, PlantIdentity, PlantIdentityId, Tree, TreeId,
+};
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
 /// In-memory transactional orchard storage for use-case and adapter tests.
@@ -26,6 +28,8 @@ struct InMemoryOrchard {
 struct InMemoryOrchardTransaction {
     staged_plant_identities: Vec<PlantIdentity>,
     staged_trees: Vec<Tree>,
+    staged_tree_danger_changes: Vec<(TreeId, bool)>,
+    staged_tree_life_status_changes: Vec<(TreeId, bool)>,
 }
 
 #[derive(Default)]
@@ -178,6 +182,24 @@ impl OrchardStorage for InMemoryOrchardStorage {
                     .plant_identities
                     .extend(transaction.staged_plant_identities);
                 committed_orchard.trees.extend(transaction.staged_trees);
+                for (tree_id, is_in_danger) in transaction.staged_tree_danger_changes {
+                    let index = tree_index(tree_id)
+                        .expect("a staged danger change should have a positive tree ID");
+                    committed_orchard
+                        .trees
+                        .get_mut(index)
+                        .expect("a staged danger change should target an existing tree")
+                        .is_in_danger = is_in_danger;
+                }
+                for (tree_id, is_alive) in transaction.staged_tree_life_status_changes {
+                    let index = tree_index(tree_id)
+                        .expect("a staged life-status change should have a positive tree ID");
+                    committed_orchard
+                        .trees
+                        .get_mut(index)
+                        .expect("a staged life-status change should target an existing tree")
+                        .is_alive = is_alive;
+                }
                 Ok(value)
             }
         }
@@ -280,6 +302,53 @@ impl OrchardStorage for InMemoryOrchardStorage {
         Ok(())
     }
 
+    fn tree_is_alive(&mut self, tree_id: TreeId) -> Result<Option<bool>, OrchardStorageError> {
+        Ok(tree_index(tree_id).and_then(|index| {
+            self.orchard
+                .lock()
+                .unwrap()
+                .trees
+                .get(index)
+                .map(|tree| tree.is_alive)
+        }))
+    }
+
+    fn change_tree_danger(
+        &mut self,
+        tree_id: TreeId,
+        is_in_danger: bool,
+    ) -> Result<(), OrchardStorageError> {
+        let tree_exists = tree_index(tree_id)
+            .is_some_and(|index| self.orchard.lock().unwrap().trees.get(index).is_some());
+        if !tree_exists {
+            return Err(OrchardStorageError::TreeDangerCouldNotBeChanged);
+        }
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_tree_danger_changes
+            .push((tree_id, is_in_danger));
+        Ok(())
+    }
+
+    fn change_tree_life_status(
+        &mut self,
+        tree_id: TreeId,
+        is_alive: bool,
+    ) -> Result<(), OrchardStorageError> {
+        let tree_exists = tree_index(tree_id)
+            .is_some_and(|index| self.orchard.lock().unwrap().trees.get(index).is_some());
+        if !tree_exists {
+            return Err(OrchardStorageError::TreeLifeStatusCouldNotBeChanged);
+        }
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_tree_life_status_changes
+            .push((tree_id, is_alive));
+        Ok(())
+    }
+
     fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardStorageError> {
         if self.fail_when_reading_trees {
             return Err(OrchardStorageError::TreesCouldNotBeRead);
@@ -288,7 +357,8 @@ impl OrchardStorage for InMemoryOrchardStorage {
         orchard
             .trees
             .iter()
-            .map(|tree| {
+            .enumerate()
+            .map(|(index, tree)| {
                 let identity_index = tree
                     .plant_identity_id
                     .0
@@ -301,6 +371,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
                     .cloned()
                     .ok_or(OrchardStorageError::TreesCouldNotBeRead)?;
                 Ok(OrchardTree {
+                    id: TreeId((index + 1) as u64),
                     tree: tree.clone(),
                     plant_identity,
                 })
@@ -315,6 +386,13 @@ fn has_legacy_feature_id(orchard: &InMemoryOrchard, legacy_feature_id: u32) -> b
             .as_ref()
             .is_some_and(|source| source.feature_id == legacy_feature_id)
     })
+}
+
+fn tree_index(tree_id: TreeId) -> Option<usize> {
+    tree_id
+        .0
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok())
 }
 
 fn has_tree_with_same_legacy_feature(trees: &[Tree], candidate: &Tree) -> bool {

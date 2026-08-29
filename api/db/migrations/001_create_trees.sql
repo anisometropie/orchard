@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS trees (
     row_name TEXT,
     roles TEXT[] NOT NULL DEFAULT '{}',
     is_alive BOOLEAN NOT NULL,
+    is_in_danger BOOLEAN NOT NULL DEFAULT FALSE,
     reproductive_role TEXT,
     harvest_start_day SMALLINT,
     harvest_end_day SMALLINT,
@@ -32,6 +33,9 @@ CREATE TABLE IF NOT EXISTS trees (
     CONSTRAINT trees_reproductive_role_check CHECK (
         reproductive_role IS NULL
         OR reproductive_role IN ('female', 'male', 'self_fertile', 'parthenocarpic')
+    ),
+    CONSTRAINT trees_danger_requires_alive_check CHECK (
+        NOT is_in_danger OR is_alive
     ),
     CHECK (harvest_start_day IS NULL OR harvest_start_day BETWEEN 1 AND 366),
     CHECK (harvest_end_day IS NULL OR harvest_end_day BETWEEN 1 AND 366)

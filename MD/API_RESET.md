@@ -15,6 +15,7 @@ writing the smallest Green implementation.
 | Status | Event | Use case | Observable outcome |
 | --- | --- | --- | --- |
 | Implemented | `TREE_CREATION_REQUESTED` | Create tree | A valid tree at a map coordinate is persisted with a reusable plant identity. |
+| Implemented | `TREE_CONDITION_CHANGED` | Change tree condition | Any supplied danger/life fields change atomically without changing another tree; marking a tree dead clears danger. |
 | Not started | `TREE_FIELD_SUGGESTIONS_REQUESTED` | Suggest tree fields | While entering a tree, an orchardist receives matching known species/cultivar suggestions from the fields already typed and may use suggested Latin name, roles, and harvest start/end days without retyping them. |
 | Not started | `TREE_DETAILS_CHANGED` | Update tree | A selected tree's editable fields change without changing its identity. |
 | Not started | `TREE_SEARCH_REQUESTED` | Search/list trees | Matching trees are returned for name, Latin name, role, harvest day, and danger filters. |

@@ -99,6 +99,7 @@ fn map_legacy_tree(legacy_tree: LegacyTreeSnapshot, plant_identity_id: PlantIden
             vec![]
         },
         is_alive: legacy_tree.is_alive,
+        is_in_danger: false,
         reproductive_role: legacy_tree.reproductive_role,
         harvest_start_day: legacy_tree.harvest_start_day,
         harvest_end_day: legacy_tree.harvest_end_day,

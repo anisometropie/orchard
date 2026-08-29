@@ -41,6 +41,10 @@ name = "list_orchard_trees_unit"
 path = "src/hexagon/use_cases/list_orchard_trees/list_orchard_trees_unit_test.rs"
 
 [[test]]
+name = "change_tree_condition_unit"
+path = "src/hexagon/use_cases/change_tree_condition/change_tree_condition_unit_test.rs"
+
+[[test]]
 name = "in_memory_orchard_storage_integration"
 path = "src/adapters/secondary/in_memory_orchard_storage/in_memory_orchard_storage_integration_test.rs"
 

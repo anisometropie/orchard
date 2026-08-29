@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{LegacyTreeSource, PlantIdentityId};
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TreeId(pub u64);
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReproductiveRole {
@@ -21,6 +24,7 @@ pub struct Tree {
     pub row_name: Option<String>,
     pub roles: Vec<String>,
     pub is_alive: bool,
+    pub is_in_danger: bool,
     pub reproductive_role: Option<ReproductiveRole>,
     pub harvest_start_day: Option<u16>,
     pub harvest_end_day: Option<u16>,

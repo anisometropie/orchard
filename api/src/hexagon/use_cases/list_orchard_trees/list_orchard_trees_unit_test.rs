@@ -1,7 +1,7 @@
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, NamedTaxon, OrchardTree, PlantIdentity, PlantIdentityId,
-    Tree,
+    Tree, TreeId,
 };
 use orchard_api::hexagon::ports::OrchardStorageError;
 use orchard_api::hexagon::use_cases::list_orchard_trees::list_orchard_trees;
@@ -31,6 +31,7 @@ fn list_a_stored_tree_with_its_plant_identity() {
         row_name: Some("1. Haut haut haut".into()),
         roles: vec!["fruit".into()],
         is_alive: true,
+        is_in_danger: true,
         reproductive_role: None,
         harvest_start_day: Some(210),
         harvest_end_day: Some(260),
@@ -45,6 +46,7 @@ fn list_a_stored_tree_with_its_plant_identity() {
     assert_eq!(
         listed_trees,
         Ok(vec![OrchardTree {
+            id: TreeId(1),
             tree,
             plant_identity: apple,
         }])

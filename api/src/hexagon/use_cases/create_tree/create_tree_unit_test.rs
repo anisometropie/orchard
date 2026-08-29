@@ -32,6 +32,7 @@ fn save_new_tree() {
         row_name: None,
         roles: vec!["fruit".into()],
         is_alive: true,
+        is_in_danger: false,
         reproductive_role: None,
         harvest_start_day: Some(210),
         harvest_end_day: Some(260),

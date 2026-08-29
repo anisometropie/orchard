@@ -5,18 +5,21 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::hexagon::models::{
-    BotanicalTaxon, InfraspecificRank, NamedTaxon, OrchardTree, PlantIdentity, Tree,
+    BotanicalTaxon, InfraspecificRank, NamedTaxon, OrchardTree, PlantIdentity, Tree, TreeId,
 };
 use crate::hexagon::ports::OrchardStorage;
+use crate::hexagon::use_cases::change_tree_condition::{
+    TreeConditionChangeError, TreeConditionChanged, change_tree_condition,
+};
 use crate::hexagon::use_cases::create_tree::{TreeCreationRequested, create_tree};
 use crate::hexagon::use_cases::list_orchard_trees::list_orchard_trees;
 
@@ -47,6 +50,7 @@ where
 {
     Router::new()
         .route("/trees", post(create_tree_handler::<U>))
+        .route("/trees/{tree_id}", patch(change_tree_handler::<U>))
         .route("/trees.geojson", get(list_trees_handler::<U>))
         .with_state(orchard_storage)
 }
@@ -101,6 +105,42 @@ pub struct CreateTreeRequest {
     pub harvest_end_day: Option<u16>,
 }
 
+#[derive(Deserialize)]
+struct ChangeTreeRequest {
+    is_alive: Option<bool>,
+    is_in_danger: Option<bool>,
+}
+
+async fn change_tree_handler<U>(
+    State(orchard_storage): State<Arc<Mutex<U>>>,
+    Path(tree_id): Path<u64>,
+    Json(request): Json<ChangeTreeRequest>,
+) -> StatusCode
+where
+    U: OrchardStorage + Send + 'static,
+{
+    match tokio::task::spawn_blocking(move || {
+        change_tree_condition(
+            TreeConditionChanged {
+                tree_id: TreeId(tree_id),
+                is_alive: request.is_alive,
+                is_in_danger: request.is_in_danger,
+            },
+            &mut *orchard_storage.lock().unwrap(),
+        )
+    })
+    .await
+    {
+        Ok(Ok(())) => StatusCode::NO_CONTENT,
+        Ok(Err(TreeConditionChangeError::NoChangesRequested)) => StatusCode::BAD_REQUEST,
+        Ok(Err(TreeConditionChangeError::TreeNotFound)) => StatusCode::NOT_FOUND,
+        Ok(Err(TreeConditionChangeError::DeadTreeCannotBeInDanger)) => StatusCode::CONFLICT,
+        Ok(Err(TreeConditionChangeError::TreeCouldNotBeChanged)) | Err(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
 async fn create_tree_handler<U>(
     State(orchard_storage): State<Arc<Mutex<U>>>,
     Json(request): Json<CreateTreeRequest>,
@@ -129,6 +169,7 @@ where
 
 fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
     let features = trees.into_iter().map(|orchard_tree| {
+        let tree_id = orchard_tree.id;
         let Tree {
             legacy_source,
             longitude,
@@ -137,6 +178,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
             row_name,
             roles,
             is_alive,
+            is_in_danger,
             adult_height_meters,
             adult_width_meters,
             ..
@@ -154,6 +196,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
 
         json!({
             "type": "Feature",
+            "id": tree_id.0,
             "geometry": {
                 "type": "Point",
                 "coordinates": [longitude, latitude]
@@ -165,6 +208,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
                 "row_name": row_name,
                 "roles": roles,
                 "is_alive": is_alive,
+                "is_in_danger": is_in_danger,
                 "adult_height": adult_height_meters,
                 "adult_width": adult_width_meters
             }

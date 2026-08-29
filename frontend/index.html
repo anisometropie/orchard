@@ -44,6 +44,9 @@
         display: flex;
         gap: 7px;
       }
+      .tree-editor-field + .tree-editor-field {
+        margin-top: 7px;
+      }
       .tree-editor-note,
       .tree-editor-error {
         font-size: 12px;
@@ -302,18 +305,42 @@
       function createTreeEditor(feature) {
         const form = document.createElement("form");
         form.className = "tree-editor";
+        const originalIsAlive = feature.properties.is_alive !== false;
+        const originalIsInDanger = feature.properties.is_in_danger === true;
 
         const title = document.createElement("div");
         title.className = "tree-editor-title";
         title.textContent = feature.properties.name || "Tree";
 
-        const field = document.createElement("label");
-        field.className = "tree-editor-field";
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = feature.properties.is_in_danger === true;
-        checkbox.disabled = feature.properties.is_alive === false;
-        field.append(checkbox, document.createTextNode("In danger"));
+        const dangerField = document.createElement("label");
+        dangerField.className = "tree-editor-field";
+        const dangerCheckbox = document.createElement("input");
+        dangerCheckbox.type = "checkbox";
+        dangerCheckbox.checked = originalIsInDanger;
+        dangerField.append(
+          dangerCheckbox,
+          document.createTextNode("In danger"),
+        );
+
+        const deadField = document.createElement("label");
+        deadField.className = "tree-editor-field";
+        const deadCheckbox = document.createElement("input");
+        deadCheckbox.type = "checkbox";
+        deadCheckbox.checked = !originalIsAlive;
+        deadField.append(deadCheckbox, document.createTextNode("Dead"));
+
+        const note = document.createElement("div");
+        note.className = "tree-editor-note";
+        note.textContent = "A dead tree cannot be in danger.";
+
+        function syncConditionControls() {
+          if (deadCheckbox.checked) dangerCheckbox.checked = false;
+          dangerCheckbox.disabled = deadCheckbox.checked;
+          note.hidden = !deadCheckbox.checked;
+        }
+
+        deadCheckbox.addEventListener("change", syncConditionControls);
+        syncConditionControls();
 
         const error = document.createElement("div");
         error.className = "tree-editor-error";
@@ -331,31 +358,40 @@
         saveButton.textContent = "OK";
         actions.append(cancelButton, saveButton);
 
-        form.append(title, field);
-        if (checkbox.disabled) {
-          const note = document.createElement("div");
-          note.className = "tree-editor-note";
-          note.textContent = "A dead tree cannot be marked as in danger.";
-          form.append(note);
-        }
+        form.append(title, dangerField, deadField, note);
         form.append(error, actions);
 
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           error.hidden = true;
-          checkbox.disabled = true;
+          dangerCheckbox.disabled = true;
+          deadCheckbox.disabled = true;
           cancelButton.disabled = true;
           saveButton.disabled = true;
           saveButton.textContent = "Saving…";
 
           try {
-            await updateTreeDanger(feature.id, checkbox.checked);
+            const isAlive = !deadCheckbox.checked;
+            const changes = {};
+            if (isAlive !== originalIsAlive) {
+              changes.is_alive = isAlive;
+            }
+            if (
+              isAlive &&
+              dangerCheckbox.checked !== originalIsInDanger
+            ) {
+              changes.is_in_danger = dangerCheckbox.checked;
+            }
+            if (Object.keys(changes).length > 0) {
+              await updateTree(feature.id, changes);
+            }
             closeTreeEditor();
-            await loadOrchardTrees();
+            if (Object.keys(changes).length > 0) await loadOrchardTrees();
           } catch (requestError) {
             error.textContent = requestError.message;
             error.hidden = false;
-            checkbox.disabled = feature.properties.is_alive === false;
+            deadCheckbox.disabled = false;
+            syncConditionControls();
             cancelButton.disabled = false;
             saveButton.disabled = false;
             saveButton.textContent = "OK";
@@ -365,17 +401,14 @@
         return form;
       }
 
-      async function updateTreeDanger(treeId, isInDanger) {
+      async function updateTree(treeId, changes) {
         if (treeId == null) throw new Error("This tree has no editable ID.");
 
-        const response = await fetch(
-          `/api/trees/${encodeURIComponent(treeId)}/danger`,
-          {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ is_in_danger: isInDanger }),
-          },
-        );
+        const response = await fetch(`/api/trees/${encodeURIComponent(treeId)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(changes),
+        });
         if (response.ok) return;
         if (response.status === 404) {
           throw new Error("This tree no longer exists.");

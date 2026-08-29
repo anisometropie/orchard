@@ -2,7 +2,7 @@ use postgres::{Client, NoTls};
 
 use crate::hexagon::models::{
     IdentificationStatus, LegacyPlantIdentification, LegacyTreeSource, OrchardTree, PlantIdentity,
-    PlantIdentityId, ReproductiveRole, Tree,
+    PlantIdentityId, ReproductiveRole, Tree, TreeId,
 };
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
@@ -65,6 +65,47 @@ impl OrchardStorage for PostgresOrchardStorage {
         save_tree(&mut self.client, tree).map_err(|_| OrchardStorageError::TreeCouldNotBeSaved)
     }
 
+    fn tree_is_alive(&mut self, tree_id: TreeId) -> Result<Option<bool>, OrchardStorageError> {
+        let tree_id =
+            i64::try_from(tree_id.0).map_err(|_| OrchardStorageError::TreeCouldNotBeRead)?;
+        self.client
+            .query_opt("SELECT is_alive FROM trees WHERE id = $1", &[&tree_id])
+            .map(|row| row.map(|row| row.get(0)))
+            .map_err(|_| OrchardStorageError::TreeCouldNotBeRead)
+    }
+
+    fn change_tree_danger(
+        &mut self,
+        tree_id: TreeId,
+        is_in_danger: bool,
+    ) -> Result<(), OrchardStorageError> {
+        let tree_id = i64::try_from(tree_id.0)
+            .map_err(|_| OrchardStorageError::TreeDangerCouldNotBeChanged)?;
+        match self.client.execute(
+            "UPDATE trees SET is_in_danger = $2 WHERE id = $1",
+            &[&tree_id, &is_in_danger],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::TreeDangerCouldNotBeChanged),
+        }
+    }
+
+    fn change_tree_life_status(
+        &mut self,
+        tree_id: TreeId,
+        is_alive: bool,
+    ) -> Result<(), OrchardStorageError> {
+        let tree_id = i64::try_from(tree_id.0)
+            .map_err(|_| OrchardStorageError::TreeLifeStatusCouldNotBeChanged)?;
+        match self.client.execute(
+            "UPDATE trees SET is_alive = $2 WHERE id = $1",
+            &[&tree_id, &is_alive],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::TreeLifeStatusCouldNotBeChanged),
+        }
+    }
+
     fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardStorageError> {
         self.client
             .query(
@@ -75,9 +116,9 @@ impl OrchardStorage for PostgresOrchardStorage {
                     t.legacy_identification_name, t.legacy_identification_latin_name,
                     t.planted_on::text, t.row_name, t.roles, t.is_alive,
                     t.reproductive_role, t.harvest_start_day, t.harvest_end_day,
-                    t.adult_height_meters, t.adult_width_meters,
+                    t.adult_height_meters, t.adult_width_meters, t.is_in_danger,
                     p.common_name, p.botanical_taxon::text, p.cultivar, p.trade_name,
-                    p.identification_status
+                    p.identification_status, t.id
                  FROM trees t
                  JOIN plant_identities p ON p.id = t.plant_identity_id
                  ORDER BY t.id",
@@ -124,15 +165,19 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
         None => None,
         Some(_) => return Err(OrchardStorageError::TreesCouldNotBeRead),
     };
-    let identification_status = match row.get::<_, &str>(22) {
+    let identification_status = match row.get::<_, &str>(23) {
         "confirmed" => IdentificationStatus::Confirmed,
         "uncertain" => IdentificationStatus::Uncertain,
         _ => return Err(OrchardStorageError::TreesCouldNotBeRead),
     };
-    let botanical_taxon = serde_json::from_str(&row.get::<_, String>(19))
+    let botanical_taxon = serde_json::from_str(&row.get::<_, String>(20))
         .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?;
 
     Ok(OrchardTree {
+        id: TreeId(
+            u64::try_from(row.get::<_, i64>(24))
+                .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?,
+        ),
         tree: Tree {
             legacy_source,
             plant_identity_id: PlantIdentityId(
@@ -145,6 +190,7 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
             row_name: row.get(10),
             roles: row.get(11),
             is_alive: row.get(12),
+            is_in_danger: row.get(18),
             reproductive_role,
             harvest_start_day: optional_u16(row.get(14))?,
             harvest_end_day: optional_u16(row.get(15))?,
@@ -152,10 +198,10 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
             adult_width_meters: row.get(17),
         },
         plant_identity: PlantIdentity {
-            common_name: row.get(18),
+            common_name: row.get(19),
             botanical_taxon,
-            cultivar: row.get(20),
-            trade_name: row.get(21),
+            cultivar: row.get(21),
+            trade_name: row.get(22),
             identification_status,
         },
     })
@@ -268,13 +314,13 @@ fn save_tree(client: &mut Client, tree: Tree) -> Result<(), postgres::Error> {
                 legacy_name, legacy_latin_name,
                 legacy_source_url,
                 legacy_identification_name, legacy_identification_latin_name,
-                planted_on, row_name, roles, is_alive, reproductive_role,
+                planted_on, row_name, roles, is_alive, is_in_danger, reproductive_role,
                 harvest_start_day, harvest_end_day,
                 adult_height_meters, adult_width_meters
             ) VALUES (
                 $1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326),
                 $5, $6, $7, $8, $9, $10::TEXT::DATE, $11,
-                $12, $13, $14, $15, $16, $17, $18
+                $12, $13, $14, $15, $16, $17, $18, $19
             )",
             &[
                 &legacy_feature_id,
@@ -290,6 +336,7 @@ fn save_tree(client: &mut Client, tree: Tree) -> Result<(), postgres::Error> {
                 &tree.row_name,
                 &tree.roles,
                 &tree.is_alive,
+                &tree.is_in_danger,
                 &reproductive_role,
                 &harvest_start_day,
                 &harvest_end_day,

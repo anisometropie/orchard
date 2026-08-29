@@ -36,6 +36,7 @@ async fn create_tree_http() {
         row_name: None,
         roles: vec!["fruit".into()],
         is_alive: true,
+        is_in_danger: false,
         reproductive_role: None,
         harvest_start_day: Some(210),
         harvest_end_day: Some(260),
@@ -60,6 +61,7 @@ async fn list_orchard_trees_as_geojson() {
         row_name: Some("1. Haut haut haut".into()),
         roles: vec!["fruit".into(), "pioneer".into()],
         is_alive: true,
+        is_in_danger: true,
         reproductive_role: None,
         harvest_start_day: Some(210),
         harvest_end_day: Some(260),
@@ -82,6 +84,7 @@ async fn list_orchard_trees_as_geojson() {
             "type": "FeatureCollection",
             "features": [{
                 "type": "Feature",
+                "id": 1,
                 "geometry": {
                     "type": "Point",
                     "coordinates": [0.64, 0.68]
@@ -93,12 +96,135 @@ async fn list_orchard_trees_as_geojson() {
                     "row_name": "1. Haut haut haut",
                     "roles": ["fruit", "pioneer"],
                     "is_alive": true,
+                    "is_in_danger": true,
                     "adult_height": 4.0,
                     "adult_width": 3.0
                 }
             }]
         })
     );
+}
+
+#[tokio::test]
+async fn partially_update_tree_danger_http() {
+    let tree = tree_with_condition(true, false);
+    let (orchard, observed_orchard) =
+        InMemoryOrchardStorage::with_existing_orchard(vec![malus_domestica()], vec![tree]);
+    let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+
+    let response = reqwest::Client::new()
+        .patch(format!("{}/trees/1", server.url()))
+        .json(&serde_json::json!({ "is_in_danger": true }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(observed_orchard.trees()[0].is_in_danger);
+}
+
+#[tokio::test]
+async fn report_missing_tree_when_partially_updating_http() {
+    let (orchard, _) = InMemoryOrchardStorage::with_existing_orchard(
+        vec![malus_domestica()],
+        vec![tree_with_condition(true, false)],
+    );
+    let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+
+    let response = reqwest::Client::new()
+        .patch(format!("{}/trees/2", server.url()))
+        .json(&serde_json::json!({ "is_in_danger": true }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn reject_partial_update_that_marks_a_dead_tree_in_danger() {
+    let (orchard, observed_orchard) = InMemoryOrchardStorage::with_existing_orchard(
+        vec![malus_domestica()],
+        vec![tree_with_condition(false, false)],
+    );
+    let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+
+    let response = reqwest::Client::new()
+        .patch(format!("{}/trees/1", server.url()))
+        .json(&serde_json::json!({ "is_in_danger": true }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(!observed_orchard.trees()[0].is_in_danger);
+}
+
+#[tokio::test]
+async fn partially_update_tree_life_status_and_clear_danger() {
+    let tree = tree_with_condition(true, true);
+    let (orchard, observed_orchard) =
+        InMemoryOrchardStorage::with_existing_orchard(vec![malus_domestica()], vec![tree]);
+    let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+
+    let response = reqwest::Client::new()
+        .patch(format!("{}/trees/1", server.url()))
+        .json(&serde_json::json!({ "is_alive": false }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let tree = &observed_orchard.trees()[0];
+    assert!(!tree.is_alive);
+    assert!(!tree.is_in_danger);
+}
+
+#[tokio::test]
+async fn reject_an_empty_partial_tree_update() {
+    let (orchard, _) = InMemoryOrchardStorage::with_existing_orchard(
+        vec![malus_domestica()],
+        vec![tree_with_condition(true, false)],
+    );
+    let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+
+    let response = reqwest::Client::new()
+        .patch(format!("{}/trees/1", server.url()))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+fn tree_with_condition(is_alive: bool, is_in_danger: bool) -> Tree {
+    Tree {
+        legacy_source: None,
+        plant_identity_id: PlantIdentityId(1),
+        longitude: 0.64,
+        latitude: 0.68,
+        planted_on: Some("2024-02-03".into()),
+        row_name: Some("1. Haut haut haut".into()),
+        roles: vec!["fruit".into()],
+        is_alive,
+        is_in_danger,
+        reproductive_role: None,
+        harvest_start_day: Some(210),
+        harvest_end_day: Some(260),
+        adult_height_meters: Some(4.0),
+        adult_width_meters: Some(3.0),
+    }
 }
 
 fn malus_domestica() -> PlantIdentity {

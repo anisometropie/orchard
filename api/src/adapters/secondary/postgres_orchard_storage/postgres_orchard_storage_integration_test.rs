@@ -2,9 +2,12 @@ use orchard_api::adapters::secondary::PostgresOrchardStorage;
 use orchard_api::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon,
     LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, OrchardTree, PlantIdentity,
-    PlantIdentityId, ReproductiveRole, Tree,
+    PlantIdentityId, ReproductiveRole, Tree, TreeId,
 };
 use orchard_api::hexagon::ports::{OrchardStorage, OrchardStorageError};
+use orchard_api::hexagon::use_cases::change_tree_condition::{
+    TreeConditionChanged, change_tree_condition,
+};
 use postgres::{Client, NoTls};
 
 #[test]
@@ -45,6 +48,7 @@ fn commit_persists_identity_and_tree() {
                 row_name: Some("10. Bas bas bas".into()),
                 roles: vec![],
                 is_alive: true,
+                is_in_danger: true,
                 reproductive_role: None,
                 harvest_start_day: None,
                 harvest_end_day: None,
@@ -77,7 +81,7 @@ fn commit_persists_identity_and_tree() {
 
     let persisted_tree = verification_connection
         .query_one(
-            "SELECT legacy_feature_id, plant_identity_id, ST_X(location), ST_Y(location), legacy_name, legacy_latin_name, planted_on::text, row_name, roles, is_alive, harvest_start_day, harvest_end_day, adult_height_meters, adult_width_meters FROM trees WHERE legacy_feature_id = 17",
+            "SELECT legacy_feature_id, plant_identity_id, ST_X(location), ST_Y(location), legacy_name, legacy_latin_name, planted_on::text, row_name, roles, is_alive, is_in_danger, harvest_start_day, harvest_end_day, adult_height_meters, adult_width_meters FROM trees WHERE legacy_feature_id = 17",
             &[],
         )
         .unwrap();
@@ -104,19 +108,23 @@ fn commit_persists_identity_and_tree() {
     assert_eq!(persisted_tree.get::<_, Vec<String>>(8), expected_tree.roles);
     assert_eq!(persisted_tree.get::<_, bool>(9), expected_tree.is_alive);
     assert_eq!(
-        persisted_tree.get::<_, Option<i16>>(10),
-        expected_tree.harvest_start_day.map(|day| day as i16)
+        persisted_tree.get::<_, bool>(10),
+        expected_tree.is_in_danger
     );
     assert_eq!(
         persisted_tree.get::<_, Option<i16>>(11),
+        expected_tree.harvest_start_day.map(|day| day as i16)
+    );
+    assert_eq!(
+        persisted_tree.get::<_, Option<i16>>(12),
         expected_tree.harvest_end_day.map(|day| day as i16)
     );
     assert_eq!(
-        persisted_tree.get::<_, Option<f64>>(12),
+        persisted_tree.get::<_, Option<f64>>(13),
         expected_tree.adult_height_meters
     );
     assert_eq!(
-        persisted_tree.get::<_, Option<f64>>(13),
+        persisted_tree.get::<_, Option<f64>>(14),
         expected_tree.adult_width_meters
     );
 }
@@ -152,10 +160,99 @@ fn read_tree_with_its_identity() {
     assert_eq!(
         orchard_storage.trees(),
         Ok(vec![OrchardTree {
+            id: TreeId(1),
             tree,
             plant_identity: apple,
         }])
     );
+}
+
+#[test]
+fn change_tree_danger_by_numeric_id() {
+    let _database_lock = database_lock();
+    let (database_url, mut verification_connection) = empty_orchard_database();
+    let apple = PlantIdentity {
+        common_name: "Pommier".into(),
+        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+            genus: "Malus".into(),
+            species: Some("domestica".into()),
+            species_is_hybrid: false,
+            infraspecific: None,
+            is_aggregate: false,
+            cultivar_group: None,
+        }),
+        cultivar: None,
+        trade_name: None,
+        identification_status: IdentificationStatus::Confirmed,
+    };
+    let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    orchard_storage
+        .transaction(|orchard| {
+            let plant_identity_id = orchard.find_or_create_plant_identity(apple)?;
+            orchard.save_tree(tree(plant_identity_id, 17))
+        })
+        .unwrap();
+
+    let result = change_tree_condition(
+        TreeConditionChanged {
+            tree_id: TreeId(1),
+            is_alive: None,
+            is_in_danger: Some(true),
+        },
+        &mut orchard_storage,
+    );
+
+    assert_eq!(result, Ok(()));
+    let is_in_danger: bool = verification_connection
+        .query_one("SELECT is_in_danger FROM trees WHERE id = 1", &[])
+        .unwrap()
+        .get(0);
+    assert!(is_in_danger);
+}
+
+#[test]
+fn change_tree_life_status_by_numeric_id_and_clear_danger() {
+    let _database_lock = database_lock();
+    let (database_url, mut verification_connection) = empty_orchard_database();
+    let apple = PlantIdentity {
+        common_name: "Pommier".into(),
+        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+            genus: "Malus".into(),
+            species: Some("domestica".into()),
+            species_is_hybrid: false,
+            infraspecific: None,
+            is_aggregate: false,
+            cultivar_group: None,
+        }),
+        cultivar: None,
+        trade_name: None,
+        identification_status: IdentificationStatus::Confirmed,
+    };
+    let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    orchard_storage
+        .transaction(|orchard| {
+            let plant_identity_id = orchard.find_or_create_plant_identity(apple)?;
+            let mut tree = tree(plant_identity_id, 17);
+            tree.is_in_danger = true;
+            orchard.save_tree(tree)
+        })
+        .unwrap();
+
+    let result = change_tree_condition(
+        TreeConditionChanged {
+            tree_id: TreeId(1),
+            is_alive: Some(false),
+            is_in_danger: None,
+        },
+        &mut orchard_storage,
+    );
+
+    assert_eq!(result, Ok(()));
+    let row = verification_connection
+        .query_one("SELECT is_alive, is_in_danger FROM trees WHERE id = 1", &[])
+        .unwrap();
+    assert!(!row.get::<_, bool>(0));
+    assert!(!row.get::<_, bool>(1));
 }
 
 #[test]
@@ -199,6 +296,7 @@ fn persist_legacy_details() {
                     row_name: Some("4. Bas bas".into()),
                     roles: vec!["fruit".into()],
                     is_alive: true,
+                    is_in_danger: false,
                     reproductive_role: Some(ReproductiveRole::SelfFertile),
                     harvest_start_day: None,
                     harvest_end_day: None,
@@ -241,6 +339,7 @@ fn persist_legacy_details() {
                     row_name: Some("4. Bas bas".into()),
                     roles: vec!["fruit".into()],
                     is_alive: true,
+                    is_in_danger: false,
                     reproductive_role: None,
                     harvest_start_day: None,
                     harvest_end_day: None,
@@ -283,6 +382,7 @@ fn persist_legacy_details() {
                     row_name: Some("8. Bas".into()),
                     roles: vec!["fruit".into()],
                     is_alive: true,
+                    is_in_danger: false,
                     reproductive_role: None,
                     harvest_start_day: None,
                     harvest_end_day: None,
@@ -428,12 +528,17 @@ fn migration_preserves_legacy_labels() {
             "../../../../db/migrations/004_preserve_legacy_source_url.sql"
         ))
         .unwrap();
+    connection
+        .batch_execute(include_str!(
+            "../../../../db/migrations/005_add_tree_danger.sql"
+        ))
+        .unwrap();
 
     let migrated_tree = connection
         .query_one(
             "SELECT legacy_feature_id, legacy_name, legacy_latin_name, plant_identity_id,
                     reproductive_role, legacy_identification_name, legacy_identification_latin_name,
-                    legacy_source_url
+                    legacy_source_url, is_in_danger
              FROM trees",
             &[],
         )
@@ -452,6 +557,7 @@ fn migration_preserves_legacy_labels() {
     assert_eq!(migrated_tree.get::<_, Option<String>>(5), None);
     assert_eq!(migrated_tree.get::<_, Option<String>>(6), None);
     assert_eq!(migrated_tree.get::<_, Option<String>>(7), None);
+    assert!(!migrated_tree.get::<_, bool>(8));
 
     let old_name_column_count: i64 = connection
         .query_one(
@@ -490,6 +596,18 @@ fn migration_preserves_legacy_labels() {
         .get(0);
     assert_eq!(plant_identity_foreign_key_count, 1);
 
+    let danger_constraint_count: i64 = connection
+        .query_one(
+            "SELECT count(*)
+             FROM pg_constraint
+             WHERE conrelid = 'trees'::regclass
+               AND conname = 'trees_danger_requires_alive_check'",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(danger_constraint_count, 1);
+
     connection
         .batch_execute("DROP SCHEMA migration_test CASCADE")
         .unwrap();
@@ -511,6 +629,7 @@ fn tree(plant_identity_id: PlantIdentityId, legacy_feature_id: u32) -> Tree {
         row_name: Some("4. Bas bas".into()),
         roles: vec!["fruit".into()],
         is_alive: true,
+        is_in_danger: false,
         reproductive_role: Some(ReproductiveRole::SelfFertile),
         harvest_start_day: None,
         harvest_end_day: None,
@@ -541,6 +660,11 @@ fn empty_orchard_database() -> (String, Client) {
     verification_connection
         .batch_execute(include_str!(
             "../../../../db/migrations/004_preserve_legacy_source_url.sql"
+        ))
+        .unwrap();
+    verification_connection
+        .batch_execute(include_str!(
+            "../../../../db/migrations/005_add_tree_danger.sql"
         ))
         .unwrap();
     verification_connection
