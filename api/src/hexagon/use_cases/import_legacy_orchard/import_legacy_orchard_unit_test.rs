@@ -339,6 +339,27 @@ fn reject_duplicate_legacy_feature() {
 }
 
 #[test]
+fn reject_duplicate_legacy_feature_staged_by_the_same_import() {
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
+
+    let import_result = import_legacy_orchard(
+        LegacyOrchardImportRequested {
+            trees: vec![fig(2), fig(2)],
+        },
+        &mut orchard_storage,
+    );
+
+    assert_eq!(
+        import_result,
+        Err(LegacyOrchardImportError::LegacyFeatureAlreadyImported {
+            legacy_feature_id: 2,
+        })
+    );
+    assert_eq!(observed_orchard.plant_identities(), vec![]);
+    assert_eq!(observed_orchard.trees(), vec![]);
+}
+
+#[test]
 fn roll_back_batch_on_commit_failure() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::failing_on_commit();
 

@@ -1,9 +1,8 @@
 use crate::hexagon::models::OrchardTree;
-use crate::hexagon::ports::{OrchardReadError, OrchardReader};
+use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
-pub fn list_orchard_trees<R>(orchard_reader: &mut R) -> Result<Vec<OrchardTree>, OrchardReadError>
-where
-    R: OrchardReader,
-{
-    orchard_reader.trees()
+pub fn list_orchard_trees(
+    orchard_storage: &mut impl OrchardStorage,
+) -> Result<Vec<OrchardTree>, OrchardStorageError> {
+    orchard_storage.trees()
 }

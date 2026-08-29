@@ -4,51 +4,69 @@ use crate::hexagon::models::{
     IdentificationStatus, LegacyPlantIdentification, LegacyTreeSource, OrchardTree, PlantIdentity,
     PlantIdentityId, ReproductiveRole, Tree,
 };
-use crate::hexagon::ports::{
-    OrchardReadError, OrchardReader, OrchardTransaction, OrchardTransactionError, OrchardUnitOfWork,
-};
+use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
-/// PostgreSQL/PostGIS implementation of the orchard unit of work.
-/// Each transaction owns its database connection.
+/// PostgreSQL/PostGIS implementation of orchard storage.
 pub struct PostgresOrchardStorage {
-    database_url: String,
-}
-
-pub struct PostgresOrchardTransaction {
     client: Client,
-    completed: bool,
 }
 
 impl PostgresOrchardStorage {
-    pub fn connect(database_url: &str) -> Result<Self, OrchardTransactionError> {
-        Client::connect(database_url, NoTls).map_err(|_| OrchardTransactionError::CouldNotBegin)?;
-        Ok(Self {
-            database_url: database_url.into(),
-        })
+    pub fn connect(database_url: &str) -> Result<Self, OrchardStorageError> {
+        let client = Client::connect(database_url, NoTls)
+            .map_err(|_| OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        Ok(Self { client })
     }
 }
 
-impl OrchardUnitOfWork for PostgresOrchardStorage {
-    type Transaction = PostgresOrchardTransaction;
-
-    fn begin(&mut self) -> Result<Self::Transaction, OrchardTransactionError> {
-        let mut client = Client::connect(&self.database_url, NoTls)
-            .map_err(|_| OrchardTransactionError::CouldNotBegin)?;
-        client
+impl OrchardStorage for PostgresOrchardStorage {
+    fn transaction<T, E>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<OrchardStorageError>,
+    {
+        self.client
             .batch_execute("BEGIN")
-            .map_err(|_| OrchardTransactionError::CouldNotBegin)?;
-        Ok(PostgresOrchardTransaction {
-            client,
-            completed: false,
-        })
+            .map_err(|_| E::from(OrchardStorageError::AtomicOperationCouldNotBegin))?;
+        let result = operation(self);
+        match result {
+            Err(error) => {
+                let _ = self.client.batch_execute("ROLLBACK");
+                Err(error)
+            }
+            Ok(value) => match self.client.batch_execute("COMMIT") {
+                Ok(()) => Ok(value),
+                Err(_) => {
+                    let _ = self.client.batch_execute("ROLLBACK");
+                    Err(E::from(OrchardStorageError::AtomicOperationCouldNotCommit))
+                }
+            },
+        }
     }
-}
 
-impl OrchardReader for PostgresOrchardStorage {
-    fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardReadError> {
-        let mut client = Client::connect(&self.database_url, NoTls)
-            .map_err(|_| OrchardReadError::TreesCouldNotBeRead)?;
-        client
+    fn is_legacy_tree_already_imported(
+        &mut self,
+        legacy_feature_id: u32,
+    ) -> Result<bool, OrchardStorageError> {
+        is_legacy_tree_already_imported(&mut self.client, legacy_feature_id)
+            .map_err(|_| OrchardStorageError::ExistingLegacyTreeCouldNotBeChecked)
+    }
+
+    fn find_or_create_plant_identity(
+        &mut self,
+        plant_identity: PlantIdentity,
+    ) -> Result<PlantIdentityId, OrchardStorageError> {
+        find_or_create_plant_identity(&mut self.client, plant_identity)
+    }
+
+    fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardStorageError> {
+        save_tree(&mut self.client, tree).map_err(|_| OrchardStorageError::TreeCouldNotBeSaved)
+    }
+
+    fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardStorageError> {
+        self.client
             .query(
                 "SELECT
                     t.legacy_feature_id, t.plant_identity_id,
@@ -65,14 +83,14 @@ impl OrchardReader for PostgresOrchardStorage {
                  ORDER BY t.id",
                 &[],
             )
-            .map_err(|_| OrchardReadError::TreesCouldNotBeRead)?
+            .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?
             .into_iter()
             .map(|row| orchard_tree_from_row(&row))
             .collect()
     }
 }
 
-fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardReadError> {
+fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStorageError> {
     let legacy_feature_id = row.get::<_, Option<i32>>(0);
     let legacy_name = row.get::<_, Option<String>>(4);
     let legacy_latin_name = row.get::<_, Option<String>>(5);
@@ -81,7 +99,7 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardRead
     let legacy_source = match (legacy_feature_id, legacy_name, legacy_latin_name) {
         (Some(feature_id), Some(name), Some(latin_name)) => Some(LegacyTreeSource {
             feature_id: u32::try_from(feature_id)
-                .map_err(|_| OrchardReadError::TreesCouldNotBeRead)?,
+                .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?,
             name,
             latin_name,
             legacy_identification: match (
@@ -96,7 +114,7 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardRead
             source_url: row.get(6),
         }),
         (None, None, None) => None,
-        _ => return Err(OrchardReadError::TreesCouldNotBeRead),
+        _ => return Err(OrchardStorageError::TreesCouldNotBeRead),
     };
     let reproductive_role = match row.get::<_, Option<&str>>(13) {
         Some("female") => Some(ReproductiveRole::Female),
@@ -104,22 +122,22 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardRead
         Some("self_fertile") => Some(ReproductiveRole::SelfFertile),
         Some("parthenocarpic") => Some(ReproductiveRole::Parthenocarpic),
         None => None,
-        Some(_) => return Err(OrchardReadError::TreesCouldNotBeRead),
+        Some(_) => return Err(OrchardStorageError::TreesCouldNotBeRead),
     };
     let identification_status = match row.get::<_, &str>(22) {
         "confirmed" => IdentificationStatus::Confirmed,
         "uncertain" => IdentificationStatus::Uncertain,
-        _ => return Err(OrchardReadError::TreesCouldNotBeRead),
+        _ => return Err(OrchardStorageError::TreesCouldNotBeRead),
     };
     let botanical_taxon = serde_json::from_str(&row.get::<_, String>(19))
-        .map_err(|_| OrchardReadError::TreesCouldNotBeRead)?;
+        .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?;
 
     Ok(OrchardTree {
         tree: Tree {
             legacy_source,
             plant_identity_id: PlantIdentityId(
                 u64::try_from(row.get::<_, i64>(1))
-                    .map_err(|_| OrchardReadError::TreesCouldNotBeRead)?,
+                    .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?,
             ),
             longitude: row.get(2),
             latitude: row.get(3),
@@ -143,58 +161,10 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardRead
     })
 }
 
-fn optional_u16(value: Option<i16>) -> Result<Option<u16>, OrchardReadError> {
+fn optional_u16(value: Option<i16>) -> Result<Option<u16>, OrchardStorageError> {
     value
-        .map(|value| u16::try_from(value).map_err(|_| OrchardReadError::TreesCouldNotBeRead))
+        .map(|value| u16::try_from(value).map_err(|_| OrchardStorageError::TreesCouldNotBeRead))
         .transpose()
-}
-
-impl OrchardTransaction for PostgresOrchardTransaction {
-    fn is_legacy_tree_already_imported(
-        &mut self,
-        legacy_feature_id: u32,
-    ) -> Result<bool, OrchardTransactionError> {
-        is_legacy_tree_already_imported(&mut self.client, legacy_feature_id)
-            .map_err(|_| OrchardTransactionError::CouldNotCheckExistingLegacyTree)
-    }
-
-    fn find_or_create_plant_identity(
-        &mut self,
-        plant_identity: PlantIdentity,
-    ) -> Result<PlantIdentityId, OrchardTransactionError> {
-        find_or_create_plant_identity(&mut self.client, plant_identity)
-    }
-
-    fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardTransactionError> {
-        save_tree(&mut self.client, tree).map_err(|_| OrchardTransactionError::TreeCouldNotBeSaved)
-    }
-
-    fn commit(mut self) -> Result<(), OrchardTransactionError> {
-        match self.client.batch_execute("COMMIT") {
-            Ok(()) => {
-                self.completed = true;
-                Ok(())
-            }
-            Err(_) => {
-                let _ = self.client.batch_execute("ROLLBACK");
-                self.completed = true;
-                Err(OrchardTransactionError::CouldNotCommit)
-            }
-        }
-    }
-
-    fn rollback(mut self) {
-        let _ = self.client.batch_execute("ROLLBACK");
-        self.completed = true;
-    }
-}
-
-impl Drop for PostgresOrchardTransaction {
-    fn drop(&mut self) {
-        if !self.completed {
-            let _ = self.client.batch_execute("ROLLBACK");
-        }
-    }
 }
 
 fn is_legacy_tree_already_imported(
@@ -212,9 +182,9 @@ fn is_legacy_tree_already_imported(
 fn find_or_create_plant_identity(
     client: &mut Client,
     plant_identity: PlantIdentity,
-) -> Result<PlantIdentityId, OrchardTransactionError> {
+) -> Result<PlantIdentityId, OrchardStorageError> {
     let botanical_taxon = serde_json::to_string(&plant_identity.botanical_taxon)
-        .map_err(|_| OrchardTransactionError::PlantIdentityCouldNotBeResolved)?;
+        .map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)?;
     let identification_status = match &plant_identity.identification_status {
         IdentificationStatus::Confirmed => "confirmed",
         IdentificationStatus::Uncertain => "uncertain",
@@ -237,7 +207,7 @@ fn find_or_create_plant_identity(
                 &identity_key,
             ],
         )
-        .map_err(|_| OrchardTransactionError::PlantIdentityCouldNotBeResolved)?
+        .map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)?
         .map(|row| row.get::<_, i64>(0));
     let id = match returned_id {
         Some(id) => id,
@@ -246,11 +216,10 @@ fn find_or_create_plant_identity(
                 "SELECT id FROM plant_identities WHERE identity_key = $1",
                 &[&identity_key],
             )
-            .map_err(|_| OrchardTransactionError::PlantIdentityCouldNotBeResolved)?
+            .map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)?
             .get::<_, i64>(0),
     };
-    let id =
-        u64::try_from(id).map_err(|_| OrchardTransactionError::PlantIdentityCouldNotBeResolved)?;
+    let id = u64::try_from(id).map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)?;
     Ok(PlantIdentityId(id))
 }
 

@@ -1,7 +1,7 @@
 use crate::hexagon::models::{
     LegacyTreeSource, PlantIdentity, PlantIdentityId, ReproductiveRole, Tree,
 };
-use crate::hexagon::ports::{OrchardTransaction, OrchardUnitOfWork};
+use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
 pub struct LegacyTreeSnapshot {
     pub legacy_source: LegacyTreeSource,
@@ -38,52 +38,51 @@ pub fn import_legacy_orchard<U>(
     orchard_storage: &mut U,
 ) -> Result<usize, LegacyOrchardImportError>
 where
-    U: OrchardUnitOfWork,
+    U: OrchardStorage,
 {
-    let mut transaction = orchard_storage
-        .begin()
-        .map_err(|_| LegacyOrchardImportError::TransactionCouldNotBegin)?;
-    let mut imported_tree_count = 0;
-    for legacy_tree in request.trees {
-        let legacy_feature_id = legacy_tree.legacy_source.feature_id;
-        match transaction.is_legacy_tree_already_imported(legacy_feature_id) {
-            Ok(true) => {
-                transaction.rollback();
-                return Err(LegacyOrchardImportError::LegacyFeatureAlreadyImported {
-                    legacy_feature_id,
-                });
-            }
-            Ok(false) => {}
-            Err(_) => {
-                transaction.rollback();
-                return Err(LegacyOrchardImportError::ExistingLegacyFeaturesCouldNotBeChecked);
-            }
-        }
-        let plant_identity_id =
-            match transaction.find_or_create_plant_identity(legacy_tree.plant_identity.clone()) {
-                Ok(plant_identity_id) => plant_identity_id,
-                Err(_) => {
-                    transaction.rollback();
-                    return Err(LegacyOrchardImportError::PlantIdentityCouldNotBeResolved {
+    orchard_storage.transaction(|orchard| {
+        let mut imported_tree_count = 0;
+        for legacy_tree in request.trees {
+            let legacy_feature_id = legacy_tree.legacy_source.feature_id;
+            match orchard.is_legacy_tree_already_imported(legacy_feature_id) {
+                Ok(true) => {
+                    return Err(LegacyOrchardImportError::LegacyFeatureAlreadyImported {
                         legacy_feature_id,
                     });
                 }
-            };
-        let tree = map_legacy_tree(legacy_tree, plant_identity_id);
-        match transaction.save_tree(tree) {
-            Ok(()) => {
-                imported_tree_count += 1;
+                Ok(false) => {}
+                Err(_) => {
+                    return Err(LegacyOrchardImportError::ExistingLegacyFeaturesCouldNotBeChecked);
+                }
             }
-            Err(_) => {
-                transaction.rollback();
-                return Err(LegacyOrchardImportError::TreeCouldNotBeSaved { legacy_feature_id });
+            let plant_identity_id = orchard
+                .find_or_create_plant_identity(legacy_tree.plant_identity.clone())
+                .map_err(
+                    |_| LegacyOrchardImportError::PlantIdentityCouldNotBeResolved {
+                        legacy_feature_id,
+                    },
+                )?;
+            let tree = map_legacy_tree(legacy_tree, plant_identity_id);
+            orchard
+                .save_tree(tree)
+                .map_err(|_| LegacyOrchardImportError::TreeCouldNotBeSaved { legacy_feature_id })?;
+            imported_tree_count += 1;
+        }
+        Ok(imported_tree_count)
+    })
+}
+
+impl From<OrchardStorageError> for LegacyOrchardImportError {
+    fn from(error: OrchardStorageError) -> Self {
+        match error {
+            OrchardStorageError::AtomicOperationCouldNotBegin => Self::TransactionCouldNotBegin,
+            OrchardStorageError::AtomicOperationCouldNotCommit => Self::TransactionCouldNotCommit,
+            OrchardStorageError::ExistingLegacyTreeCouldNotBeChecked => {
+                Self::ExistingLegacyFeaturesCouldNotBeChecked
             }
+            _ => Self::ExistingLegacyFeaturesCouldNotBeChecked,
         }
     }
-    transaction
-        .commit()
-        .map_err(|_| LegacyOrchardImportError::TransactionCouldNotCommit)?;
-    Ok(imported_tree_count)
 }
 
 fn map_legacy_tree(legacy_tree: LegacyTreeSnapshot, plant_identity_id: PlantIdentityId) -> Tree {

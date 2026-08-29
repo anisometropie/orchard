@@ -6,7 +6,7 @@ use crate::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon,
     LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantIdentity, ReproductiveRole,
 };
-use crate::hexagon::ports::OrchardUnitOfWork;
+use crate::hexagon::ports::OrchardStorage;
 use crate::hexagon::use_cases::import_legacy_orchard::{
     LegacyOrchardImportError, LegacyOrchardImportRequested, LegacyTreeSnapshot,
     import_legacy_orchard,
@@ -25,7 +25,7 @@ pub fn import_legacy_geojson_file<U>(
     orchard_storage: &mut U,
 ) -> Result<usize, GeoJsonLegacyOrchardImportError>
 where
-    U: OrchardUnitOfWork,
+    U: OrchardStorage,
 {
     let source = std::fs::read_to_string(path)
         .map_err(|_| GeoJsonLegacyOrchardImportError::CouldNotReadGeoJson)?;

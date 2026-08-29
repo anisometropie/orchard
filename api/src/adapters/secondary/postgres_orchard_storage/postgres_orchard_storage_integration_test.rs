@@ -4,9 +4,7 @@ use orchard_api::hexagon::models::{
     LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, OrchardTree, PlantIdentity,
     PlantIdentityId, ReproductiveRole, Tree,
 };
-use orchard_api::hexagon::ports::{
-    OrchardReader, OrchardTransaction, OrchardTransactionError, OrchardUnitOfWork,
-};
+use orchard_api::hexagon::ports::{OrchardStorage, OrchardStorageError};
 use postgres::{Client, NoTls};
 
 #[test]
@@ -29,33 +27,34 @@ fn commit_persists_identity_and_tree() {
         identification_status: IdentificationStatus::Confirmed,
     };
     let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
-    let mut transaction = orchard_storage.begin().unwrap();
-    let plant_identity_id = transaction
-        .find_or_create_plant_identity(john_rivers.clone())
+    let (plant_identity_id, expected_tree) = orchard_storage
+        .transaction(|orchard| {
+            let plant_identity_id = orchard.find_or_create_plant_identity(john_rivers.clone())?;
+            let expected_tree = Tree {
+                legacy_source: Some(LegacyTreeSource {
+                    feature_id: 17,
+                    name: "Brugnon blanc ‘John Rivers’".into(),
+                    latin_name: "Prunus persica var. nucipersica ‘John Rivers’".into(),
+                    legacy_identification: None,
+                    source_url: None,
+                }),
+                plant_identity_id,
+                longitude: 0.72,
+                latitude: 0.24,
+                planted_on: Some("2024-12-07".into()),
+                row_name: Some("10. Bas bas bas".into()),
+                roles: vec![],
+                is_alive: true,
+                reproductive_role: None,
+                harvest_start_day: None,
+                harvest_end_day: None,
+                adult_height_meters: Some(4.0),
+                adult_width_meters: Some(3.0),
+            };
+            orchard.save_tree(expected_tree.clone())?;
+            Ok::<_, OrchardStorageError>((plant_identity_id, expected_tree))
+        })
         .unwrap();
-    let expected_tree = Tree {
-        legacy_source: Some(LegacyTreeSource {
-            feature_id: 17,
-            name: "Brugnon blanc ‘John Rivers’".into(),
-            latin_name: "Prunus persica var. nucipersica ‘John Rivers’".into(),
-            legacy_identification: None,
-            source_url: None,
-        }),
-        plant_identity_id,
-        longitude: 0.72,
-        latitude: 0.24,
-        planted_on: Some("2024-12-07".into()),
-        row_name: Some("10. Bas bas bas".into()),
-        roles: vec![],
-        is_alive: true,
-        reproductive_role: None,
-        harvest_start_day: None,
-        harvest_end_day: None,
-        adult_height_meters: Some(4.0),
-        adult_width_meters: Some(3.0),
-    };
-    transaction.save_tree(expected_tree.clone()).unwrap();
-    transaction.commit().unwrap();
 
     assert_eq!(plant_identity_id, PlantIdentityId(1));
     let persisted_identity = verification_connection
@@ -141,13 +140,14 @@ fn read_tree_with_its_identity() {
         identification_status: IdentificationStatus::Confirmed,
     };
     let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
-    let mut transaction = orchard_storage.begin().unwrap();
-    let plant_identity_id = transaction
-        .find_or_create_plant_identity(apple.clone())
+    let tree = orchard_storage
+        .transaction(|orchard| {
+            let plant_identity_id = orchard.find_or_create_plant_identity(apple.clone())?;
+            let tree = tree(plant_identity_id, 17);
+            orchard.save_tree(tree.clone())?;
+            Ok::<_, OrchardStorageError>(tree)
+        })
         .unwrap();
-    let tree = tree(plant_identity_id, 17);
-    transaction.save_tree(tree.clone()).unwrap();
-    transaction.commit().unwrap();
 
     assert_eq!(
         orchard_storage.trees(),
@@ -164,132 +164,135 @@ fn persist_legacy_details() {
     let (database_url, mut verification_connection) = empty_orchard_database();
 
     let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
-    let mut transaction = orchard_storage.begin().unwrap();
-    let boskoop_identity_id = transaction
-        .find_or_create_plant_identity(PlantIdentity {
-            common_name: "Kiwi".into(),
-            botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-                genus: "Actinidia".into(),
-                species: Some("deliciosa".into()),
-                species_is_hybrid: false,
-                infraspecific: None,
-                is_aggregate: false,
-                cultivar_group: None,
-            }),
-            cultivar: Some("Boskoop".into()),
-            trade_name: None,
-            identification_status: IdentificationStatus::Confirmed,
-        })
-        .unwrap();
-    transaction
-        .save_tree(Tree {
-            legacy_source: Some(LegacyTreeSource {
-                feature_id: 64,
-                name: "Kiwi ‘Boskoop’".into(),
-                latin_name: "Actinidia deliciosa ‘Boskoop’".into(),
-                legacy_identification: None,
-                source_url: None,
-            }),
-            plant_identity_id: boskoop_identity_id,
-            longitude: 0.81,
-            latitude: 0.68,
-            planted_on: Some("2024-12-07".into()),
-            row_name: Some("4. Bas bas".into()),
-            roles: vec!["fruit".into()],
-            is_alive: true,
-            reproductive_role: Some(ReproductiveRole::SelfFertile),
-            harvest_start_day: None,
-            harvest_end_day: None,
-            adult_height_meters: Some(6.0),
-            adult_width_meters: Some(5.0),
-        })
-        .unwrap();
-    let cranberry_identity_id = transaction
-        .find_or_create_plant_identity(PlantIdentity {
-            common_name: "Canneberge commune".into(),
-            botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-                genus: "Vaccinium".into(),
-                species: Some("oxycoccos".into()),
-                species_is_hybrid: false,
-                infraspecific: None,
-                is_aggregate: false,
-                cultivar_group: None,
-            }),
-            cultivar: None,
-            trade_name: None,
-            identification_status: IdentificationStatus::Confirmed,
-        })
-        .unwrap();
-    transaction
-        .save_tree(Tree {
-            legacy_source: Some(LegacyTreeSource {
-                feature_id: 166,
-                name: "Canneberge commune".into(),
-                latin_name: "Vaccinium oxycoccos".into(),
-                legacy_identification: Some(LegacyPlantIdentification {
-                    name: "Cranberry oxycoccos".into(),
-                    latin_name: "Vaccinium macrocarpon ‘Howes’".into(),
-                }),
-                source_url: None,
-            }),
-            plant_identity_id: cranberry_identity_id,
-            longitude: 0.36,
-            latitude: 0.17,
-            planted_on: Some("2024-12-07".into()),
-            row_name: Some("4. Bas bas".into()),
-            roles: vec!["fruit".into()],
-            is_alive: true,
-            reproductive_role: None,
-            harvest_start_day: None,
-            harvest_end_day: None,
-            adult_height_meters: Some(0.2),
-            adult_width_meters: Some(0.5),
-        })
-        .unwrap();
     let source_url = "https://www.promessedefleurs.com/fruitiers/petits-fruits/petits-fruits-de-a-a-z/lonicera-kamtschatica-eisbar-baie-de-mai.html";
-    let eisbar_identity_id = transaction
-        .find_or_create_plant_identity(PlantIdentity {
-            common_name: "Camérisier du Kamtchatka".into(),
-            botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-                genus: "Lonicera".into(),
-                species: Some("caerulea".into()),
-                species_is_hybrid: false,
-                infraspecific: Some(InfraspecificTaxon {
-                    rank: InfraspecificRank::Variety,
-                    name: "kamtschatica".into(),
-                }),
-                is_aggregate: false,
-                cultivar_group: None,
-            }),
-            cultivar: Some("Eisbär".into()),
-            trade_name: None,
-            identification_status: IdentificationStatus::Confirmed,
+    orchard_storage
+        .transaction(|orchard| {
+            let boskoop_identity_id = orchard
+                .find_or_create_plant_identity(PlantIdentity {
+                    common_name: "Kiwi".into(),
+                    botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                        genus: "Actinidia".into(),
+                        species: Some("deliciosa".into()),
+                        species_is_hybrid: false,
+                        infraspecific: None,
+                        is_aggregate: false,
+                        cultivar_group: None,
+                    }),
+                    cultivar: Some("Boskoop".into()),
+                    trade_name: None,
+                    identification_status: IdentificationStatus::Confirmed,
+                })
+                .unwrap();
+            orchard
+                .save_tree(Tree {
+                    legacy_source: Some(LegacyTreeSource {
+                        feature_id: 64,
+                        name: "Kiwi ‘Boskoop’".into(),
+                        latin_name: "Actinidia deliciosa ‘Boskoop’".into(),
+                        legacy_identification: None,
+                        source_url: None,
+                    }),
+                    plant_identity_id: boskoop_identity_id,
+                    longitude: 0.81,
+                    latitude: 0.68,
+                    planted_on: Some("2024-12-07".into()),
+                    row_name: Some("4. Bas bas".into()),
+                    roles: vec!["fruit".into()],
+                    is_alive: true,
+                    reproductive_role: Some(ReproductiveRole::SelfFertile),
+                    harvest_start_day: None,
+                    harvest_end_day: None,
+                    adult_height_meters: Some(6.0),
+                    adult_width_meters: Some(5.0),
+                })
+                .unwrap();
+            let cranberry_identity_id = orchard
+                .find_or_create_plant_identity(PlantIdentity {
+                    common_name: "Canneberge commune".into(),
+                    botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                        genus: "Vaccinium".into(),
+                        species: Some("oxycoccos".into()),
+                        species_is_hybrid: false,
+                        infraspecific: None,
+                        is_aggregate: false,
+                        cultivar_group: None,
+                    }),
+                    cultivar: None,
+                    trade_name: None,
+                    identification_status: IdentificationStatus::Confirmed,
+                })
+                .unwrap();
+            orchard
+                .save_tree(Tree {
+                    legacy_source: Some(LegacyTreeSource {
+                        feature_id: 166,
+                        name: "Canneberge commune".into(),
+                        latin_name: "Vaccinium oxycoccos".into(),
+                        legacy_identification: Some(LegacyPlantIdentification {
+                            name: "Cranberry oxycoccos".into(),
+                            latin_name: "Vaccinium macrocarpon ‘Howes’".into(),
+                        }),
+                        source_url: None,
+                    }),
+                    plant_identity_id: cranberry_identity_id,
+                    longitude: 0.36,
+                    latitude: 0.17,
+                    planted_on: Some("2024-12-07".into()),
+                    row_name: Some("4. Bas bas".into()),
+                    roles: vec!["fruit".into()],
+                    is_alive: true,
+                    reproductive_role: None,
+                    harvest_start_day: None,
+                    harvest_end_day: None,
+                    adult_height_meters: Some(0.2),
+                    adult_width_meters: Some(0.5),
+                })
+                .unwrap();
+            let eisbar_identity_id = orchard
+                .find_or_create_plant_identity(PlantIdentity {
+                    common_name: "Camérisier du Kamtchatka".into(),
+                    botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                        genus: "Lonicera".into(),
+                        species: Some("caerulea".into()),
+                        species_is_hybrid: false,
+                        infraspecific: Some(InfraspecificTaxon {
+                            rank: InfraspecificRank::Variety,
+                            name: "kamtschatica".into(),
+                        }),
+                        is_aggregate: false,
+                        cultivar_group: None,
+                    }),
+                    cultivar: Some("Eisbär".into()),
+                    trade_name: None,
+                    identification_status: IdentificationStatus::Confirmed,
+                })
+                .unwrap();
+            orchard
+                .save_tree(Tree {
+                    legacy_source: Some(LegacyTreeSource {
+                        feature_id: 157,
+                        name: "Camérisier du Kamtchatka ‘Eisbär’".into(),
+                        latin_name: "Lonicera caerulea var. kamtschatica ‘Eisbär’".into(),
+                        legacy_identification: None,
+                        source_url: Some(source_url.into()),
+                    }),
+                    plant_identity_id: eisbar_identity_id,
+                    longitude: 0.57,
+                    latitude: 0.83,
+                    planted_on: Some("2023-10-21".into()),
+                    row_name: Some("8. Bas".into()),
+                    roles: vec!["fruit".into()],
+                    is_alive: true,
+                    reproductive_role: None,
+                    harvest_start_day: None,
+                    harvest_end_day: None,
+                    adult_height_meters: Some(1.5),
+                    adult_width_meters: Some(1.2),
+                })
+                .unwrap();
+            Ok::<_, OrchardStorageError>(())
         })
         .unwrap();
-    transaction
-        .save_tree(Tree {
-            legacy_source: Some(LegacyTreeSource {
-                feature_id: 157,
-                name: "Camérisier du Kamtchatka ‘Eisbär’".into(),
-                latin_name: "Lonicera caerulea var. kamtschatica ‘Eisbär’".into(),
-                legacy_identification: None,
-                source_url: Some(source_url.into()),
-            }),
-            plant_identity_id: eisbar_identity_id,
-            longitude: 0.57,
-            latitude: 0.83,
-            planted_on: Some("2023-10-21".into()),
-            row_name: Some("8. Bas".into()),
-            roles: vec!["fruit".into()],
-            is_alive: true,
-            reproductive_role: None,
-            harvest_start_day: None,
-            harvest_end_day: None,
-            adult_height_meters: Some(1.5),
-            adult_width_meters: Some(1.2),
-        })
-        .unwrap();
-    transaction.commit().unwrap();
 
     let boskoop = verification_connection
         .query_one(
@@ -337,9 +340,8 @@ fn roll_back_batch() {
     let (database_url, mut verification_connection) = empty_orchard_database();
 
     let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
-    let mut transaction = orchard_storage.begin().unwrap();
-    let plant_identity_id = transaction
-        .find_or_create_plant_identity(PlantIdentity {
+    let result = orchard_storage.transaction(|orchard| {
+        let plant_identity_id = orchard.find_or_create_plant_identity(PlantIdentity {
             common_name: "Kiwi".into(),
             botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
                 genus: "Actinidia".into(),
@@ -352,16 +354,14 @@ fn roll_back_batch() {
             cultivar: Some("Boskoop".into()),
             trade_name: None,
             identification_status: IdentificationStatus::Confirmed,
-        })
-        .unwrap();
-    transaction.save_tree(tree(plant_identity_id, 64)).unwrap();
-    transaction.save_tree(tree(plant_identity_id, 132)).unwrap();
+        })?;
+        orchard.save_tree(tree(plant_identity_id, 64))?;
+        orchard.save_tree(tree(plant_identity_id, 132))?;
+        assert!(orchard.is_legacy_tree_already_imported(64)?);
+        orchard.save_tree(tree(plant_identity_id, 64))
+    });
 
-    assert_eq!(
-        transaction.save_tree(tree(plant_identity_id, 64)),
-        Err(OrchardTransactionError::TreeCouldNotBeSaved)
-    );
-    transaction.rollback();
+    assert_eq!(result, Err(OrchardStorageError::TreeCouldNotBeSaved));
 
     let persisted_tree_count: i64 = verification_connection
         .query_one("SELECT count(*) FROM trees", &[])

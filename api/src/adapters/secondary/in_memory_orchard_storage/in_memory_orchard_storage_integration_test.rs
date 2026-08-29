@@ -3,20 +3,15 @@ use orchard_api::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, LegacyTreeSource, NamedTaxon, PlantIdentity,
     PlantIdentityId, Tree,
 };
-use orchard_api::hexagon::ports::{OrchardTransaction, OrchardTransactionError, OrchardUnitOfWork};
+use orchard_api::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
 #[test]
 fn reject_missing_identity() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
-    let mut transaction = orchard_storage.begin().unwrap();
+    let save_result =
+        orchard_storage.transaction(|orchard| orchard.save_tree(tree(PlantIdentityId(1), 64)));
 
-    let save_result = transaction.save_tree(tree(PlantIdentityId(1), 64));
-
-    assert_eq!(
-        save_result,
-        Err(OrchardTransactionError::TreeCouldNotBeSaved)
-    );
-    transaction.rollback();
+    assert_eq!(save_result, Err(OrchardStorageError::TreeCouldNotBeSaved));
     assert_eq!(observed_orchard.plant_identities(), vec![]);
     assert_eq!(observed_orchard.trees(), vec![]);
 }
@@ -26,56 +21,52 @@ fn reject_duplicate_feature() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let boskoop = plant_identity();
 
-    let mut first_transaction = orchard_storage.begin().unwrap();
-    let plant_identity_id = first_transaction
-        .find_or_create_plant_identity(boskoop.clone())
+    orchard_storage
+        .transaction(|orchard| {
+            let plant_identity_id = orchard.find_or_create_plant_identity(boskoop.clone())?;
+            orchard.save_tree(tree(plant_identity_id, 64))
+        })
         .unwrap();
-    first_transaction
-        .save_tree(tree(plant_identity_id, 64))
-        .unwrap();
-    first_transaction.commit().unwrap();
 
-    let mut second_transaction = orchard_storage.begin().unwrap();
-    let plant_identity_id = second_transaction
-        .find_or_create_plant_identity(boskoop)
-        .unwrap();
-    let save_result = second_transaction.save_tree(tree(plant_identity_id, 64));
+    let save_result = orchard_storage.transaction(|orchard| {
+        let plant_identity_id = orchard.find_or_create_plant_identity(boskoop)?;
+        orchard.save_tree(tree(plant_identity_id, 64))
+    });
 
-    assert_eq!(
-        save_result,
-        Err(OrchardTransactionError::TreeCouldNotBeSaved)
-    );
-    second_transaction.rollback();
+    assert_eq!(save_result, Err(OrchardStorageError::TreeCouldNotBeSaved));
     assert_eq!(observed_orchard.plant_identities().len(), 1);
     assert_eq!(observed_orchard.trees().len(), 1);
 }
 
 #[test]
-fn reject_stale_transaction() {
+fn reject_nested_transaction() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
-    let boskoop = plant_identity();
+    let result = orchard_storage
+        .transaction(|orchard| orchard.transaction::<_, OrchardStorageError>(|_| Ok(())));
 
-    let mut first_transaction = orchard_storage.begin().unwrap();
-    let mut second_transaction = orchard_storage.begin().unwrap();
-    let first_identity_id = first_transaction
-        .find_or_create_plant_identity(boskoop.clone())
-        .unwrap();
-    first_transaction
-        .save_tree(tree(first_identity_id, 64))
-        .unwrap();
-    let second_identity_id = second_transaction
-        .find_or_create_plant_identity(boskoop)
-        .unwrap();
-    second_transaction
-        .save_tree(tree(second_identity_id, 166))
-        .unwrap();
-
-    assert_eq!(first_transaction.commit(), Ok(()));
     assert_eq!(
-        second_transaction.commit(),
-        Err(OrchardTransactionError::CouldNotCommit)
+        result,
+        Err(OrchardStorageError::AtomicOperationCouldNotBegin)
     );
-    assert_eq!(observed_orchard.plant_identities().len(), 1);
+    assert_eq!(observed_orchard.plant_identities(), vec![]);
+    assert_eq!(observed_orchard.trees(), vec![]);
+}
+
+#[test]
+fn staged_tree_is_visible_inside_transaction_but_not_to_observers() {
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
+
+    orchard_storage
+        .transaction(|orchard| {
+            let plant_identity_id = orchard.find_or_create_plant_identity(plant_identity())?;
+            orchard.save_tree(tree(plant_identity_id, 64))?;
+
+            assert!(orchard.is_legacy_tree_already_imported(64)?);
+            assert_eq!(observed_orchard.trees(), vec![]);
+            Ok::<_, OrchardStorageError>(())
+        })
+        .unwrap();
+
     assert_eq!(observed_orchard.trees(), vec![tree(PlantIdentityId(1), 64)]);
 }
 

@@ -1,9 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::hexagon::models::{BotanicalTaxon, OrchardTree, PlantIdentity, PlantIdentityId, Tree};
-use crate::hexagon::ports::{
-    OrchardReadError, OrchardReader, OrchardTransaction, OrchardTransactionError, OrchardUnitOfWork,
-};
+use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
 /// In-memory transactional orchard storage for use-case and adapter tests.
 pub struct InMemoryOrchardStorage {
@@ -15,13 +13,19 @@ pub struct InMemoryOrchardStorage {
     fail_when_checking_legacy_feature_ids: bool,
     fail_on_commit: bool,
     fail_when_reading_trees: bool,
+    transaction: Option<InMemoryOrchardTransaction>,
 }
 
 #[derive(Default)]
 struct InMemoryOrchard {
     plant_identities: Vec<PlantIdentity>,
     trees: Vec<Tree>,
-    version: u64,
+}
+
+#[derive(Default)]
+struct InMemoryOrchardTransaction {
+    staged_plant_identities: Vec<PlantIdentity>,
+    staged_trees: Vec<Tree>,
 }
 
 #[derive(Default)]
@@ -126,7 +130,6 @@ impl InMemoryOrchardStorage {
         let orchard = Arc::new(Mutex::new(InMemoryOrchard {
             plant_identities: configuration.plant_identities,
             trees: configuration.trees,
-            version: 0,
         }));
         (
             Self {
@@ -139,38 +142,147 @@ impl InMemoryOrchardStorage {
                     .fail_when_checking_legacy_feature_ids,
                 fail_on_commit: configuration.fail_on_commit,
                 fail_when_reading_trees: configuration.fail_when_reading_trees,
+                transaction: None,
             },
             InMemoryOrchardObserver { orchard },
         )
     }
 }
 
-impl OrchardUnitOfWork for InMemoryOrchardStorage {
-    type Transaction = InMemoryOrchardTransaction;
-
-    fn begin(&mut self) -> Result<Self::Transaction, OrchardTransactionError> {
-        if self.fail_to_begin {
-            return Err(OrchardTransactionError::CouldNotBegin);
+impl OrchardStorage for InMemoryOrchardStorage {
+    fn transaction<T, E>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<OrchardStorageError>,
+    {
+        if self.fail_to_begin || self.transaction.is_some() {
+            return Err(E::from(OrchardStorageError::AtomicOperationCouldNotBegin));
         }
-        let expected_orchard_version = self.orchard.lock().unwrap().version;
-        Ok(InMemoryOrchardTransaction {
-            committed_orchard: Arc::clone(&self.orchard),
-            expected_orchard_version,
-            staged_plant_identities: Vec::new(),
-            staged_trees: Vec::new(),
-            failing_legacy_feature_id: self.failing_legacy_feature_id,
-            fail_when_saving_any_tree: self.fail_when_saving_any_tree,
-            failing_plant_identity_genus: self.failing_plant_identity_genus.clone(),
-            fail_when_checking_legacy_feature_ids: self.fail_when_checking_legacy_feature_ids,
-            fail_on_commit: self.fail_on_commit,
-        })
-    }
-}
+        self.transaction = Some(InMemoryOrchardTransaction::default());
+        let result = operation(self);
+        let transaction = self
+            .transaction
+            .take()
+            .expect("an active transaction should own staged orchard changes");
 
-impl OrchardReader for InMemoryOrchardStorage {
-    fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardReadError> {
+        match result {
+            Err(error) => Err(error),
+            Ok(_) if self.fail_on_commit => {
+                Err(E::from(OrchardStorageError::AtomicOperationCouldNotCommit))
+            }
+            Ok(value) => {
+                let mut committed_orchard = self.orchard.lock().unwrap();
+                committed_orchard
+                    .plant_identities
+                    .extend(transaction.staged_plant_identities);
+                committed_orchard.trees.extend(transaction.staged_trees);
+                Ok(value)
+            }
+        }
+    }
+
+    fn is_legacy_tree_already_imported(
+        &mut self,
+        legacy_feature_id: u32,
+    ) -> Result<bool, OrchardStorageError> {
+        if self.fail_when_checking_legacy_feature_ids {
+            return Err(OrchardStorageError::ExistingLegacyTreeCouldNotBeChecked);
+        }
+        let exists_in_committed_orchard =
+            has_legacy_feature_id(&self.orchard.lock().unwrap(), legacy_feature_id);
+        let exists_in_staged_trees = self.transaction.as_ref().is_some_and(|transaction| {
+            transaction.staged_trees.iter().any(|tree| {
+                tree.legacy_source
+                    .as_ref()
+                    .is_some_and(|source| source.feature_id == legacy_feature_id)
+            })
+        });
+        Ok(exists_in_committed_orchard || exists_in_staged_trees)
+    }
+
+    fn find_or_create_plant_identity(
+        &mut self,
+        plant_identity: PlantIdentity,
+    ) -> Result<PlantIdentityId, OrchardStorageError> {
+        if self
+            .failing_plant_identity_genus
+            .as_ref()
+            .is_some_and(|failing_genus| {
+                matches!(
+                    &plant_identity.botanical_taxon,
+                    BotanicalTaxon::Named(taxon) if &taxon.genus == failing_genus
+                )
+            })
+        {
+            return Err(OrchardStorageError::PlantIdentityCouldNotBeResolved);
+        }
+        let committed_orchard = self.orchard.lock().unwrap();
+        if let Some(position) = committed_orchard
+            .plant_identities
+            .iter()
+            .position(|existing| existing.has_same_catalog_identity_as(&plant_identity))
+        {
+            return Ok(PlantIdentityId((position + 1) as u64));
+        }
+        let committed_identity_count = committed_orchard.plant_identities.len();
+        drop(committed_orchard);
+
+        let transaction = self
+            .transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        if let Some(position) = transaction
+            .staged_plant_identities
+            .iter()
+            .position(|existing| existing.has_same_catalog_identity_as(&plant_identity))
+        {
+            return Ok(PlantIdentityId(
+                (committed_identity_count + position + 1) as u64,
+            ));
+        }
+        transaction.staged_plant_identities.push(plant_identity);
+        Ok(PlantIdentityId(
+            (committed_identity_count + transaction.staged_plant_identities.len()) as u64,
+        ))
+    }
+
+    fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardStorageError> {
+        if self.fail_when_saving_any_tree
+            || tree
+                .legacy_source
+                .as_ref()
+                .is_some_and(|source| Some(source.feature_id) == self.failing_legacy_feature_id)
+        {
+            return Err(OrchardStorageError::TreeCouldNotBeSaved);
+        }
+        let committed_orchard = self.orchard.lock().unwrap();
+        let committed_identity_count = committed_orchard.plant_identities.len();
+        if has_tree_with_same_legacy_feature(&committed_orchard.trees, &tree) {
+            return Err(OrchardStorageError::TreeCouldNotBeSaved);
+        }
+        drop(committed_orchard);
+
+        let transaction = self
+            .transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        let available_identity_count =
+            committed_identity_count + transaction.staged_plant_identities.len();
+        if tree.plant_identity_id.0 == 0
+            || tree.plant_identity_id.0 > available_identity_count as u64
+            || has_tree_with_same_legacy_feature(&transaction.staged_trees, &tree)
+        {
+            return Err(OrchardStorageError::TreeCouldNotBeSaved);
+        }
+        transaction.staged_trees.push(tree);
+        Ok(())
+    }
+
+    fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardStorageError> {
         if self.fail_when_reading_trees {
-            return Err(OrchardReadError::TreesCouldNotBeRead);
+            return Err(OrchardStorageError::TreesCouldNotBeRead);
         }
         let orchard = self.orchard.lock().unwrap();
         orchard
@@ -182,12 +294,12 @@ impl OrchardReader for InMemoryOrchardStorage {
                     .0
                     .checked_sub(1)
                     .and_then(|index| usize::try_from(index).ok())
-                    .ok_or(OrchardReadError::TreesCouldNotBeRead)?;
+                    .ok_or(OrchardStorageError::TreesCouldNotBeRead)?;
                 let plant_identity = orchard
                     .plant_identities
                     .get(identity_index)
                     .cloned()
-                    .ok_or(OrchardReadError::TreesCouldNotBeRead)?;
+                    .ok_or(OrchardStorageError::TreesCouldNotBeRead)?;
                 Ok(OrchardTree {
                     tree: tree.clone(),
                     plant_identity,
@@ -197,141 +309,22 @@ impl OrchardReader for InMemoryOrchardStorage {
     }
 }
 
-pub struct InMemoryOrchardTransaction {
-    committed_orchard: Arc<Mutex<InMemoryOrchard>>,
-    expected_orchard_version: u64,
-    staged_plant_identities: Vec<PlantIdentity>,
-    staged_trees: Vec<Tree>,
-    failing_legacy_feature_id: Option<u32>,
-    fail_when_saving_any_tree: bool,
-    failing_plant_identity_genus: Option<String>,
-    fail_when_checking_legacy_feature_ids: bool,
-    fail_on_commit: bool,
+fn has_legacy_feature_id(orchard: &InMemoryOrchard, legacy_feature_id: u32) -> bool {
+    orchard.trees.iter().any(|tree| {
+        tree.legacy_source
+            .as_ref()
+            .is_some_and(|source| source.feature_id == legacy_feature_id)
+    })
 }
 
-impl InMemoryOrchardTransaction {
-    fn has_legacy_feature_id(&self, legacy_feature_id: u32) -> bool {
-        self.staged_trees.iter().any(|tree| {
+fn has_tree_with_same_legacy_feature(trees: &[Tree], candidate: &Tree) -> bool {
+    candidate.legacy_source.as_ref().is_some_and(|source| {
+        trees.iter().any(|tree| {
             tree.legacy_source
                 .as_ref()
-                .is_some_and(|source| source.feature_id == legacy_feature_id)
-        }) || self
-            .committed_orchard
-            .lock()
-            .unwrap()
-            .trees
-            .iter()
-            .any(|tree| {
-                tree.legacy_source
-                    .as_ref()
-                    .is_some_and(|source| source.feature_id == legacy_feature_id)
-            })
-    }
-}
-
-impl OrchardTransaction for InMemoryOrchardTransaction {
-    fn is_legacy_tree_already_imported(
-        &mut self,
-        legacy_feature_id: u32,
-    ) -> Result<bool, OrchardTransactionError> {
-        if self.fail_when_checking_legacy_feature_ids {
-            return Err(OrchardTransactionError::CouldNotCheckExistingLegacyTree);
-        }
-        Ok(self.has_legacy_feature_id(legacy_feature_id))
-    }
-
-    fn find_or_create_plant_identity(
-        &mut self,
-        plant_identity: PlantIdentity,
-    ) -> Result<PlantIdentityId, OrchardTransactionError> {
-        if self
-            .failing_plant_identity_genus
-            .as_ref()
-            .is_some_and(|failing_genus| {
-                matches!(
-                    &plant_identity.botanical_taxon,
-                    BotanicalTaxon::Named(taxon) if &taxon.genus == failing_genus
-                )
-            })
-        {
-            return Err(OrchardTransactionError::PlantIdentityCouldNotBeResolved);
-        }
-        let committed_orchard = self.committed_orchard.lock().unwrap();
-        if let Some(position) = committed_orchard
-            .plant_identities
-            .iter()
-            .position(|existing| existing.has_same_catalog_identity_as(&plant_identity))
-        {
-            return Ok(PlantIdentityId((position + 1) as u64));
-        }
-        let committed_identity_count = committed_orchard.plant_identities.len();
-        drop(committed_orchard);
-
-        if let Some(position) = self
-            .staged_plant_identities
-            .iter()
-            .position(|existing| existing.has_same_catalog_identity_as(&plant_identity))
-        {
-            return Ok(PlantIdentityId(
-                (committed_identity_count + position + 1) as u64,
-            ));
-        }
-
-        self.staged_plant_identities.push(plant_identity);
-        Ok(PlantIdentityId(
-            (committed_identity_count + self.staged_plant_identities.len()) as u64,
-        ))
-    }
-
-    fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardTransactionError> {
-        let available_identity_count = self
-            .committed_orchard
-            .lock()
-            .unwrap()
-            .plant_identities
-            .len()
-            + self.staged_plant_identities.len();
-        if tree.plant_identity_id.0 == 0
-            || tree.plant_identity_id.0 > available_identity_count as u64
-        {
-            return Err(OrchardTransactionError::TreeCouldNotBeSaved);
-        }
-        if tree
-            .legacy_source
-            .as_ref()
-            .is_some_and(|source| self.has_legacy_feature_id(source.feature_id))
-        {
-            return Err(OrchardTransactionError::TreeCouldNotBeSaved);
-        }
-        if self.fail_when_saving_any_tree
-            || tree
-                .legacy_source
-                .as_ref()
-                .is_some_and(|source| Some(source.feature_id) == self.failing_legacy_feature_id)
-        {
-            return Err(OrchardTransactionError::TreeCouldNotBeSaved);
-        }
-        self.staged_trees.push(tree);
-        Ok(())
-    }
-
-    fn commit(self) -> Result<(), OrchardTransactionError> {
-        if self.fail_on_commit {
-            return Err(OrchardTransactionError::CouldNotCommit);
-        }
-        let mut committed_orchard = self.committed_orchard.lock().unwrap();
-        if committed_orchard.version != self.expected_orchard_version {
-            return Err(OrchardTransactionError::CouldNotCommit);
-        }
-        committed_orchard
-            .plant_identities
-            .extend(self.staged_plant_identities);
-        committed_orchard.trees.extend(self.staged_trees);
-        committed_orchard.version += 1;
-        Ok(())
-    }
-
-    fn rollback(self) {}
+                .is_some_and(|existing_source| existing_source.feature_id == source.feature_id)
+        })
+    })
 }
 
 pub struct InMemoryOrchardObserver {

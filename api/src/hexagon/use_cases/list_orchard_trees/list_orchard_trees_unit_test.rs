@@ -3,7 +3,7 @@ use orchard_api::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, NamedTaxon, OrchardTree, PlantIdentity, PlantIdentityId,
     Tree,
 };
-use orchard_api::hexagon::ports::OrchardReadError;
+use orchard_api::hexagon::ports::OrchardStorageError;
 use orchard_api::hexagon::use_cases::list_orchard_trees::list_orchard_trees;
 
 #[test]
@@ -57,6 +57,6 @@ fn report_when_stored_trees_cannot_be_read() {
 
     assert_eq!(
         list_orchard_trees(&mut orchard_storage),
-        Err(OrchardReadError::TreesCouldNotBeRead)
+        Err(OrchardStorageError::TreesCouldNotBeRead)
     );
 }

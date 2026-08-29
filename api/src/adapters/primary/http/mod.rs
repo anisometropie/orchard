@@ -16,17 +16,16 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use crate::hexagon::models::{
     BotanicalTaxon, InfraspecificRank, NamedTaxon, OrchardTree, PlantIdentity, Tree,
 };
-use crate::hexagon::ports::{OrchardReader, OrchardUnitOfWork};
+use crate::hexagon::ports::OrchardStorage;
 use crate::hexagon::use_cases::create_tree::{TreeCreationRequested, create_tree};
 use crate::hexagon::use_cases::list_orchard_trees::list_orchard_trees;
-
 
 pub async fn start_http_server<U>(
     orchard_storage: U,
     address: SocketAddr,
 ) -> Result<RunningHttpServer, std::io::Error>
 where
-    U: OrchardUnitOfWork + OrchardReader + Send + 'static,
+    U: OrchardStorage + Send + 'static,
 {
     let listener = TcpListener::bind(address).await?;
     let address = listener.local_addr()?;
@@ -42,10 +41,9 @@ where
     })
 }
 
-
 pub fn router<U>(orchard_storage: Arc<Mutex<U>>) -> Router
 where
-    U: OrchardUnitOfWork + OrchardReader + Send + 'static,
+    U: OrchardStorage + Send + 'static,
 {
     Router::new()
         .route("/trees", post(create_tree_handler::<U>))
@@ -84,7 +82,7 @@ async fn list_trees_handler<U>(
     State(orchard_storage): State<Arc<Mutex<U>>>,
 ) -> Result<Json<Value>, StatusCode>
 where
-    U: OrchardReader + Send + 'static,
+    U: OrchardStorage + Send + 'static,
 {
     tokio::task::spawn_blocking(move || list_orchard_trees(&mut *orchard_storage.lock().unwrap()))
         .await
@@ -108,7 +106,7 @@ async fn create_tree_handler<U>(
     Json(request): Json<CreateTreeRequest>,
 ) -> Result<(StatusCode, Json<Tree>), StatusCode>
 where
-    U: OrchardUnitOfWork + Send + 'static,
+    U: OrchardStorage + Send + 'static,
 {
     tokio::task::spawn_blocking(move || {
         create_tree(
