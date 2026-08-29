@@ -31,6 +31,52 @@
       #map-status[hidden] {
         display: none;
       }
+      .tree-editor {
+        min-width: 190px;
+        font: 13px sans-serif;
+      }
+      .tree-editor-title {
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
+      .tree-editor-field {
+        align-items: center;
+        display: flex;
+        gap: 7px;
+      }
+      .tree-editor-note,
+      .tree-editor-error {
+        font-size: 12px;
+        margin-top: 8px;
+      }
+      .tree-editor-note {
+        color: #555;
+      }
+      .tree-editor-error {
+        color: #b42318;
+      }
+      .tree-editor-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 12px;
+      }
+      .tree-editor-actions button {
+        border: 1px solid #777;
+        border-radius: 4px;
+        cursor: pointer;
+        font: inherit;
+        padding: 5px 10px;
+      }
+      .tree-editor-actions button[type="submit"] {
+        background: #245c2a;
+        border-color: #245c2a;
+        color: white;
+      }
+      .tree-editor-actions button:disabled {
+        cursor: wait;
+        opacity: 0.6;
+      }
     </style>
   </head>
   <body>
@@ -127,7 +173,7 @@
                   "match",
                   ["get", "row_name"],
                   "1. Haut haut haut",
-                  "#e6194b",
+                  "#eeeeee",
                   "2. Haut haut",
                   "#3cb44b",
                   "3. Haut",
@@ -180,6 +226,26 @@
                 ],
               },
             },
+            {
+              id: "danger-rings",
+              type: "circle",
+              source: "orchard",
+              filter: ["==", ["get", "is_in_danger"], true],
+              paint: {
+                "circle-radius": [
+                  "case",
+                  ["<", ["to-number", ["get", "adult_height"]], 1.4],
+                  7,
+                  ["<", ["to-number", ["get", "adult_height"]], 6],
+                  10,
+                  13,
+                ],
+                "circle-color": "rgba(0, 0, 0, 0)",
+                "circle-stroke-color": "#d40000",
+                "circle-stroke-opacity": 0.95,
+                "circle-stroke-width": 3,
+              },
+            },
           ],
         },
         center: [0.5, 0.5],
@@ -188,6 +254,7 @@
       });
 
       let treeTooltip;
+      let treeEditor;
 
       function createDeadTreeCrossImage() {
         const size = 18;
@@ -227,8 +294,101 @@
         return tooltip;
       }
 
+      function closeTreeEditor() {
+        treeEditor?.remove();
+        treeEditor = undefined;
+      }
+
+      function createTreeEditor(feature) {
+        const form = document.createElement("form");
+        form.className = "tree-editor";
+
+        const title = document.createElement("div");
+        title.className = "tree-editor-title";
+        title.textContent = feature.properties.name || "Tree";
+
+        const field = document.createElement("label");
+        field.className = "tree-editor-field";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = feature.properties.is_in_danger === true;
+        checkbox.disabled = feature.properties.is_alive === false;
+        field.append(checkbox, document.createTextNode("In danger"));
+
+        const error = document.createElement("div");
+        error.className = "tree-editor-error";
+        error.setAttribute("aria-live", "polite");
+        error.hidden = true;
+
+        const actions = document.createElement("div");
+        actions.className = "tree-editor-actions";
+        const cancelButton = document.createElement("button");
+        cancelButton.type = "button";
+        cancelButton.textContent = "Cancel";
+        cancelButton.addEventListener("click", closeTreeEditor);
+        const saveButton = document.createElement("button");
+        saveButton.type = "submit";
+        saveButton.textContent = "OK";
+        actions.append(cancelButton, saveButton);
+
+        form.append(title, field);
+        if (checkbox.disabled) {
+          const note = document.createElement("div");
+          note.className = "tree-editor-note";
+          note.textContent = "A dead tree cannot be marked as in danger.";
+          form.append(note);
+        }
+        form.append(error, actions);
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          error.hidden = true;
+          checkbox.disabled = true;
+          cancelButton.disabled = true;
+          saveButton.disabled = true;
+          saveButton.textContent = "Saving…";
+
+          try {
+            await updateTreeDanger(feature.id, checkbox.checked);
+            closeTreeEditor();
+            await loadOrchardTrees();
+          } catch (requestError) {
+            error.textContent = requestError.message;
+            error.hidden = false;
+            checkbox.disabled = feature.properties.is_alive === false;
+            cancelButton.disabled = false;
+            saveButton.disabled = false;
+            saveButton.textContent = "OK";
+          }
+        });
+
+        return form;
+      }
+
+      async function updateTreeDanger(treeId, isInDanger) {
+        if (treeId == null) throw new Error("This tree has no editable ID.");
+
+        const response = await fetch(
+          `/api/trees/${encodeURIComponent(treeId)}/danger`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ is_in_danger: isInDanger }),
+          },
+        );
+        if (response.ok) return;
+        if (response.status === 404) {
+          throw new Error("This tree no longer exists.");
+        }
+        if (response.status === 409) {
+          throw new Error("A dead tree cannot be marked as in danger.");
+        }
+        throw new Error("Could not update this tree. Please try again.");
+      }
+
       map.on("mouseenter", "trees", (event) => {
         map.getCanvas().style.cursor = "pointer";
+        if (treeEditor) return;
 
         const feature = event.features[0];
         treeTooltip?.remove();
@@ -246,6 +406,26 @@
         map.getCanvas().style.cursor = "";
         treeTooltip?.remove();
         treeTooltip = undefined;
+      });
+
+      map.on("click", "trees", (event) => {
+        const feature = event.features[0];
+        treeTooltip?.remove();
+        treeTooltip = undefined;
+        closeTreeEditor();
+
+        const popup = new maplibregl.Popup({
+          closeButton: false,
+          closeOnClick: false,
+          offset: 12,
+        })
+          .setLngLat(feature.geometry.coordinates)
+          .setDOMContent(createTreeEditor(feature))
+          .addTo(map);
+        treeEditor = popup;
+        popup.on("close", () => {
+          if (treeEditor === popup) treeEditor = undefined;
+        });
       });
 
       map.on("load", () => {
