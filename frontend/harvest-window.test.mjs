@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   harvestAvailability,
   harvestAvailabilitySummary,
+  harvestLayerFilter,
   parseAnnualDate,
 } from "./harvest-window.mjs";
 
@@ -48,6 +49,38 @@ test("support adjustable widths and harvest windows crossing New Year", () => {
   });
 });
 
+test("match any of a cultivar's separate harvest waves", () => {
+  const result = harvestAvailability(
+    [tree(1, "06-10", "06-20", { harvest_windows: [
+      { start: "06-10", end: "06-20" },
+      { start: "08-01", end: "09-20" },
+    ] })],
+    new Date(2026, 7, 10),
+    1,
+  );
+
+  assert.equal(result[0].properties.harvest_available, true);
+});
+
+test("do not turn February 29 into February 28 in non-leap years", () => {
+  const result = harvestAvailability(
+    [tree(1, "02-29", "02-29")],
+    new Date(2026, 1, 28),
+    1,
+  );
+
+  assert.equal(result[0].properties.harvest_available, false);
+});
+
+test("compose harvest availability with the planting-date filter", () => {
+  const plantingFilter = [">=", ["get", "planted_on"], "2024-01-01"];
+  assert.deepEqual(harvestLayerFilter(plantingFilter), [
+    "all",
+    ["==", ["get", "harvest_available"], true],
+    plantingFilter,
+  ]);
+});
+
 function tree(id, harvestStart, harvestEnd, overrides = {}) {
   return {
     id,
@@ -55,8 +88,7 @@ function tree(id, harvestStart, harvestEnd, overrides = {}) {
       plant_identity_id: id,
       roles: ["fruit"],
       is_alive: true,
-      harvest_start: harvestStart,
-      harvest_end: harvestEnd,
+      harvest_windows: [{ start: harvestStart, end: harvestEnd }],
       ...overrides,
     },
   };

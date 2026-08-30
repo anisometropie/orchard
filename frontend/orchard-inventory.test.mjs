@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   filterTreeFeatures,
+  harvestScheduleEndpoint,
   summarizeSpecies,
   taxonomyOptions,
 } from "./orchard-inventory.mjs";
@@ -14,6 +15,8 @@ const trees = [
     taxonName: "Malus domestica",
     botanicalName: "Malus domestica ‘Gala’",
     cultivar: "Gala",
+    cultivarId: 101,
+    harvestWindows: [{ start: "08-01", end: "08-20" }],
     genera: ["Malus"],
     species: ["Malus domestica"],
     roles: ["fruit", "pioneer"],
@@ -24,6 +27,8 @@ const trees = [
     taxonName: "Malus domestica",
     botanicalName: "Malus domestica ‘Golden Delicious’",
     cultivar: "Golden Delicious",
+    cultivarId: 102,
+    harvestWindows: [{ start: "09-01", end: "10-01" }],
     genera: ["Malus"],
     species: ["Malus domestica"],
     roles: ["fruit"],
@@ -52,6 +57,8 @@ const trees = [
     taxonName: "Malus domestica",
     botanicalName: "Malus domestica ‘Gala’",
     cultivar: "Gala",
+    cultivarId: 101,
+    harvestWindows: [{ start: "08-01", end: "08-20" }],
     genera: ["Malus"],
     species: ["Malus domestica"],
     roles: ["fruit"],
@@ -93,11 +100,20 @@ test("count planted trees by species and detail their cultivars", () => {
       taxonName: "Malus domestica",
       names: ["Apple"],
       count: 3,
-      harvestStart: null,
-      harvestEnd: null,
+      cultivarless: null,
       cultivars: [
-        { name: "Gala", count: 2 },
-        { name: "Golden Delicious", count: 1 },
+        {
+          id: 101,
+          name: "Gala",
+          count: 2,
+          harvestWindows: [{ start: "08-01", end: "08-20" }],
+        },
+        {
+          id: 102,
+          name: "Golden Delicious",
+          count: 1,
+          harvestWindows: [{ start: "09-01", end: "10-01" }],
+        },
       ],
     },
     {
@@ -105,8 +121,7 @@ test("count planted trees by species and detail their cultivars", () => {
       taxonName: "Malus domestica × Pyrus communis",
       names: ["Apple × pear"],
       count: 1,
-      harvestStart: null,
-      harvestEnd: null,
+      cultivarless: { count: 1, harvestWindows: [] },
       cultivars: [],
     },
     {
@@ -114,11 +129,21 @@ test("count planted trees by species and detail their cultivars", () => {
       taxonName: "Pyrus communis",
       names: ["European pear"],
       count: 1,
-      harvestStart: null,
-      harvestEnd: null,
+      cultivarless: { count: 1, harvestWindows: [] },
       cultivars: [],
     },
   ]);
+});
+
+test("choose exactly one harvest endpoint from the schedule owner", () => {
+  assert.equal(
+    harvestScheduleEndpoint({ plantIdentityId: 10, cultivarId: 101 }),
+    "/api/plant-cultivars/101/harvest-windows",
+  );
+  assert.equal(
+    harvestScheduleEndpoint({ plantIdentityId: 10, cultivarId: null }),
+    "/api/plant-identities/10/harvest-windows",
+  );
 });
 
 function tree(id, identity) {
@@ -130,8 +155,8 @@ function tree(id, identity) {
       plant_identity_taxon_name: identity.taxonName,
       plant_identity_botanical_name: identity.botanicalName,
       plant_identity_cultivar: identity.cultivar ?? null,
-      harvest_start: identity.harvestStart ?? null,
-      harvest_end: identity.harvestEnd ?? null,
+      plant_cultivar_id: identity.cultivarId ?? null,
+      harvest_windows: identity.harvestWindows ?? [],
       botanical_genera: identity.genera,
       botanical_species: identity.species,
       roles: identity.roles,
