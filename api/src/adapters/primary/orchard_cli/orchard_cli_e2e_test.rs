@@ -128,10 +128,12 @@ fn runserver() {
         let first_tree = create_apple_tree(&client, &server_url, 0.72).await;
         let second_tree = create_apple_tree(&client, &server_url, 0.18).await;
         let harvest_response = client
-            .patch(format!("{server_url}/plant-identities/1"))
+            .put(format!("{server_url}/plant-identities/1/harvest-windows"))
             .json(&serde_json::json!({
-                "harvest_start": { "month": 8, "day": 20 },
-                "harvest_end": { "month": 10, "day": 5 }
+                "windows": [{
+                    "start": { "month": 8, "day": 20 },
+                    "end": { "month": 10, "day": 5 }
+                }]
             }))
             .send()
             .await
@@ -152,12 +154,15 @@ fn runserver() {
     let persisted_tree = verification_connection
         .query_one(
             "SELECT plant_identities.common_name, trees.roles,
-                    plant_identities.harvest_start_month,
-                    plant_identities.harvest_start_day,
-                    plant_identities.harvest_end_month,
-                    plant_identities.harvest_end_day
+                    plant_harvest_windows.start_month,
+                    plant_harvest_windows.start_day,
+                    plant_harvest_windows.end_month,
+                    plant_harvest_windows.end_day
              FROM trees
              INNER JOIN plant_identities ON plant_identities.id = trees.plant_identity_id
+             INNER JOIN plant_harvest_windows
+                ON plant_harvest_windows.plant_identity_id = trees.plant_identity_id
+               AND plant_harvest_windows.cultivar_id IS NULL
              ORDER BY trees.id
              LIMIT 1",
             &[],
@@ -250,9 +255,29 @@ fn empty_orchard_database(database_url: &str) -> Client {
             ))
             .unwrap();
     }
+    let harvest_windows_were_applied: bool = verification_connection
+        .query_one(
+            "SELECT to_regclass('plant_harvest_windows') IS NOT NULL",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !harvest_windows_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/008_create_plant_harvest_windows.sql"
+            ))
+            .unwrap();
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/009_seed_raspberry_harvest_windows.sql"
+            ))
+            .unwrap();
+    }
     verification_connection
         .batch_execute(
-            "TRUNCATE TABLE aerial_overlays, users, trees, plant_cultivars, plant_identities
+            "TRUNCATE TABLE plant_harvest_windows, aerial_overlays, users, trees,
+                            plant_cultivars, plant_identities
              RESTART IDENTITY CASCADE",
         )
         .unwrap();

@@ -6,24 +6,21 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, State, rejection::JsonRejection},
     http::{StatusCode, header},
     response::Response,
-    routing::{get, patch, post},
+    routing::{get, patch, post, put},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::hexagon::models::{
-    AerialOverlayId, AnnualDate, BotanicalTaxon, InfraspecificRank, MapConfiguration, NamedTaxon,
-    OrchardTree, PlantIdentification, PlantIdentity, Tree, TreeId,
+    AerialOverlayId, AnnualDate, BotanicalTaxon, HarvestScheduleOwner, InfraspecificRank,
+    MapConfiguration, NamedTaxon, OrchardTree, PlantCultivarId, PlantIdentification, PlantIdentity,
+    PlantIdentityId, Tree, TreeId,
 };
 use crate::hexagon::ports::{MapConfigurationStorage, OrchardStorage};
-use crate::hexagon::use_cases::change_plant_identity_harvest_window::{
-    PlantIdentityHarvestWindowChangeError, PlantIdentityHarvestWindowChanged,
-    change_plant_identity_harvest_window,
-};
 use crate::hexagon::use_cases::change_tree_condition::{
     TreeConditionChangeError, TreeConditionChanged, change_tree_condition,
 };
@@ -34,6 +31,10 @@ use crate::hexagon::use_cases::load_aerial_overlay_image::{
 };
 use crate::hexagon::use_cases::load_map_configuration::{
     MapConfigurationLoadError, load_map_configuration,
+};
+use crate::hexagon::use_cases::replace_plant_harvest_windows::{
+    AnnualHarvestWindowChanged, PlantHarvestWindowsReplaced, PlantHarvestWindowsReplacementError,
+    replace_plant_harvest_windows,
 };
 
 pub async fn start_http_server<U>(
@@ -65,8 +66,12 @@ where
         .route("/trees", post(create_tree_handler::<U>))
         .route("/trees/{tree_id}", patch(change_tree_handler::<U>))
         .route(
-            "/plant-identities/{plant_identity_id}",
-            patch(change_plant_identity_handler::<U>),
+            "/plant-identities/{plant_identity_id}/harvest-windows",
+            put(replace_identity_harvest_windows_handler::<U>),
+        )
+        .route(
+            "/plant-cultivars/{cultivar_id}/harvest-windows",
+            put(replace_cultivar_harvest_windows_handler::<U>),
         )
         .route("/trees.geojson", get(list_trees_handler::<U>))
         .route("/map-config", get(map_configuration_handler::<U>))
@@ -181,6 +186,7 @@ where
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateTreeRequest {
     pub longitude: f64,
     pub latitude: f64,
@@ -195,40 +201,77 @@ struct ChangeTreeRequest {
 }
 
 #[derive(Deserialize)]
-struct ChangePlantIdentityRequest {
-    harvest_start: AnnualDate,
-    harvest_end: AnnualDate,
+struct ReplaceHarvestWindowsRequest {
+    windows: Vec<HarvestWindowRequest>,
 }
 
-async fn change_plant_identity_handler<U>(
+#[derive(Deserialize)]
+struct HarvestWindowRequest {
+    start: AnnualDate,
+    end: AnnualDate,
+}
+
+async fn replace_identity_harvest_windows_handler<U>(
     State(orchard_storage): State<Arc<Mutex<U>>>,
     Path(plant_identity_id): Path<u64>,
-    Json(request): Json<ChangePlantIdentityRequest>,
+    Json(request): Json<ReplaceHarvestWindowsRequest>,
 ) -> StatusCode
 where
     U: OrchardStorage + Send + 'static,
 {
+    replace_harvest_windows_handler(
+        orchard_storage,
+        HarvestScheduleOwner::PlantIdentity(PlantIdentityId(plant_identity_id)),
+        request,
+    )
+    .await
+}
+
+async fn replace_cultivar_harvest_windows_handler<U>(
+    State(orchard_storage): State<Arc<Mutex<U>>>,
+    Path(cultivar_id): Path<u64>,
+    Json(request): Json<ReplaceHarvestWindowsRequest>,
+) -> StatusCode
+where
+    U: OrchardStorage + Send + 'static,
+{
+    replace_harvest_windows_handler(
+        orchard_storage,
+        HarvestScheduleOwner::PlantCultivar(PlantCultivarId(cultivar_id)),
+        request,
+    )
+    .await
+}
+
+async fn replace_harvest_windows_handler<U>(
+    orchard_storage: Arc<Mutex<U>>,
+    owner: HarvestScheduleOwner,
+    request: ReplaceHarvestWindowsRequest,
+) -> StatusCode
+where
+    U: OrchardStorage + Send + 'static,
+{
+    let windows = request
+        .windows
+        .into_iter()
+        .map(|window| AnnualHarvestWindowChanged {
+            start_month: window.start.month,
+            start_day: window.start.day,
+            end_month: window.end.month,
+            end_day: window.end.day,
+        })
+        .collect();
     match tokio::task::spawn_blocking(move || {
-        change_plant_identity_harvest_window(
-            PlantIdentityHarvestWindowChanged {
-                plant_identity_id: crate::hexagon::models::PlantIdentityId(plant_identity_id),
-                start_month: request.harvest_start.month,
-                start_day: request.harvest_start.day,
-                end_month: request.harvest_end.month,
-                end_day: request.harvest_end.day,
-            },
+        replace_plant_harvest_windows(
+            PlantHarvestWindowsReplaced { owner, windows },
             &mut *orchard_storage.lock().unwrap(),
         )
     })
     .await
     {
         Ok(Ok(())) => StatusCode::NO_CONTENT,
-        Ok(Err(PlantIdentityHarvestWindowChangeError::InvalidAnnualDate)) => {
-            StatusCode::BAD_REQUEST
-        }
-        Ok(Err(PlantIdentityHarvestWindowChangeError::PlantIdentityNotFound)) => {
-            StatusCode::NOT_FOUND
-        }
+        Ok(Err(PlantHarvestWindowsReplacementError::InvalidAnnualDate)) => StatusCode::BAD_REQUEST,
+        Ok(Err(PlantHarvestWindowsReplacementError::OwnerNotFound)) => StatusCode::NOT_FOUND,
         Ok(Err(_)) | Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -265,11 +308,12 @@ where
 
 async fn create_tree_handler<U>(
     State(orchard_storage): State<Arc<Mutex<U>>>,
-    Json(request): Json<CreateTreeRequest>,
+    request: Result<Json<CreateTreeRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Tree>), StatusCode>
 where
     U: OrchardStorage + Send + 'static,
 {
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
     tokio::task::spawn_blocking(move || {
         create_tree(
             TreeCreationRequested {
@@ -290,7 +334,16 @@ where
 fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
     let features = trees.into_iter().map(|orchard_tree| {
         let tree_id = orchard_tree.id;
-        let harvest_window = orchard_tree.harvest_window;
+        let harvest_windows = orchard_tree
+            .harvest_windows
+            .iter()
+            .map(|window| {
+                json!({
+                    "start": annual_date_string(window.start),
+                    "end": annual_date_string(window.end),
+                })
+            })
+            .collect::<Vec<_>>();
         let Tree {
             legacy_source,
             plant_identity_id,
@@ -353,8 +406,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
                 "plant_identity_botanical_name": plant_identity_botanical_name,
                 "plant_identity_cultivar": plant_identity_cultivar,
                 "identification_status": identification_status,
-                "harvest_start": harvest_window.map(|window| annual_date_string(window.start)),
-                "harvest_end": harvest_window.map(|window| annual_date_string(window.end)),
+                "harvest_windows": harvest_windows,
                 "botanical_genera": botanical_genera,
                 "botanical_species": botanical_species,
                 "planted_on": planted_on,

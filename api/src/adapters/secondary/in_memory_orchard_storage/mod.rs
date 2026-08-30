@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use crate::hexagon::models::{
-    AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, MapConfiguration,
-    OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity,
-    PlantIdentityId, PlantIdentityReference, Tree, TreeId,
+    AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, HarvestScheduleOwner,
+    MapConfiguration, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
+    PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId,
 };
 use crate::hexagon::ports::{
     MapConfigurationStorage, MapConfigurationStorageError, OrchardStorage, OrchardStorageError,
@@ -28,7 +28,7 @@ pub struct InMemoryOrchardStorage {
 struct InMemoryOrchard {
     plant_identities: Vec<PlantIdentity>,
     plant_cultivars: Vec<StoredCultivar>,
-    harvest_windows: Vec<Option<AnnualHarvestWindow>>,
+    harvest_schedules: Vec<(HarvestScheduleOwner, Vec<AnnualHarvestWindow>)>,
     trees: Vec<Tree>,
 }
 
@@ -44,7 +44,7 @@ struct InMemoryOrchardTransaction {
     staged_plant_identities: Vec<PlantIdentity>,
     staged_plant_cultivars: Vec<StoredCultivar>,
     staged_trees: Vec<Tree>,
-    staged_harvest_window_changes: Vec<(PlantIdentityId, AnnualHarvestWindow)>,
+    staged_harvest_schedule_replacements: Vec<(HarvestScheduleOwner, Vec<AnnualHarvestWindow>)>,
     staged_tree_danger_changes: Vec<(TreeId, bool)>,
     staged_tree_life_status_changes: Vec<(TreeId, bool)>,
 }
@@ -162,11 +162,10 @@ impl InMemoryOrchardStorage {
     fn with_configuration(
         configuration: InMemoryOrchardConfiguration,
     ) -> (Self, InMemoryOrchardObserver) {
-        let harvest_windows = vec![None; configuration.plant_identities.len()];
         let orchard = Arc::new(Mutex::new(InMemoryOrchard {
             plant_identities: configuration.plant_identities,
             plant_cultivars: Vec::new(),
-            harvest_windows,
+            harvest_schedules: Vec::new(),
             trees: configuration.trees,
         }));
         (
@@ -234,27 +233,21 @@ impl OrchardStorage for InMemoryOrchardStorage {
             Ok(value) => {
                 let mut committed_orchard = self.orchard.lock().unwrap();
                 committed_orchard
-                    .harvest_windows
-                    .extend(std::iter::repeat_n(
-                        None,
-                        transaction.staged_plant_identities.len(),
-                    ));
-                committed_orchard
                     .plant_identities
                     .extend(transaction.staged_plant_identities);
                 committed_orchard
                     .plant_cultivars
                     .extend(transaction.staged_plant_cultivars);
                 committed_orchard.trees.extend(transaction.staged_trees);
-                for (plant_identity_id, harvest_window) in transaction.staged_harvest_window_changes
-                {
-                    let index = plant_identity_index(plant_identity_id)
-                        .expect("a harvest-window change should have a positive identity ID");
-                    *committed_orchard
-                        .harvest_windows
-                        .get_mut(index)
-                        .expect("a harvest-window change should target an existing identity") =
-                        Some(harvest_window);
+                for (owner, harvest_windows) in transaction.staged_harvest_schedule_replacements {
+                    committed_orchard
+                        .harvest_schedules
+                        .retain(|(existing_owner, _)| *existing_owner != owner);
+                    if !harvest_windows.is_empty() {
+                        committed_orchard
+                            .harvest_schedules
+                            .push((owner, harvest_windows));
+                    }
                 }
                 for (tree_id, is_in_danger) in transaction.staged_tree_danger_changes {
                     let index = tree_index(tree_id)
@@ -393,24 +386,50 @@ impl OrchardStorage for InMemoryOrchardStorage {
         })
     }
 
-    fn change_plant_identity_harvest_window(
+    fn replace_harvest_windows(
         &mut self,
-        plant_identity_id: PlantIdentityId,
-        harvest_window: AnnualHarvestWindow,
+        owner: HarvestScheduleOwner,
+        harvest_windows: Vec<AnnualHarvestWindow>,
     ) -> Result<bool, OrchardStorageError> {
-        let committed_identity_count = self.orchard.lock().unwrap().plant_identities.len();
+        let committed_orchard = self.orchard.lock().unwrap();
+        let committed_identity_count = committed_orchard.plant_identities.len();
+        let committed_cultivar_count = committed_orchard.plant_cultivars.len();
+        let owner_exists_in_committed_orchard = match owner {
+            HarvestScheduleOwner::PlantIdentity(id) => {
+                id.0 > 0 && id.0 <= committed_identity_count as u64
+            }
+            HarvestScheduleOwner::PlantCultivar(id) => {
+                id.0 > 0 && id.0 <= committed_cultivar_count as u64
+            }
+        };
+        drop(committed_orchard);
         let transaction = self
             .transaction
             .as_mut()
             .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
-        let available_identity_count =
-            committed_identity_count + transaction.staged_plant_identities.len();
-        if plant_identity_id.0 == 0 || plant_identity_id.0 > available_identity_count as u64 {
+        let owner_exists_in_staged_changes = match owner {
+            HarvestScheduleOwner::PlantIdentity(id) => {
+                id.0 > committed_identity_count as u64
+                    && id.0
+                        <= (committed_identity_count + transaction.staged_plant_identities.len())
+                            as u64
+            }
+            HarvestScheduleOwner::PlantCultivar(id) => {
+                id.0 > committed_cultivar_count as u64
+                    && id.0
+                        <= (committed_cultivar_count + transaction.staged_plant_cultivars.len())
+                            as u64
+            }
+        };
+        if !owner_exists_in_committed_orchard && !owner_exists_in_staged_changes {
             return Ok(false);
         }
         transaction
-            .staged_harvest_window_changes
-            .push((plant_identity_id, harvest_window));
+            .staged_harvest_schedule_replacements
+            .retain(|(existing_owner, _)| *existing_owner != owner);
+        transaction
+            .staged_harvest_schedule_replacements
+            .push((owner, harvest_windows));
         Ok(true)
     }
 
@@ -552,12 +571,22 @@ impl OrchardStorage for InMemoryOrchardStorage {
                 } else {
                     None
                 };
+                let harvest_schedule_owner = tree.cultivar_id.map_or(
+                    HarvestScheduleOwner::PlantIdentity(tree.plant_identity_id),
+                    HarvestScheduleOwner::PlantCultivar,
+                );
+                let harvest_windows = orchard
+                    .harvest_schedules
+                    .iter()
+                    .find(|(owner, _)| *owner == harvest_schedule_owner)
+                    .map(|(_, windows)| windows.clone())
+                    .unwrap_or_default();
                 Ok(OrchardTree {
                     id: TreeId((index + 1) as u64),
                     tree: tree.clone(),
                     plant_identity,
                     plant_cultivar,
-                    harvest_window: orchard.harvest_windows[identity_index],
+                    harvest_windows,
                 })
             })
             .collect()
@@ -574,13 +603,6 @@ fn has_legacy_feature_id(orchard: &InMemoryOrchard, legacy_feature_id: u32) -> b
 
 fn tree_index(tree_id: TreeId) -> Option<usize> {
     tree_id
-        .0
-        .checked_sub(1)
-        .and_then(|index| usize::try_from(index).ok())
-}
-
-fn plant_identity_index(plant_identity_id: PlantIdentityId) -> Option<usize> {
-    plant_identity_id
         .0
         .checked_sub(1)
         .and_then(|index| usize::try_from(index).ok())
@@ -622,11 +644,14 @@ impl InMemoryOrchardObserver {
         self.orchard.lock().unwrap().trees.clone()
     }
 
-    pub fn harvest_window(
-        &self,
-        plant_identity_id: PlantIdentityId,
-    ) -> Option<AnnualHarvestWindow> {
-        plant_identity_index(plant_identity_id)
-            .and_then(|index| self.orchard.lock().unwrap().harvest_windows[index])
+    pub fn harvest_windows(&self, owner: HarvestScheduleOwner) -> Vec<AnnualHarvestWindow> {
+        self.orchard
+            .lock()
+            .unwrap()
+            .harvest_schedules
+            .iter()
+            .find(|(existing_owner, _)| *existing_owner == owner)
+            .map(|(_, windows)| windows.clone())
+            .unwrap_or_default()
     }
 }

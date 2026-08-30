@@ -1,8 +1,9 @@
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
-    BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon,
-    LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantCultivar, PlantCultivarId,
-    PlantIdentification, PlantIdentity, PlantIdentityId, ReproductiveRole, Tree,
+    AnnualDate, AnnualHarvestWindow, BotanicalTaxon, HarvestScheduleOwner, IdentificationStatus,
+    InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification, LegacyTreeSource, NamedTaxon,
+    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
+    ReproductiveRole, Tree,
 };
 use orchard_api::hexagon::use_cases::import_legacy_orchard::{
     LegacyOrchardImportError, LegacyOrchardImportRequested, LegacyTreeSnapshot,
@@ -95,6 +96,65 @@ fn reuse_identity_with_different_legacy_names() {
 }
 
 #[test]
+fn preserve_a_legacy_harvest_window_on_its_cultivar() {
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
+    let mut raspberry = surprise_dautomne(190);
+    let harvest_window = AnnualHarvestWindow {
+        start: AnnualDate { month: 8, day: 5 },
+        end: AnnualDate { month: 10, day: 15 },
+    };
+    raspberry.harvest_window = Some(harvest_window);
+
+    assert_eq!(
+        import_legacy_orchard(
+            LegacyOrchardImportRequested {
+                trees: vec![raspberry],
+            },
+            &mut orchard_storage,
+        ),
+        Ok(1)
+    );
+    assert_eq!(
+        observed_orchard.harvest_windows(HarvestScheduleOwner::PlantCultivar(PlantCultivarId(1))),
+        vec![harvest_window]
+    );
+    assert!(
+        observed_orchard
+            .harvest_windows(HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)))
+            .is_empty()
+    );
+}
+
+#[test]
+fn reject_conflicting_legacy_windows_for_the_same_cultivar_before_importing() {
+    let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
+    let mut first = surprise_dautomne(190);
+    first.harvest_window = Some(AnnualHarvestWindow {
+        start: AnnualDate { month: 8, day: 5 },
+        end: AnnualDate { month: 10, day: 15 },
+    });
+    let mut second = surprise_dautomne(209);
+    second.harvest_window = Some(AnnualHarvestWindow {
+        start: AnnualDate { month: 8, day: 10 },
+        end: AnnualDate { month: 10, day: 20 },
+    });
+
+    assert_eq!(
+        import_legacy_orchard(
+            LegacyOrchardImportRequested {
+                trees: vec![first, second],
+            },
+            &mut orchard_storage,
+        ),
+        Err(LegacyOrchardImportError::ConflictingHarvestWindows {
+            legacy_feature_id: 209,
+        })
+    );
+    assert!(observed_orchard.trees().is_empty());
+    assert!(observed_orchard.plant_identities().is_empty());
+}
+
+#[test]
 fn preserve_reproductive_role_and_historical_identification() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let boskoop = LegacyTreeSnapshot {
@@ -106,6 +166,7 @@ fn preserve_reproductive_role_and_historical_identification() {
             source_url: None,
         },
         plant_identification: named_identity("Kiwi", "Actinidia", "deliciosa", Some("Boskoop")),
+        harvest_window: None,
         longitude: 0.81,
         latitude: 0.68,
         planted_on: Some("2024-12-07".into()),
@@ -130,6 +191,7 @@ fn preserve_reproductive_role_and_historical_identification() {
         longitude: 0.36,
         latitude: 0.17,
         plant_identification: named_identity("Canneberge commune", "Vaccinium", "oxycoccos", None),
+        harvest_window: None,
         planted_on: Some("2024-12-07".into()),
         row_name: "4. Bas bas".into(),
         is_pioneer: false,
@@ -216,6 +278,7 @@ fn preserve_source_url() {
                     }),
                     identification_status: IdentificationStatus::Confirmed,
                 },
+                harvest_window: None,
                 planted_on: Some("2023-10-21".into()),
                 row_name: "8. Bas".into(),
                 is_pioneer: false,
@@ -469,6 +532,7 @@ fn john_rivers() -> LegacyTreeSnapshot {
             }),
             identification_status: IdentificationStatus::Confirmed,
         },
+        harvest_window: None,
         planted_on: Some("2024-12-07".into()),
         row_name: "10. Bas bas bas".into(),
         is_pioneer: false,
@@ -616,6 +680,7 @@ fn legacy_tree(fixture: LegacyTreeFixture<'_>) -> LegacyTreeSnapshot {
         longitude: fixture.longitude,
         latitude: fixture.latitude,
         plant_identification: fixture.plant_identification,
+        harvest_window: None,
         planted_on: fixture.planted_on.map(str::to_owned),
         row_name: fixture.row_name.into(),
         is_pioneer: fixture.is_pioneer,

@@ -1,6 +1,6 @@
 use crate::hexagon::models::{
-    AnnualHarvestWindow, OrchardTree, PlantIdentification, PlantIdentityId, PlantIdentityReference,
-    Tree, TreeId,
+    AnnualHarvestWindow, HarvestScheduleOwner, OrchardTree, PlantIdentification,
+    PlantIdentityReference, Tree, TreeId,
 };
 
 #[derive(Debug, PartialEq)]
@@ -8,7 +8,7 @@ pub enum OrchardStorageError {
     AtomicOperationCouldNotBegin,
     ExistingLegacyTreeCouldNotBeChecked,
     PlantIdentityCouldNotBeResolved,
-    PlantIdentityHarvestWindowCouldNotBeChanged,
+    HarvestWindowsCouldNotBeReplaced,
     TreeCouldNotBeSaved,
     TreeCouldNotBeRead,
     TreeDangerCouldNotBeChanged,
@@ -33,10 +33,10 @@ pub trait OrchardStorage {
         &mut self,
         plant_identification: PlantIdentification,
     ) -> Result<PlantIdentityReference, OrchardStorageError>;
-    fn change_plant_identity_harvest_window(
+    fn replace_harvest_windows(
         &mut self,
-        plant_identity_id: PlantIdentityId,
-        harvest_window: AnnualHarvestWindow,
+        owner: HarvestScheduleOwner,
+        harvest_windows: Vec<AnnualHarvestWindow>,
     ) -> Result<bool, OrchardStorageError>;
     fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardStorageError>;
     fn tree_is_alive(&mut self, tree_id: TreeId) -> Result<Option<bool>, OrchardStorageError>;
