@@ -93,6 +93,13 @@ async fn list_orchard_trees_as_geojson() {
                 "properties": {
                     "name": "Pommier",
                     "latin_name": "Malus domestica",
+                    "plant_identity_id": 1,
+                    "plant_identity_name": "Pommier",
+                    "plant_identity_taxon_name": "Malus domestica",
+                    "plant_identity_botanical_name": "Malus domestica",
+                    "plant_identity_cultivar": null,
+                    "botanical_genera": ["Malus"],
+                    "botanical_species": ["Malus domestica"],
                     "planted_on": "2024-02-03",
                     "row_name": "1. Haut haut haut",
                     "roles": ["fruit", "pioneer"],

@@ -249,6 +249,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
         let tree_id = orchard_tree.id;
         let Tree {
             legacy_source,
+            plant_identity_id,
             longitude,
             latitude,
             planted_on,
@@ -260,6 +261,13 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
             adult_width_meters,
             ..
         } = orchard_tree.tree;
+        let plant_identity_name = orchard_tree.plant_identity.common_name.clone();
+        let plant_identity_taxon_name =
+            botanical_taxon_name(&orchard_tree.plant_identity.botanical_taxon);
+        let plant_identity_botanical_name = botanical_name(&orchard_tree.plant_identity);
+        let plant_identity_cultivar = orchard_tree.plant_identity.cultivar.clone();
+        let (botanical_genera, botanical_species) =
+            botanical_filter_values(&orchard_tree.plant_identity);
         let name = legacy_source
             .as_ref()
             .map(|source| source.name.clone())
@@ -281,6 +289,13 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
             "properties": {
                 "name": name,
                 "latin_name": latin_name,
+                "plant_identity_id": plant_identity_id.0,
+                "plant_identity_name": plant_identity_name,
+                "plant_identity_taxon_name": plant_identity_taxon_name,
+                "plant_identity_botanical_name": plant_identity_botanical_name,
+                "plant_identity_cultivar": plant_identity_cultivar,
+                "botanical_genera": botanical_genera,
+                "botanical_species": botanical_species,
                 "planted_on": planted_on,
                 "row_name": row_name,
                 "roles": roles,
@@ -298,8 +313,40 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
     })
 }
 
+fn botanical_filter_values(plant_identity: &PlantIdentity) -> (Vec<String>, Vec<String>) {
+    let taxa = match &plant_identity.botanical_taxon {
+        BotanicalTaxon::Named(taxon) => vec![taxon],
+        BotanicalTaxon::HybridFormula { parents } => parents.iter().collect(),
+    };
+    let mut genera = Vec::new();
+    let mut species = Vec::new();
+
+    for taxon in taxa {
+        if !genera.contains(&taxon.genus) {
+            genera.push(taxon.genus.clone());
+        }
+        if let Some(species_name) = &taxon.species {
+            let hybrid_marker = if taxon.species_is_hybrid { "× " } else { "" };
+            let full_name = format!("{} {hybrid_marker}{species_name}", taxon.genus);
+            if !species.contains(&full_name) {
+                species.push(full_name);
+            }
+        }
+    }
+
+    (genera, species)
+}
+
 fn botanical_name(plant_identity: &PlantIdentity) -> String {
-    let mut name = match &plant_identity.botanical_taxon {
+    let mut name = botanical_taxon_name(&plant_identity.botanical_taxon);
+    if let Some(cultivar) = &plant_identity.cultivar {
+        name.push_str(&format!(" ‘{cultivar}’"));
+    }
+    name
+}
+
+fn botanical_taxon_name(botanical_taxon: &BotanicalTaxon) -> String {
+    match botanical_taxon {
         BotanicalTaxon::Named(taxon) => named_taxon(taxon),
         BotanicalTaxon::HybridFormula { parents } => {
             format!(
@@ -308,11 +355,7 @@ fn botanical_name(plant_identity: &PlantIdentity) -> String {
                 named_taxon(&parents[1])
             )
         }
-    };
-    if let Some(cultivar) = &plant_identity.cultivar {
-        name.push_str(&format!(" ‘{cultivar}’"));
     }
-    name
 }
 
 fn named_taxon(taxon: &NamedTaxon) -> String {
