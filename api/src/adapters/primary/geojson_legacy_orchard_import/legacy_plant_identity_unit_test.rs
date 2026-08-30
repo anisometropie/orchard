@@ -1,6 +1,6 @@
 use crate::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon, NamedTaxon,
-    PlantIdentity,
+    PlantCultivar, PlantIdentification, PlantIdentity,
 };
 
 use super::parse_legacy_tree_identity;
@@ -296,7 +296,7 @@ fn kamtschatica() {
     );
 }
 
-fn parse(name: &str, latin_name: &str) -> PlantIdentity {
+fn parse(name: &str, latin_name: &str) -> PlantIdentification {
     parse_legacy_tree_identity(name, latin_name, None).unwrap()
 }
 
@@ -306,12 +306,16 @@ fn identity(
     cultivar: Option<&str>,
     trade_name: Option<&str>,
     identification_status: IdentificationStatus,
-) -> PlantIdentity {
-    PlantIdentity {
-        common_name: common_name.into(),
-        botanical_taxon,
-        cultivar: cultivar.map(str::to_owned),
-        trade_name: trade_name.map(str::to_owned),
+) -> PlantIdentification {
+    PlantIdentification {
+        plant_identity: PlantIdentity {
+            common_name: common_name.into(),
+            botanical_taxon,
+        },
+        plant_cultivar: cultivar.map(|cultivar| PlantCultivar {
+            cultivar: cultivar.into(),
+            trade_name: trade_name.map(str::to_owned),
+        }),
         identification_status,
     }
 }

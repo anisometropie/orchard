@@ -1,9 +1,10 @@
 use postgres::{Client, NoTls};
 
 use crate::hexagon::models::{
-    AerialOverlay, AerialOverlayId, AerialOverlayImage, GeoPoint, IdentificationStatus,
-    LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, OrchardTree, PlantIdentity,
-    PlantIdentityId, ReproductiveRole, Tree, TreeId,
+    AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow, GeoPoint,
+    IdentificationStatus, LegacyPlantIdentification, LegacyTreeSource, MapConfiguration,
+    OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity,
+    PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId,
 };
 use crate::hexagon::ports::{
     MapConfigurationStorage, MapConfigurationStorageError, OrchardStorage, OrchardStorageError,
@@ -57,11 +58,40 @@ impl OrchardStorage for PostgresOrchardStorage {
             .map_err(|_| OrchardStorageError::ExistingLegacyTreeCouldNotBeChecked)
     }
 
-    fn find_or_create_plant_identity(
+    fn resolve_plant_identification(
         &mut self,
-        plant_identity: PlantIdentity,
-    ) -> Result<PlantIdentityId, OrchardStorageError> {
-        find_or_create_plant_identity(&mut self.client, plant_identity)
+        plant_identification: PlantIdentification,
+    ) -> Result<PlantIdentityReference, OrchardStorageError> {
+        resolve_plant_identification(&mut self.client, plant_identification)
+    }
+
+    fn change_plant_identity_harvest_window(
+        &mut self,
+        plant_identity_id: PlantIdentityId,
+        harvest_window: AnnualHarvestWindow,
+    ) -> Result<bool, OrchardStorageError> {
+        let plant_identity_id = i64::try_from(plant_identity_id.0)
+            .map_err(|_| OrchardStorageError::PlantIdentityHarvestWindowCouldNotBeChanged)?;
+        let start_month = i16::from(harvest_window.start.month);
+        let start_day = i16::from(harvest_window.start.day);
+        let end_month = i16::from(harvest_window.end.month);
+        let end_day = i16::from(harvest_window.end.day);
+        self.client
+            .execute(
+                "UPDATE plant_identities
+                 SET harvest_start_month = $2, harvest_start_day = $3,
+                     harvest_end_month = $4, harvest_end_day = $5
+                 WHERE id = $1",
+                &[
+                    &plant_identity_id,
+                    &start_month,
+                    &start_day,
+                    &end_month,
+                    &end_day,
+                ],
+            )
+            .map(|changed_rows| changed_rows == 1)
+            .map_err(|_| OrchardStorageError::PlantIdentityHarvestWindowCouldNotBeChanged)
     }
 
     fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardStorageError> {
@@ -118,12 +148,14 @@ impl OrchardStorage for PostgresOrchardStorage {
                     t.legacy_name, t.legacy_latin_name, t.legacy_source_url,
                     t.legacy_identification_name, t.legacy_identification_latin_name,
                     t.planted_on::text, t.row_name, t.roles, t.is_alive,
-                    t.reproductive_role, t.harvest_start_day, t.harvest_end_day,
-                    t.adult_height_meters, t.adult_width_meters, t.is_in_danger,
-                    p.common_name, p.botanical_taxon::text, p.cultivar, p.trade_name,
-                    p.identification_status, t.id
+                    t.reproductive_role, t.adult_height_meters, t.adult_width_meters,
+                    t.is_in_danger, t.cultivar_id, t.identification_status,
+                    p.common_name, p.botanical_taxon::text, c.cultivar, c.trade_name,
+                    p.harvest_start_month, p.harvest_start_day,
+                    p.harvest_end_month, p.harvest_end_day, t.id
                  FROM trees t
                  JOIN plant_identities p ON p.id = t.plant_identity_id
+                 LEFT JOIN plant_cultivars c ON c.id = t.cultivar_id
                  ORDER BY t.id",
                 &[],
             )
@@ -261,17 +293,18 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
         None => None,
         Some(_) => return Err(OrchardStorageError::TreesCouldNotBeRead),
     };
-    let identification_status = match row.get::<_, &str>(23) {
+    let identification_status = match row.get::<_, &str>(18) {
         "confirmed" => IdentificationStatus::Confirmed,
         "uncertain" => IdentificationStatus::Uncertain,
         _ => return Err(OrchardStorageError::TreesCouldNotBeRead),
     };
     let botanical_taxon = serde_json::from_str(&row.get::<_, String>(20))
         .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?;
+    let harvest_window = harvest_window_from_row(row)?;
 
     Ok(OrchardTree {
         id: TreeId(
-            u64::try_from(row.get::<_, i64>(24))
+            u64::try_from(row.get::<_, i64>(27))
                 .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?,
         ),
         tree: Tree {
@@ -280,33 +313,64 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
                 u64::try_from(row.get::<_, i64>(1))
                     .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?,
             ),
+            cultivar_id: row
+                .get::<_, Option<i64>>(17)
+                .map(|id| {
+                    u64::try_from(id)
+                        .map(PlantCultivarId)
+                        .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)
+                })
+                .transpose()?,
+            identification_status,
             longitude: row.get(2),
             latitude: row.get(3),
             planted_on: row.get(9),
             row_name: row.get(10),
             roles: row.get(11),
             is_alive: row.get(12),
-            is_in_danger: row.get(18),
+            is_in_danger: row.get(16),
             reproductive_role,
-            harvest_start_day: optional_u16(row.get(14))?,
-            harvest_end_day: optional_u16(row.get(15))?,
-            adult_height_meters: row.get(16),
-            adult_width_meters: row.get(17),
+            adult_height_meters: row.get(14),
+            adult_width_meters: row.get(15),
         },
         plant_identity: PlantIdentity {
             common_name: row.get(19),
             botanical_taxon,
-            cultivar: row.get(21),
-            trade_name: row.get(22),
-            identification_status,
         },
+        plant_cultivar: row
+            .get::<_, Option<String>>(21)
+            .map(|cultivar| PlantCultivar {
+                cultivar,
+                trade_name: row.get(22),
+            }),
+        harvest_window,
     })
 }
 
-fn optional_u16(value: Option<i16>) -> Result<Option<u16>, OrchardStorageError> {
-    value
-        .map(|value| u16::try_from(value).map_err(|_| OrchardStorageError::TreesCouldNotBeRead))
-        .transpose()
+fn harvest_window_from_row(
+    row: &postgres::Row,
+) -> Result<Option<AnnualHarvestWindow>, OrchardStorageError> {
+    let values = (
+        row.get::<_, Option<i16>>(23),
+        row.get::<_, Option<i16>>(24),
+        row.get::<_, Option<i16>>(25),
+        row.get::<_, Option<i16>>(26),
+    );
+    match values {
+        (None, None, None, None) => Ok(None),
+        (Some(start_month), Some(start_day), Some(end_month), Some(end_day)) => {
+            let start = annual_date(start_month, start_day)?;
+            let end = annual_date(end_month, end_day)?;
+            Ok(Some(AnnualHarvestWindow { start, end }))
+        }
+        _ => Err(OrchardStorageError::TreesCouldNotBeRead),
+    }
+}
+
+fn annual_date(month: i16, day: i16) -> Result<AnnualDate, OrchardStorageError> {
+    let month = u8::try_from(month).map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?;
+    let day = u8::try_from(day).map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?;
+    AnnualDate::new(month, day).ok_or(OrchardStorageError::TreesCouldNotBeRead)
 }
 
 fn is_legacy_tree_already_imported(
@@ -321,33 +385,25 @@ fn is_legacy_tree_already_imported(
         .map(|row| row.get(0))
 }
 
-fn find_or_create_plant_identity(
+fn resolve_plant_identification(
     client: &mut Client,
-    plant_identity: PlantIdentity,
-) -> Result<PlantIdentityId, OrchardStorageError> {
+    plant_identification: PlantIdentification,
+) -> Result<PlantIdentityReference, OrchardStorageError> {
+    let PlantIdentification {
+        plant_identity,
+        plant_cultivar,
+        ..
+    } = plant_identification;
     let botanical_taxon = serde_json::to_string(&plant_identity.botanical_taxon)
         .map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)?;
-    let identification_status = match &plant_identity.identification_status {
-        IdentificationStatus::Confirmed => "confirmed",
-        IdentificationStatus::Uncertain => "uncertain",
-    };
-    let identity_key = plant_identity.catalog_key();
     let returned_id = client
         .query_opt(
             "INSERT INTO plant_identities (
-                common_name, botanical_taxon, cultivar, trade_name,
-                identification_status, identity_key
-            ) VALUES ($1, $2::TEXT::jsonb, $3, $4, $5, $6)
-            ON CONFLICT (identity_key) DO NOTHING
+                common_name, botanical_taxon
+            ) VALUES ($1, $2::TEXT::jsonb)
+            ON CONFLICT (botanical_taxon) DO NOTHING
             RETURNING id",
-            &[
-                &plant_identity.common_name,
-                &botanical_taxon,
-                &plant_identity.cultivar,
-                &plant_identity.trade_name,
-                &identification_status,
-                &identity_key,
-            ],
+            &[&plant_identity.common_name, &botanical_taxon],
         )
         .map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)?
         .map(|row| row.get::<_, i64>(0));
@@ -355,14 +411,45 @@ fn find_or_create_plant_identity(
         Some(id) => id,
         None => client
             .query_one(
-                "SELECT id FROM plant_identities WHERE identity_key = $1",
-                &[&identity_key],
+                "SELECT id FROM plant_identities WHERE botanical_taxon = $1::TEXT::jsonb",
+                &[&botanical_taxon],
             )
             .map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)?
             .get::<_, i64>(0),
     };
-    let id = u64::try_from(id).map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)?;
-    Ok(PlantIdentityId(id))
+    let cultivar_id = match plant_cultivar {
+        None => None,
+        Some(PlantCultivar {
+            cultivar,
+            trade_name,
+        }) => Some(
+            client
+                .query_one(
+                    "INSERT INTO plant_cultivars (plant_identity_id, cultivar, trade_name)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (plant_identity_id, cultivar) DO UPDATE
+                     SET trade_name = COALESCE(plant_cultivars.trade_name, EXCLUDED.trade_name)
+                     RETURNING id",
+                    &[&id, &cultivar, &trade_name],
+                )
+                .map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)?
+                .get::<_, i64>(0),
+        ),
+    };
+    let plant_identity_id = u64::try_from(id)
+        .map(PlantIdentityId)
+        .map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)?;
+    let cultivar_id = cultivar_id
+        .map(|id| {
+            u64::try_from(id)
+                .map(PlantCultivarId)
+                .map_err(|_| OrchardStorageError::PlantIdentityCouldNotBeResolved)
+        })
+        .transpose()?;
+    Ok(PlantIdentityReference {
+        plant_identity_id,
+        cultivar_id,
+    })
 }
 
 fn save_tree(client: &mut Client, tree: Tree) -> Result<(), postgres::Error> {
@@ -395,32 +482,36 @@ fn save_tree(client: &mut Client, tree: Tree) -> Result<(), postgres::Error> {
             .map(|identification| identification.latin_name.as_str())
     });
     let plant_identity_id = tree.plant_identity_id.0 as i64;
+    let cultivar_id = tree.cultivar_id.map(|cultivar_id| cultivar_id.0 as i64);
+    let identification_status = match tree.identification_status {
+        IdentificationStatus::Confirmed => "confirmed",
+        IdentificationStatus::Uncertain => "uncertain",
+    };
     let reproductive_role = tree.reproductive_role.map(|role| match role {
         ReproductiveRole::Female => "female",
         ReproductiveRole::Male => "male",
         ReproductiveRole::SelfFertile => "self_fertile",
         ReproductiveRole::Parthenocarpic => "parthenocarpic",
     });
-    let harvest_start_day = tree.harvest_start_day.map(|day| day as i16);
-    let harvest_end_day = tree.harvest_end_day.map(|day| day as i16);
     client
         .execute(
             "INSERT INTO trees (
-                legacy_feature_id, plant_identity_id, location,
+                legacy_feature_id, plant_identity_id, cultivar_id, identification_status, location,
                 legacy_name, legacy_latin_name,
                 legacy_source_url,
                 legacy_identification_name, legacy_identification_latin_name,
                 planted_on, row_name, roles, is_alive, is_in_danger, reproductive_role,
-                harvest_start_day, harvest_end_day,
                 adult_height_meters, adult_width_meters
             ) VALUES (
-                $1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326),
-                $5, $6, $7, $8, $9, $10::TEXT::DATE, $11,
-                $12, $13, $14, $15, $16, $17, $18, $19
+                $1, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326),
+                $7, $8, $9, $10, $11, $12::TEXT::DATE, $13,
+                $14, $15, $16, $17, $18, $19
             )",
             &[
                 &legacy_feature_id,
                 &plant_identity_id,
+                &cultivar_id,
+                &identification_status,
                 &tree.longitude,
                 &tree.latitude,
                 &legacy_name,
@@ -434,8 +525,6 @@ fn save_tree(client: &mut Client, tree: Tree) -> Result<(), postgres::Error> {
                 &tree.is_alive,
                 &tree.is_in_danger,
                 &reproductive_role,
-                &harvest_start_day,
-                &harvest_end_day,
                 &tree.adult_height_meters,
                 &tree.adult_width_meters,
             ],

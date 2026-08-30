@@ -43,17 +43,22 @@ export function summarizeSpecies(features) {
   features.forEach(({ properties = {} }) => {
     const name = properties.plant_identity_name || "Unknown identity";
     const taxonName = properties.plant_identity_taxon_name || "Unknown taxon";
+    const plantIdentityId = properties.plant_identity_id ?? null;
     const cultivar = properties.plant_identity_cultivar;
-    let summary = species.get(taxonName);
+    const summaryKey = plantIdentityId ?? taxonName;
+    let summary = species.get(summaryKey);
 
     if (!summary) {
       summary = {
+        plantIdentityId,
         taxonName,
         names: new Set(),
         count: 0,
         cultivarCounts: new Map(),
+        harvestStart: properties.harvest_start ?? null,
+        harvestEnd: properties.harvest_end ?? null,
       };
-      species.set(taxonName, summary);
+      species.set(summaryKey, summary);
     }
     summary.names.add(name);
     summary.count += 1;
@@ -66,10 +71,21 @@ export function summarizeSpecies(features) {
   });
 
   return [...species.values()]
-    .map(({ taxonName, names, count, cultivarCounts }) => ({
+    .map(({
+      plantIdentityId,
+      taxonName,
+      names,
+      count,
+      cultivarCounts,
+      harvestStart,
+      harvestEnd,
+    }) => ({
+      plantIdentityId,
       taxonName,
       names: [...names].sort(compareText),
       count,
+      harvestStart,
+      harvestEnd,
       cultivars: [...cultivarCounts]
         .map(([name, cultivarCount]) => ({ name, count: cultivarCount }))
         .sort((left, right) => compareText(left.name, right.name)),

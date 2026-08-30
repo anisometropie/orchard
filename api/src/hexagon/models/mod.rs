@@ -8,8 +8,9 @@ pub use map_configuration::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, GeoPoint, MapConfiguration,
 };
 pub use plant_identity::{
-    BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon, NamedTaxon,
-    PlantIdentity, PlantIdentityId,
+    AnnualDate, AnnualHarvestWindow, BotanicalTaxon, IdentificationStatus, InfraspecificRank,
+    InfraspecificTaxon, NamedTaxon, PlantCultivar, PlantCultivarId, PlantIdentification,
+    PlantIdentity, PlantIdentityId, PlantIdentityReference,
 };
 pub use tree::{ReproductiveRole, Tree, TreeId};
 
@@ -18,4 +19,6 @@ pub struct OrchardTree {
     pub id: TreeId,
     pub tree: Tree,
     pub plant_identity: PlantIdentity,
+    pub plant_cultivar: Option<PlantCultivar>,
+    pub harvest_window: Option<AnnualHarvestWindow>,
 }

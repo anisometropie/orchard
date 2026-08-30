@@ -1,13 +1,11 @@
-use crate::hexagon::models::{PlantIdentity, Tree};
+use crate::hexagon::models::{PlantIdentification, Tree};
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
 pub struct TreeCreationRequested {
     pub longitude: f64,
     pub latitude: f64,
-    pub plant_identity: PlantIdentity,
+    pub plant_identification: PlantIdentification,
     pub roles: Vec<String>,
-    pub harvest_start_day: Option<u16>,
-    pub harvest_end_day: Option<u16>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -26,12 +24,15 @@ where
     U: OrchardStorage,
 {
     orchard_storage.transaction(|orchard| {
-        let plant_identity_id = orchard
-            .find_or_create_plant_identity(event.plant_identity)
+        let identification_status = event.plant_identification.identification_status;
+        let plant_identity = orchard
+            .resolve_plant_identification(event.plant_identification)
             .map_err(|_| TreeCreationError::PlantIdentityCouldNotBeResolved)?;
         let tree = Tree {
             legacy_source: None,
-            plant_identity_id,
+            plant_identity_id: plant_identity.plant_identity_id,
+            cultivar_id: plant_identity.cultivar_id,
+            identification_status,
             longitude: event.longitude,
             latitude: event.latitude,
             planted_on: None,
@@ -40,8 +41,6 @@ where
             is_alive: true,
             is_in_danger: false,
             reproductive_role: None,
-            harvest_start_day: event.harvest_start_day,
-            harvest_end_day: event.harvest_end_day,
             adult_height_meters: None,
             adult_width_meters: None,
         };

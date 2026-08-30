@@ -241,6 +241,67 @@
         margin: 5px 0 0;
         padding-left: 20px;
       }
+      .harvest-editor {
+        display: grid;
+        gap: 6px;
+        min-width: 150px;
+      }
+      .harvest-editor label {
+        display: grid;
+        font-size: 11px;
+        gap: 2px;
+      }
+      .harvest-editor input {
+        border: 1px solid #999;
+        border-radius: 4px;
+        font: inherit;
+        padding: 4px 5px;
+        width: 72px;
+      }
+      .harvest-editor-actions {
+        display: flex;
+        gap: 5px;
+      }
+      .harvest-edit-button,
+      .harvest-editor button {
+        border: 1px solid #777;
+        border-radius: 4px;
+        cursor: pointer;
+        font: inherit;
+        padding: 3px 7px;
+      }
+      .harvest-edit-button {
+        margin-left: 7px;
+      }
+      .harvest-editor-error {
+        color: #b42318;
+        font-size: 11px;
+      }
+      .harvest-map-control {
+        border-bottom: 1px solid #ddd;
+        margin-bottom: 12px;
+        padding-bottom: 12px;
+      }
+      .harvest-map-control-title {
+        align-items: center;
+        display: flex;
+        font-weight: 600;
+        gap: 8px;
+      }
+      .harvest-map-control label:not(.harvest-map-control-title) {
+        display: block;
+        font-size: 12px;
+        margin-top: 8px;
+      }
+      .harvest-map-control input[type="range"] {
+        display: block;
+        width: 100%;
+      }
+      #harvest-window-label {
+        color: #444;
+        font-size: 13px;
+        margin-top: 7px;
+      }
       @media (max-width: 620px) {
         #inventory-toggle {
           left: 10px;
@@ -370,6 +431,7 @@
                 <th scope="col">Name</th>
                 <th scope="col">Botanical identity</th>
                 <th scope="col" class="inventory-number">Trees</th>
+                <th scope="col">Harvest</th>
               </tr>
             </thead>
             <tbody id="identity-inventory-body"></tbody>
@@ -392,6 +454,21 @@
         width: 280px;
       "
     >
+      <section class="harvest-map-control" aria-label="Harvest availability">
+        <label class="harvest-map-control-title">
+          <input type="checkbox" id="harvest-filter-enabled" checked />
+          Fruit available
+        </label>
+        <div id="harvest-window-label">This week</div>
+        <label>
+          Start: <span id="harvest-offset-label">this week</span>
+          <input type="range" id="harvest-offset" min="0" max="52" value="0" />
+        </label>
+        <label>
+          Width: <span id="harvest-weeks-label">1 week</span>
+          <input type="range" id="harvest-weeks" min="1" max="12" value="1" />
+        </label>
+      </section>
       <label
         style="
           display: flex;
@@ -432,6 +509,11 @@
         summarizeSpecies,
         taxonomyOptions,
       } from "./orchard-inventory.mjs";
+      import {
+        harvestAvailability,
+        harvestAvailabilitySummary,
+        parseAnnualDate,
+      } from "./harvest-window.mjs";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -528,6 +610,26 @@
               },
             },
             {
+              id: "harvest-rings",
+              type: "circle",
+              source: "orchard",
+              filter: ["==", ["get", "harvest_available"], true],
+              paint: {
+                "circle-radius": [
+                  "case",
+                  ["<", ["to-number", ["get", "adult_height"]], 1.4],
+                  8,
+                  ["<", ["to-number", ["get", "adult_height"]], 6],
+                  11,
+                  14,
+                ],
+                "circle-color": "rgba(255, 191, 0, 0.18)",
+                "circle-stroke-color": "#ffb000",
+                "circle-stroke-opacity": 1,
+                "circle-stroke-width": 4,
+              },
+            },
+            {
               id: "danger-rings",
               type: "circle",
               source: "orchard",
@@ -572,6 +674,20 @@
       const treeInventoryBody = document.getElementById("tree-inventory-body");
       const identityInventoryBody = document.getElementById(
         "identity-inventory-body",
+      );
+      const harvestFilterEnabled = document.getElementById(
+        "harvest-filter-enabled",
+      );
+      const harvestOffset = document.getElementById("harvest-offset");
+      const harvestWeeks = document.getElementById("harvest-weeks");
+      const harvestOffsetLabel = document.getElementById(
+        "harvest-offset-label",
+      );
+      const harvestWeeksLabel = document.getElementById(
+        "harvest-weeks-label",
+      );
+      const harvestWindowLabel = document.getElementById(
+        "harvest-window-label",
       );
 
       function createDeadTreeCrossImage() {
@@ -812,12 +928,13 @@
           appendCell(row, speciesSummary.names.join(" / "));
           appendSpeciesCell(row, speciesSummary);
           appendCell(row, speciesSummary.count, "inventory-number");
+          appendHarvestCell(row, speciesSummary);
           return row;
         });
         identityInventoryBody.replaceChildren(...rows);
         if (rows.length === 0) {
           identityInventoryBody.append(
-            emptyRow("No planted species yet.", 3),
+            emptyRow("No planted species yet.", 4),
           );
         }
       }
@@ -845,6 +962,130 @@
         }
 
         row.append(cell);
+      }
+
+      function appendHarvestCell(row, speciesSummary) {
+        const cell = document.createElement("td");
+        const value = document.createElement("span");
+        value.textContent =
+          speciesSummary.harvestStart && speciesSummary.harvestEnd
+            ? `${speciesSummary.harvestStart} → ${speciesSummary.harvestEnd}`
+            : "Not set";
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "harvest-edit-button";
+        editButton.textContent = "Edit";
+        editButton.addEventListener("click", () => {
+          showHarvestEditor(cell, speciesSummary);
+        });
+        cell.append(value, editButton);
+        row.append(cell);
+      }
+
+      function showHarvestEditor(cell, speciesSummary) {
+        const form = document.createElement("form");
+        form.className = "harvest-editor";
+        const startInput = annualDateInput(
+          "Start (MM-DD)",
+          speciesSummary.harvestStart,
+        );
+        const endInput = annualDateInput(
+          "End (MM-DD)",
+          speciesSummary.harvestEnd,
+        );
+        const error = document.createElement("div");
+        error.className = "harvest-editor-error";
+        error.hidden = true;
+        error.setAttribute("aria-live", "polite");
+        const actions = document.createElement("div");
+        actions.className = "harvest-editor-actions";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", renderSpeciesInventory);
+        const save = document.createElement("button");
+        save.type = "submit";
+        save.textContent = "OK";
+        actions.append(cancel, save);
+        form.append(startInput.label, endInput.label, error, actions);
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const harvestStart = parseAnnualDate(startInput.input.value);
+          const harvestEnd = parseAnnualDate(endInput.input.value);
+          if (!harvestStart || !harvestEnd) {
+            error.textContent = "Use a valid MM-DD date, for example 08-30.";
+            error.hidden = false;
+            return;
+          }
+          error.hidden = true;
+          startInput.input.disabled = true;
+          endInput.input.disabled = true;
+          cancel.disabled = true;
+          save.disabled = true;
+          save.textContent = "Saving…";
+          try {
+            await updatePlantIdentityHarvestWindow(
+              speciesSummary.plantIdentityId,
+              harvestStart,
+              harvestEnd,
+            );
+            await loadOrchardTrees();
+          } catch (requestError) {
+            error.textContent = requestError.message;
+            error.hidden = false;
+            startInput.input.disabled = false;
+            endInput.input.disabled = false;
+            cancel.disabled = false;
+            save.disabled = false;
+            save.textContent = "OK";
+          }
+        });
+
+        cell.replaceChildren(form);
+        startInput.input.focus();
+      }
+
+      function annualDateInput(text, value) {
+        const label = document.createElement("label");
+        label.append(document.createTextNode(text));
+        const input = document.createElement("input");
+        input.type = "text";
+        input.inputMode = "numeric";
+        input.placeholder = "MM-DD";
+        input.maxLength = 5;
+        input.value = value || "";
+        label.append(input);
+        return { label, input };
+      }
+
+      async function updatePlantIdentityHarvestWindow(
+        plantIdentityId,
+        harvestStart,
+        harvestEnd,
+      ) {
+        if (plantIdentityId == null) {
+          throw new Error("This plant identity has no editable ID.");
+        }
+        const response = await fetch(
+          `/api/plant-identities/${encodeURIComponent(plantIdentityId)}`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              harvest_start: harvestStart,
+              harvest_end: harvestEnd,
+            }),
+          },
+        );
+        if (response.ok) return;
+        if (response.status === 400) {
+          throw new Error("The harvest dates are invalid.");
+        }
+        if (response.status === 404) {
+          throw new Error("This plant identity no longer exists.");
+        }
+        throw new Error("Could not update the harvest dates. Please try again.");
       }
 
       function appendCell(row, value, className) {
@@ -983,7 +1224,7 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const orchard = await response.json();
         orchardFeatures = orchard.features || [];
-        map.getSource("orchard").setData(orchard);
+        applyHarvestWindow();
         refreshTaxonomyFilters();
         renderInventory();
       }
@@ -997,6 +1238,51 @@
           console.error("Could not load orchard trees", error);
           status.textContent = "Could not load orchard trees. Try reloading the page.";
           status.hidden = false;
+        }
+      }
+
+      function applyHarvestWindow() {
+        const start = new Date();
+        start.setHours(0, 0, 0, 0);
+        const offset = Number(harvestOffset.value);
+        const weeks = Number(harvestWeeks.value);
+        start.setDate(start.getDate() + offset * 7);
+        const end = new Date(start);
+        end.setDate(end.getDate() + weeks * 7 - 1);
+
+        harvestOffsetLabel.textContent =
+          offset === 0
+            ? "this week"
+            : `in ${offset} week${offset === 1 ? "" : "s"}`;
+        harvestWeeksLabel.textContent = `${weeks} week${weeks === 1 ? "" : "s"}`;
+
+        const visibleFeatures = harvestAvailability(
+          orchardFeatures,
+          start,
+          weeks,
+        );
+        const summary = harvestAvailabilitySummary(visibleFeatures);
+        const dateFormatter = new Intl.DateTimeFormat(undefined, {
+          day: "numeric",
+          month: "short",
+        });
+        harvestWindowLabel.textContent = harvestFilterEnabled.checked
+          ? `${dateFormatter.format(start)} → ${dateFormatter.format(end)} · ${summary.trees} tree${summary.trees === 1 ? "" : "s"} · ${summary.species} species`
+          : "Harvest display hidden";
+
+        const source = map.getSource("orchard");
+        if (source) {
+          source.setData({
+            type: "FeatureCollection",
+            features: visibleFeatures,
+          });
+        }
+        if (map.getLayer("harvest-rings")) {
+          map.setLayoutProperty(
+            "harvest-rings",
+            "visibility",
+            harvestFilterEnabled.checked ? "visible" : "none",
+          );
         }
       }
 
@@ -1058,6 +1344,9 @@
       dateMinSlider.addEventListener("input", applyDateFilter);
       dateMaxSlider.addEventListener("input", applyDateFilter);
       dateFilterEnabled.addEventListener("change", applyDateFilter);
+      harvestFilterEnabled.addEventListener("change", applyHarvestWindow);
+      harvestOffset.addEventListener("input", applyHarvestWindow);
+      harvestWeeks.addEventListener("input", applyHarvestWindow);
 
       inventoryToggle.addEventListener("click", () => setInventoryOpen(true));
       inventoryClose.addEventListener("click", () => setInventoryOpen(false));
@@ -1077,6 +1366,7 @@
       dateMaxSlider.max = totalDays;
       dateMaxSlider.value = totalDays;
       applyDateFilter();
+      applyHarvestWindow();
     </script>
   </body>
 </html>

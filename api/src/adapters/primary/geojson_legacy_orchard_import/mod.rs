@@ -4,7 +4,8 @@ use serde::Deserialize;
 
 use crate::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon,
-    LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantIdentity, ReproductiveRole,
+    LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantCultivar, PlantIdentification,
+    PlantIdentity, ReproductiveRole,
 };
 use crate::hexagon::ports::OrchardStorage;
 use crate::hexagon::use_cases::import_legacy_orchard::{
@@ -37,7 +38,7 @@ where
         .map(|feature| {
             let properties = feature.properties;
             let legacy_feature_id = properties.fid;
-            let plant_identity = parse_legacy_tree_identity(
+            let plant_identification = parse_legacy_tree_identity(
                 &properties.name,
                 &properties.latin_name,
                 properties.trade_name.clone(),
@@ -60,14 +61,12 @@ where
                 },
                 longitude: feature.geometry.coordinates[0],
                 latitude: feature.geometry.coordinates[1],
-                plant_identity,
+                plant_identification,
                 planted_on: properties.planted_on,
                 row_name: properties.row_name,
                 is_pioneer: properties.is_pioneer,
                 is_alive: properties.is_alive,
                 reproductive_role: properties.reproductive_role,
-                harvest_start_day: properties.harvest_start_day,
-                harvest_end_day: properties.harvest_end_day,
                 adult_height_meters: properties.adult_height_meters,
                 adult_width_meters: properties.adult_width_meters,
             })
@@ -106,10 +105,6 @@ struct GeoJsonTreeProperties {
     #[serde(rename = "alive")]
     is_alive: bool,
     reproductive_role: Option<ReproductiveRole>,
-    #[serde(rename = "harvest_date_min")]
-    harvest_start_day: Option<u16>,
-    #[serde(rename = "harvest_date_max")]
-    harvest_end_day: Option<u16>,
     #[serde(rename = "adult_height")]
     adult_height_meters: f64,
     #[serde(rename = "adult_width")]
@@ -136,7 +131,7 @@ fn parse_legacy_tree_identity(
     legacy_name: &str,
     legacy_botanical_name: &str,
     trade_name: Option<String>,
-) -> Result<PlantIdentity, LegacyPlantIdentityParseError> {
+) -> Result<PlantIdentification, LegacyPlantIdentityParseError> {
     let (taxon, cultivar) = split_cultivar(legacy_botanical_name)?;
     let common_name = cultivar.as_deref().map_or(legacy_name, |cultivar| {
         remove_quoted_label_suffix(legacy_name, cultivar)
@@ -149,11 +144,15 @@ fn parse_legacy_tree_identity(
         .into();
     let (botanical_taxon, identification_status) = parse_legacy_botanical_taxon(taxon)?;
 
-    Ok(PlantIdentity {
-        common_name,
-        botanical_taxon,
-        cultivar,
-        trade_name,
+    Ok(PlantIdentification {
+        plant_identity: PlantIdentity {
+            common_name,
+            botanical_taxon,
+        },
+        plant_cultivar: cultivar.map(|cultivar| PlantCultivar {
+            cultivar,
+            trade_name,
+        }),
         identification_status,
     })
 }

@@ -2,8 +2,9 @@ use orchard_api::adapters::secondary::PostgresOrchardStorage;
 use orchard_api::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, BotanicalTaxon, GeoPoint,
     IdentificationStatus, InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification,
-    LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardTree, PlantIdentity, PlantIdentityId,
-    ReproductiveRole, Tree, TreeId,
+    LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardTree, PlantCultivar, PlantCultivarId,
+    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole,
+    Tree, TreeId,
 };
 use orchard_api::hexagon::ports::{MapConfigurationStorage, OrchardStorage, OrchardStorageError};
 use orchard_api::hexagon::use_cases::change_tree_condition::{
@@ -16,24 +17,24 @@ fn commit_persists_identity_and_tree() {
     let _database_lock = database_lock();
     let (database_url, mut verification_connection) = empty_orchard_database();
 
-    let john_rivers = PlantIdentity {
-        common_name: "Brugnon blanc".into(),
-        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-            genus: "Prunus".into(),
-            species: Some("persica".into()),
-            species_is_hybrid: false,
-            infraspecific: None,
-            is_aggregate: false,
-            cultivar_group: None,
-        }),
-        cultivar: Some("John Rivers".into()),
-        trade_name: None,
-        identification_status: IdentificationStatus::Confirmed,
-    };
+    let john_rivers = identification(
+        PlantIdentity {
+            common_name: "Brugnon blanc".into(),
+            botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                genus: "Prunus".into(),
+                species: Some("persica".into()),
+                species_is_hybrid: false,
+                infraspecific: None,
+                is_aggregate: false,
+                cultivar_group: None,
+            }),
+        },
+        Some("John Rivers"),
+    );
     let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
-    let (plant_identity_id, expected_tree) = orchard_storage
+    let (plant_identity, expected_tree) = orchard_storage
         .transaction(|orchard| {
-            let plant_identity_id = orchard.find_or_create_plant_identity(john_rivers.clone())?;
+            let plant_identity = orchard.resolve_plant_identification(john_rivers.clone())?;
             let expected_tree = Tree {
                 legacy_source: Some(LegacyTreeSource {
                     feature_id: 17,
@@ -42,7 +43,9 @@ fn commit_persists_identity_and_tree() {
                     legacy_identification: None,
                     source_url: None,
                 }),
-                plant_identity_id,
+                plant_identity_id: plant_identity.plant_identity_id,
+                cultivar_id: plant_identity.cultivar_id,
+                identification_status: john_rivers.identification_status,
                 longitude: 0.72,
                 latitude: 0.24,
                 planted_on: Some("2024-12-07".into()),
@@ -51,74 +54,82 @@ fn commit_persists_identity_and_tree() {
                 is_alive: true,
                 is_in_danger: true,
                 reproductive_role: None,
-                harvest_start_day: None,
-                harvest_end_day: None,
                 adult_height_meters: Some(4.0),
                 adult_width_meters: Some(3.0),
             };
             orchard.save_tree(expected_tree.clone())?;
-            Ok::<_, OrchardStorageError>((plant_identity_id, expected_tree))
+            Ok::<_, OrchardStorageError>((plant_identity, expected_tree))
         })
         .unwrap();
 
-    assert_eq!(plant_identity_id, PlantIdentityId(1));
+    assert_eq!(
+        plant_identity,
+        PlantIdentityReference {
+            plant_identity_id: PlantIdentityId(1),
+            cultivar_id: Some(PlantCultivarId(1)),
+        }
+    );
     let persisted_identity = verification_connection
-        .query_one(
-            "SELECT id, common_name, cultivar, trade_name, identification_status FROM plant_identities",
-            &[],
-        )
+        .query_one("SELECT id, common_name FROM plant_identities", &[])
         .unwrap();
     assert_eq!(persisted_identity.get::<_, i64>(0), 1);
     assert_eq!(
         persisted_identity.get::<_, String>(1),
-        john_rivers.common_name
+        john_rivers.plant_identity.common_name
     );
+    let persisted_cultivar = verification_connection
+        .query_one(
+            "SELECT plant_identity_id, cultivar, trade_name FROM plant_cultivars",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(persisted_cultivar.get::<_, i64>(0), 1);
     assert_eq!(
-        persisted_identity.get::<_, Option<String>>(2),
-        john_rivers.cultivar
+        persisted_cultivar.get::<_, String>(1),
+        john_rivers.plant_cultivar.unwrap().cultivar
     );
-    assert_eq!(persisted_identity.get::<_, Option<String>>(3), None);
-    assert_eq!(persisted_identity.get::<_, String>(4), "confirmed");
+    assert_eq!(persisted_cultivar.get::<_, Option<String>>(2), None);
 
     let persisted_tree = verification_connection
         .query_one(
-            "SELECT legacy_feature_id, plant_identity_id, ST_X(location), ST_Y(location), legacy_name, legacy_latin_name, planted_on::text, row_name, roles, is_alive, is_in_danger, harvest_start_day, harvest_end_day, adult_height_meters, adult_width_meters FROM trees WHERE legacy_feature_id = 17",
+            "SELECT legacy_feature_id, plant_identity_id, cultivar_id, identification_status,
+                    ST_X(location), ST_Y(location), legacy_name, legacy_latin_name,
+                    planted_on::text, row_name, roles, is_alive, is_in_danger,
+                    adult_height_meters, adult_width_meters
+             FROM trees WHERE legacy_feature_id = 17",
             &[],
         )
         .unwrap();
     assert_eq!(persisted_tree.get::<_, i32>(0), 17);
     assert_eq!(persisted_tree.get::<_, i64>(1), 1);
-    assert_eq!(persisted_tree.get::<_, f64>(2), expected_tree.longitude);
-    assert_eq!(persisted_tree.get::<_, f64>(3), expected_tree.latitude);
+    assert_eq!(persisted_tree.get::<_, Option<i64>>(2), Some(1));
+    assert_eq!(persisted_tree.get::<_, String>(3), "confirmed");
+    assert_eq!(persisted_tree.get::<_, f64>(4), expected_tree.longitude);
+    assert_eq!(persisted_tree.get::<_, f64>(5), expected_tree.latitude);
     assert_eq!(
-        persisted_tree.get::<_, Option<String>>(4),
+        persisted_tree.get::<_, Option<String>>(6),
         Some("Brugnon blanc ‘John Rivers’".into())
     );
     assert_eq!(
-        persisted_tree.get::<_, Option<String>>(5),
+        persisted_tree.get::<_, Option<String>>(7),
         Some("Prunus persica var. nucipersica ‘John Rivers’".into())
     );
     assert_eq!(
-        persisted_tree.get::<_, Option<String>>(6),
+        persisted_tree.get::<_, Option<String>>(8),
         expected_tree.planted_on
     );
     assert_eq!(
-        persisted_tree.get::<_, Option<String>>(7),
+        persisted_tree.get::<_, Option<String>>(9),
         expected_tree.row_name
     );
-    assert_eq!(persisted_tree.get::<_, Vec<String>>(8), expected_tree.roles);
-    assert_eq!(persisted_tree.get::<_, bool>(9), expected_tree.is_alive);
     assert_eq!(
-        persisted_tree.get::<_, bool>(10),
+        persisted_tree.get::<_, Vec<String>>(10),
+        expected_tree.roles
+    );
+    assert_eq!(persisted_tree.get::<_, bool>(11), expected_tree.is_alive);
+    assert_eq!(
+        persisted_tree.get::<_, bool>(12),
         expected_tree.is_in_danger
-    );
-    assert_eq!(
-        persisted_tree.get::<_, Option<i16>>(11),
-        expected_tree.harvest_start_day.map(|day| day as i16)
-    );
-    assert_eq!(
-        persisted_tree.get::<_, Option<i16>>(12),
-        expected_tree.harvest_end_day.map(|day| day as i16)
     );
     assert_eq!(
         persisted_tree.get::<_, Option<f64>>(13),
@@ -144,14 +155,12 @@ fn read_tree_with_its_identity() {
             is_aggregate: false,
             cultivar_group: None,
         }),
-        cultivar: None,
-        trade_name: None,
-        identification_status: IdentificationStatus::Confirmed,
     };
     let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
     let tree = orchard_storage
         .transaction(|orchard| {
-            let plant_identity_id = orchard.find_or_create_plant_identity(apple.clone())?;
+            let plant_identity_id =
+                orchard.resolve_plant_identification(identification(apple.clone(), None))?;
             let tree = tree(plant_identity_id, 17);
             orchard.save_tree(tree.clone())?;
             Ok::<_, OrchardStorageError>(tree)
@@ -164,6 +173,8 @@ fn read_tree_with_its_identity() {
             id: TreeId(1),
             tree,
             plant_identity: apple,
+            plant_cultivar: None,
+            harvest_window: None,
         }])
     );
 }
@@ -182,14 +193,12 @@ fn change_tree_danger_by_numeric_id() {
             is_aggregate: false,
             cultivar_group: None,
         }),
-        cultivar: None,
-        trade_name: None,
-        identification_status: IdentificationStatus::Confirmed,
     };
     let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
     orchard_storage
         .transaction(|orchard| {
-            let plant_identity_id = orchard.find_or_create_plant_identity(apple)?;
+            let plant_identity_id =
+                orchard.resolve_plant_identification(identification(apple, None))?;
             orchard.save_tree(tree(plant_identity_id, 17))
         })
         .unwrap();
@@ -225,14 +234,12 @@ fn change_tree_life_status_by_numeric_id_and_clear_danger() {
             is_aggregate: false,
             cultivar_group: None,
         }),
-        cultivar: None,
-        trade_name: None,
-        identification_status: IdentificationStatus::Confirmed,
     };
     let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
     orchard_storage
         .transaction(|orchard| {
-            let plant_identity_id = orchard.find_or_create_plant_identity(apple)?;
+            let plant_identity_id =
+                orchard.resolve_plant_identification(identification(apple, None))?;
             let mut tree = tree(plant_identity_id, 17);
             tree.is_in_danger = true;
             orchard.save_tree(tree)
@@ -340,20 +347,20 @@ fn persist_legacy_details() {
     orchard_storage
         .transaction(|orchard| {
             let boskoop_identity_id = orchard
-                .find_or_create_plant_identity(PlantIdentity {
-                    common_name: "Kiwi".into(),
-                    botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-                        genus: "Actinidia".into(),
-                        species: Some("deliciosa".into()),
-                        species_is_hybrid: false,
-                        infraspecific: None,
-                        is_aggregate: false,
-                        cultivar_group: None,
-                    }),
-                    cultivar: Some("Boskoop".into()),
-                    trade_name: None,
-                    identification_status: IdentificationStatus::Confirmed,
-                })
+                .resolve_plant_identification(identification(
+                    PlantIdentity {
+                        common_name: "Kiwi".into(),
+                        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                            genus: "Actinidia".into(),
+                            species: Some("deliciosa".into()),
+                            species_is_hybrid: false,
+                            infraspecific: None,
+                            is_aggregate: false,
+                            cultivar_group: None,
+                        }),
+                    },
+                    Some("Boskoop"),
+                ))
                 .unwrap();
             orchard
                 .save_tree(Tree {
@@ -364,7 +371,9 @@ fn persist_legacy_details() {
                         legacy_identification: None,
                         source_url: None,
                     }),
-                    plant_identity_id: boskoop_identity_id,
+                    plant_identity_id: boskoop_identity_id.plant_identity_id,
+                    cultivar_id: boskoop_identity_id.cultivar_id,
+                    identification_status: IdentificationStatus::Confirmed,
                     longitude: 0.81,
                     latitude: 0.68,
                     planted_on: Some("2024-12-07".into()),
@@ -373,27 +382,25 @@ fn persist_legacy_details() {
                     is_alive: true,
                     is_in_danger: false,
                     reproductive_role: Some(ReproductiveRole::SelfFertile),
-                    harvest_start_day: None,
-                    harvest_end_day: None,
                     adult_height_meters: Some(6.0),
                     adult_width_meters: Some(5.0),
                 })
                 .unwrap();
             let cranberry_identity_id = orchard
-                .find_or_create_plant_identity(PlantIdentity {
-                    common_name: "Canneberge commune".into(),
-                    botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-                        genus: "Vaccinium".into(),
-                        species: Some("oxycoccos".into()),
-                        species_is_hybrid: false,
-                        infraspecific: None,
-                        is_aggregate: false,
-                        cultivar_group: None,
-                    }),
-                    cultivar: None,
-                    trade_name: None,
-                    identification_status: IdentificationStatus::Confirmed,
-                })
+                .resolve_plant_identification(identification(
+                    PlantIdentity {
+                        common_name: "Canneberge commune".into(),
+                        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                            genus: "Vaccinium".into(),
+                            species: Some("oxycoccos".into()),
+                            species_is_hybrid: false,
+                            infraspecific: None,
+                            is_aggregate: false,
+                            cultivar_group: None,
+                        }),
+                    },
+                    None,
+                ))
                 .unwrap();
             orchard
                 .save_tree(Tree {
@@ -407,7 +414,9 @@ fn persist_legacy_details() {
                         }),
                         source_url: None,
                     }),
-                    plant_identity_id: cranberry_identity_id,
+                    plant_identity_id: cranberry_identity_id.plant_identity_id,
+                    cultivar_id: cranberry_identity_id.cultivar_id,
+                    identification_status: IdentificationStatus::Confirmed,
                     longitude: 0.36,
                     latitude: 0.17,
                     planted_on: Some("2024-12-07".into()),
@@ -416,30 +425,28 @@ fn persist_legacy_details() {
                     is_alive: true,
                     is_in_danger: false,
                     reproductive_role: None,
-                    harvest_start_day: None,
-                    harvest_end_day: None,
                     adult_height_meters: Some(0.2),
                     adult_width_meters: Some(0.5),
                 })
                 .unwrap();
             let eisbar_identity_id = orchard
-                .find_or_create_plant_identity(PlantIdentity {
-                    common_name: "Camérisier du Kamtchatka".into(),
-                    botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-                        genus: "Lonicera".into(),
-                        species: Some("caerulea".into()),
-                        species_is_hybrid: false,
-                        infraspecific: Some(InfraspecificTaxon {
-                            rank: InfraspecificRank::Variety,
-                            name: "kamtschatica".into(),
+                .resolve_plant_identification(identification(
+                    PlantIdentity {
+                        common_name: "Camérisier du Kamtchatka".into(),
+                        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                            genus: "Lonicera".into(),
+                            species: Some("caerulea".into()),
+                            species_is_hybrid: false,
+                            infraspecific: Some(InfraspecificTaxon {
+                                rank: InfraspecificRank::Variety,
+                                name: "kamtschatica".into(),
+                            }),
+                            is_aggregate: false,
+                            cultivar_group: None,
                         }),
-                        is_aggregate: false,
-                        cultivar_group: None,
-                    }),
-                    cultivar: Some("Eisbär".into()),
-                    trade_name: None,
-                    identification_status: IdentificationStatus::Confirmed,
-                })
+                    },
+                    Some("Eisbär"),
+                ))
                 .unwrap();
             orchard
                 .save_tree(Tree {
@@ -450,7 +457,9 @@ fn persist_legacy_details() {
                         legacy_identification: None,
                         source_url: Some(source_url.into()),
                     }),
-                    plant_identity_id: eisbar_identity_id,
+                    plant_identity_id: eisbar_identity_id.plant_identity_id,
+                    cultivar_id: eisbar_identity_id.cultivar_id,
+                    identification_status: IdentificationStatus::Confirmed,
                     longitude: 0.57,
                     latitude: 0.83,
                     planted_on: Some("2023-10-21".into()),
@@ -459,8 +468,6 @@ fn persist_legacy_details() {
                     is_alive: true,
                     is_in_danger: false,
                     reproductive_role: None,
-                    harvest_start_day: None,
-                    harvest_end_day: None,
                     adult_height_meters: Some(1.5),
                     adult_width_meters: Some(1.2),
                 })
@@ -516,20 +523,20 @@ fn roll_back_batch() {
 
     let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
     let result = orchard_storage.transaction(|orchard| {
-        let plant_identity_id = orchard.find_or_create_plant_identity(PlantIdentity {
-            common_name: "Kiwi".into(),
-            botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-                genus: "Actinidia".into(),
-                species: Some("deliciosa".into()),
-                species_is_hybrid: false,
-                infraspecific: None,
-                is_aggregate: false,
-                cultivar_group: None,
-            }),
-            cultivar: Some("Boskoop".into()),
-            trade_name: None,
-            identification_status: IdentificationStatus::Confirmed,
-        })?;
+        let plant_identity_id = orchard.resolve_plant_identification(identification(
+            PlantIdentity {
+                common_name: "Kiwi".into(),
+                botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                    genus: "Actinidia".into(),
+                    species: Some("deliciosa".into()),
+                    species_is_hybrid: false,
+                    infraspecific: None,
+                    is_aggregate: false,
+                    cultivar_group: None,
+                }),
+            },
+            Some("Boskoop"),
+        ))?;
         orchard.save_tree(tree(plant_identity_id, 64))?;
         orchard.save_tree(tree(plant_identity_id, 132))?;
         assert!(orchard.is_legacy_tree_already_imported(64)?);
@@ -548,6 +555,112 @@ fn roll_back_batch() {
         .get(0);
     assert_eq!(persisted_tree_count, 0);
     assert_eq!(persisted_identity_count, 0);
+}
+
+#[test]
+fn normalization_migration_splits_cultivars_and_moves_tree_specific_fields() {
+    let _database_lock = database_lock();
+    let database_url = std::env::var("ORCHARD_TEST_DATABASE_URL")
+        .expect("ORCHARD_TEST_DATABASE_URL must point to the dedicated test database");
+    let mut connection = Client::connect(&database_url, NoTls).unwrap();
+    connection
+        .batch_execute(
+            "DROP SCHEMA IF EXISTS normalization_test CASCADE;
+             CREATE SCHEMA normalization_test;
+             SET search_path TO normalization_test, public;",
+        )
+        .unwrap();
+    connection
+        .batch_execute(include_str!(
+            "../../../../db/migrations/001_create_trees.sql"
+        ))
+        .unwrap();
+    connection
+        .batch_execute(
+            r#"
+            INSERT INTO plant_identities (
+                common_name, botanical_taxon, cultivar, trade_name,
+                identification_status, identity_key
+            ) VALUES
+                (
+                    'Pommier',
+                    '{"Named":{"genus":"Malus","species":"domestica","species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}',
+                    NULL, NULL, 'confirmed', 'base'
+                ),
+                (
+                    'Pomme Gala',
+                    '{"Named":{"genus":"Malus","species":"domestica","species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}',
+                    'Gala', NULL, 'confirmed', 'gala'
+                ),
+                (
+                    'Pomme Golden',
+                    '{"Named":{"genus":"Malus","species":"domestica","species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}',
+                    'Golden', 'Golden Delicious', 'uncertain', 'golden'
+                );
+            INSERT INTO trees (
+                legacy_feature_id, plant_identity_id, location, roles, is_alive,
+                harvest_start_day, harvest_end_day
+            ) VALUES
+                (1, 1, ST_SetSRID(ST_MakePoint(0.1, 0.1), 4326), '{fruit}', TRUE, 210, 260),
+                (2, 2, ST_SetSRID(ST_MakePoint(0.2, 0.2), 4326), '{fruit}', TRUE, 210, 260),
+                (3, 3, ST_SetSRID(ST_MakePoint(0.3, 0.3), 4326), '{fruit}', TRUE, 210, 260);
+            "#,
+        )
+        .unwrap();
+
+    connection
+        .batch_execute(include_str!(
+            "../../../../db/migrations/007_normalize_plant_identities.sql"
+        ))
+        .unwrap();
+
+    let identity = connection
+        .query_one(
+            "SELECT count(*), min(common_name), min(harvest_start_month),
+                    min(harvest_start_day), min(harvest_end_month), min(harvest_end_day)
+             FROM plant_identities",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(identity.get::<_, i64>(0), 1);
+    assert_eq!(identity.get::<_, Option<String>>(1), Some("Pommier".into()));
+    assert_eq!(identity.get::<_, Option<i16>>(2), Some(7));
+    assert_eq!(identity.get::<_, Option<i16>>(3), Some(28));
+    assert_eq!(identity.get::<_, Option<i16>>(4), Some(9));
+    assert_eq!(identity.get::<_, Option<i16>>(5), Some(16));
+
+    let cultivars = connection
+        .query(
+            "SELECT plant_identity_id, cultivar, trade_name
+             FROM plant_cultivars ORDER BY id",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(cultivars.len(), 2);
+    assert_eq!(cultivars[0].get::<_, i64>(0), 1);
+    assert_eq!(cultivars[0].get::<_, String>(1), "Gala");
+    assert_eq!(cultivars[1].get::<_, String>(1), "Golden");
+    assert_eq!(
+        cultivars[1].get::<_, Option<String>>(2),
+        Some("Golden Delicious".into())
+    );
+
+    let trees = connection
+        .query(
+            "SELECT plant_identity_id, cultivar_id, identification_status
+             FROM trees ORDER BY legacy_feature_id",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(trees[0].get::<_, i64>(0), 1);
+    assert_eq!(trees[0].get::<_, Option<i64>>(1), None);
+    assert_eq!(trees[1].get::<_, Option<i64>>(1), Some(1));
+    assert_eq!(trees[2].get::<_, Option<i64>>(1), Some(2));
+    assert_eq!(trees[2].get::<_, String>(2), "uncertain");
+
+    connection
+        .batch_execute("DROP SCHEMA normalization_test CASCADE")
+        .unwrap();
 }
 
 #[test]
@@ -688,7 +801,18 @@ fn migration_preserves_legacy_labels() {
         .unwrap();
 }
 
-fn tree(plant_identity_id: PlantIdentityId, legacy_feature_id: u32) -> Tree {
+fn identification(plant_identity: PlantIdentity, cultivar: Option<&str>) -> PlantIdentification {
+    PlantIdentification {
+        plant_identity,
+        plant_cultivar: cultivar.map(|cultivar| PlantCultivar {
+            cultivar: cultivar.into(),
+            trade_name: None,
+        }),
+        identification_status: IdentificationStatus::Confirmed,
+    }
+}
+
+fn tree(plant_identity: PlantIdentityReference, legacy_feature_id: u32) -> Tree {
     Tree {
         legacy_source: Some(LegacyTreeSource {
             feature_id: legacy_feature_id,
@@ -697,7 +821,9 @@ fn tree(plant_identity_id: PlantIdentityId, legacy_feature_id: u32) -> Tree {
             legacy_identification: None,
             source_url: None,
         }),
-        plant_identity_id,
+        plant_identity_id: plant_identity.plant_identity_id,
+        cultivar_id: plant_identity.cultivar_id,
+        identification_status: IdentificationStatus::Confirmed,
         longitude: 0.81,
         latitude: 0.68,
         planted_on: Some("2024-12-07".into()),
@@ -706,8 +832,6 @@ fn tree(plant_identity_id: PlantIdentityId, legacy_feature_id: u32) -> Tree {
         is_alive: true,
         is_in_danger: false,
         reproductive_role: Some(ReproductiveRole::SelfFertile),
-        harvest_start_day: None,
-        harvest_end_day: None,
         adult_height_meters: Some(6.0),
         adult_width_meters: Some(5.0),
     }
@@ -747,9 +871,20 @@ fn empty_orchard_database() -> (String, Client) {
             "../../../../db/migrations/006_create_users_and_aerial_overlays.sql"
         ))
         .unwrap();
+    let normalization_was_applied: bool = verification_connection
+        .query_one("SELECT to_regclass('plant_cultivars') IS NOT NULL", &[])
+        .unwrap()
+        .get(0);
+    if !normalization_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/007_normalize_plant_identities.sql"
+            ))
+            .unwrap();
+    }
     verification_connection
         .batch_execute(
-            "TRUNCATE TABLE aerial_overlays, users, trees, plant_identities
+            "TRUNCATE TABLE aerial_overlays, users, trees, plant_cultivars, plant_identities
              RESTART IDENTITY CASCADE",
         )
         .unwrap();
