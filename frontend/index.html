@@ -251,8 +251,6 @@
             },
           ],
         },
-        center: [0.5, 0.5],
-        zoom: 20,
         maxZoom: 24,
       });
 
@@ -486,43 +484,61 @@
           },
         });
 
-        map.addSource("orchard-photo", {
-          type: "image",
-          url: "drone-clean.png",
-          coordinates: [
-            [0.0, 1.0],
-            [1.0, 1.0],
-            [1.0, 0.0],
-            [0.0, 0.0],
-          ],
-        });
-
-        map.addLayer(
-          {
-            id: "orchard-photo-layer",
-            type: "raster",
-            source: "orchard-photo",
-            paint: {
-              "raster-opacity": 0.9,
-            },
-          },
-          "trees",
-        );
-
-        loadOrchardTrees();
+        initializeMap();
       });
+
+      async function initializeMap() {
+        const status = document.getElementById("map-status");
+        try {
+          await loadMapConfiguration();
+          await fetchOrchardTrees();
+          status.hidden = true;
+        } catch (error) {
+          console.error("Could not initialize the orchard map", error);
+          status.textContent = "Could not load the orchard map. Try reloading the page.";
+        }
+      }
+
+      async function loadMapConfiguration() {
+        const response = await fetch("/api/map-config");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const configuration = await response.json();
+
+        map.jumpTo({ center: configuration.default_center, zoom: 20 });
+        configuration.aerial_overlays.forEach((overlay) => {
+          const sourceId = `aerial-overlay-${overlay.id}`;
+          map.addSource(sourceId, {
+            type: "image",
+            url: `/api/aerial-overlays/${encodeURIComponent(overlay.id)}/image`,
+            coordinates: overlay.coordinates,
+          });
+          map.addLayer(
+            {
+              id: `${sourceId}-layer`,
+              type: "raster",
+              source: sourceId,
+              paint: { "raster-opacity": 0.9 },
+            },
+            "trees",
+          );
+        });
+      }
+
+      async function fetchOrchardTrees() {
+        const response = await fetch("/api/trees.geojson");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        map.getSource("orchard").setData(await response.json());
+      }
 
       async function loadOrchardTrees() {
         const status = document.getElementById("map-status");
         try {
-          const response = await fetch("/api/trees.geojson");
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const orchard = await response.json();
-          map.getSource("orchard").setData(orchard);
+          await fetchOrchardTrees();
           status.hidden = true;
         } catch (error) {
           console.error("Could not load orchard trees", error);
           status.textContent = "Could not load orchard trees. Try reloading the page.";
+          status.hidden = false;
         }
       }
 

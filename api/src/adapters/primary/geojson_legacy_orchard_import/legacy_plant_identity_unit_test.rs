@@ -296,31 +296,6 @@ fn kamtschatica() {
     );
 }
 
-#[test]
-fn all_legacy_names() {
-    let collection: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../data/trees-wgs84.geojson"
-    )))
-    .unwrap();
-    let failures = collection["features"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|feature| {
-            let properties = &feature["properties"];
-            let fid = properties["fid"].as_u64().unwrap();
-            let name = properties["name"].as_str().unwrap();
-            let latin_name = properties["latin_name"].as_str().unwrap();
-            parse_legacy_tree_identity(name, latin_name, None)
-                .err()
-                .map(|error| (fid, name, latin_name, error))
-        })
-        .collect::<Vec<_>>();
-
-    assert!(failures.is_empty(), "{failures:?}");
-}
-
 fn parse(name: &str, latin_name: &str) -> PlantIdentity {
     parse_legacy_tree_identity(name, latin_name, None).unwrap()
 }

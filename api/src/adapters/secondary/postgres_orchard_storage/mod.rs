@@ -1,10 +1,13 @@
 use postgres::{Client, NoTls};
 
 use crate::hexagon::models::{
-    IdentificationStatus, LegacyPlantIdentification, LegacyTreeSource, OrchardTree, PlantIdentity,
+    AerialOverlay, AerialOverlayId, AerialOverlayImage, GeoPoint, IdentificationStatus,
+    LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, OrchardTree, PlantIdentity,
     PlantIdentityId, ReproductiveRole, Tree, TreeId,
 };
-use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
+use crate::hexagon::ports::{
+    MapConfigurationStorage, MapConfigurationStorageError, OrchardStorage, OrchardStorageError,
+};
 
 /// PostgreSQL/PostGIS implementation of orchard storage.
 pub struct PostgresOrchardStorage {
@@ -128,6 +131,99 @@ impl OrchardStorage for PostgresOrchardStorage {
             .into_iter()
             .map(|row| orchard_tree_from_row(&row))
             .collect()
+    }
+}
+
+impl MapConfigurationStorage for PostgresOrchardStorage {
+    fn map_configuration(
+        &mut self,
+    ) -> Result<Option<MapConfiguration>, MapConfigurationStorageError> {
+        let default_user = self
+            .client
+            .query_opt(
+                "SELECT id, ST_X(default_center), ST_Y(default_center)
+                 FROM users
+                 WHERE is_default = TRUE
+                 ORDER BY id
+                 LIMIT 1",
+                &[],
+            )
+            .map_err(|_| MapConfigurationStorageError::ConfigurationCouldNotBeRead)?;
+        let Some(default_user) = default_user else {
+            return Ok(None);
+        };
+        let user_id = default_user.get::<_, i64>(0);
+        let aerial_overlays = self
+            .client
+            .query(
+                "SELECT
+                    id, name,
+                    ST_X(top_left), ST_Y(top_left),
+                    ST_X(top_right), ST_Y(top_right),
+                    ST_X(bottom_right), ST_Y(bottom_right),
+                    ST_X(bottom_left), ST_Y(bottom_left)
+                 FROM aerial_overlays
+                 WHERE user_id = $1
+                 ORDER BY sort_order, id",
+                &[&user_id],
+            )
+            .map_err(|_| MapConfigurationStorageError::ConfigurationCouldNotBeRead)?
+            .into_iter()
+            .map(|row| {
+                let id = u64::try_from(row.get::<_, i64>(0))
+                    .map_err(|_| MapConfigurationStorageError::ConfigurationCouldNotBeRead)?;
+                Ok(AerialOverlay {
+                    id: AerialOverlayId(id),
+                    name: row.get(1),
+                    corners: [
+                        GeoPoint {
+                            longitude: row.get(2),
+                            latitude: row.get(3),
+                        },
+                        GeoPoint {
+                            longitude: row.get(4),
+                            latitude: row.get(5),
+                        },
+                        GeoPoint {
+                            longitude: row.get(6),
+                            latitude: row.get(7),
+                        },
+                        GeoPoint {
+                            longitude: row.get(8),
+                            latitude: row.get(9),
+                        },
+                    ],
+                })
+            })
+            .collect::<Result<Vec<_>, MapConfigurationStorageError>>()?;
+
+        Ok(Some(MapConfiguration {
+            default_center: GeoPoint {
+                longitude: default_user.get(1),
+                latitude: default_user.get(2),
+            },
+            aerial_overlays,
+        }))
+    }
+
+    fn aerial_overlay_image(
+        &mut self,
+        overlay_id: AerialOverlayId,
+    ) -> Result<Option<AerialOverlayImage>, MapConfigurationStorageError> {
+        let overlay_id = i64::try_from(overlay_id.0)
+            .map_err(|_| MapConfigurationStorageError::AerialOverlayImageCouldNotBeRead)?;
+        self.client
+            .query_opt(
+                "SELECT media_type, image_bytes FROM aerial_overlays WHERE id = $1",
+                &[&overlay_id],
+            )
+            .map(|row| {
+                row.map(|row| AerialOverlayImage {
+                    media_type: row.get(0),
+                    bytes: row.get(1),
+                })
+            })
+            .map_err(|_| MapConfigurationStorageError::AerialOverlayImageCouldNotBeRead)
     }
 }
 

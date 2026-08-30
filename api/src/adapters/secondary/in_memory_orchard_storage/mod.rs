@@ -1,9 +1,12 @@
 use std::sync::{Arc, Mutex};
 
 use crate::hexagon::models::{
-    BotanicalTaxon, OrchardTree, PlantIdentity, PlantIdentityId, Tree, TreeId,
+    AerialOverlayId, AerialOverlayImage, BotanicalTaxon, MapConfiguration, OrchardTree,
+    PlantIdentity, PlantIdentityId, Tree, TreeId,
 };
-use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
+use crate::hexagon::ports::{
+    MapConfigurationStorage, MapConfigurationStorageError, OrchardStorage, OrchardStorageError,
+};
 
 /// In-memory transactional orchard storage for use-case and adapter tests.
 pub struct InMemoryOrchardStorage {
@@ -15,6 +18,8 @@ pub struct InMemoryOrchardStorage {
     fail_when_checking_legacy_feature_ids: bool,
     fail_on_commit: bool,
     fail_when_reading_trees: bool,
+    map_configuration: Option<MapConfiguration>,
+    aerial_overlay_images: Vec<(AerialOverlayId, AerialOverlayImage)>,
     transaction: Option<InMemoryOrchardTransaction>,
 }
 
@@ -43,6 +48,8 @@ struct InMemoryOrchardConfiguration {
     fail_when_checking_legacy_feature_ids: bool,
     fail_on_commit: bool,
     fail_when_reading_trees: bool,
+    map_configuration: Option<MapConfiguration>,
+    aerial_overlay_images: Vec<(AerialOverlayId, AerialOverlayImage)>,
 }
 
 impl InMemoryOrchardStorage {
@@ -128,6 +135,18 @@ impl InMemoryOrchardStorage {
         })
     }
 
+    pub fn with_map_configuration(
+        map_configuration: MapConfiguration,
+        aerial_overlay_images: Vec<(AerialOverlayId, AerialOverlayImage)>,
+    ) -> Self {
+        Self::with_configuration(InMemoryOrchardConfiguration {
+            map_configuration: Some(map_configuration),
+            aerial_overlay_images,
+            ..Default::default()
+        })
+        .0
+    }
+
     fn with_configuration(
         configuration: InMemoryOrchardConfiguration,
     ) -> (Self, InMemoryOrchardObserver) {
@@ -146,10 +165,31 @@ impl InMemoryOrchardStorage {
                     .fail_when_checking_legacy_feature_ids,
                 fail_on_commit: configuration.fail_on_commit,
                 fail_when_reading_trees: configuration.fail_when_reading_trees,
+                map_configuration: configuration.map_configuration,
+                aerial_overlay_images: configuration.aerial_overlay_images,
                 transaction: None,
             },
             InMemoryOrchardObserver { orchard },
         )
+    }
+}
+
+impl MapConfigurationStorage for InMemoryOrchardStorage {
+    fn map_configuration(
+        &mut self,
+    ) -> Result<Option<MapConfiguration>, MapConfigurationStorageError> {
+        Ok(self.map_configuration.clone())
+    }
+
+    fn aerial_overlay_image(
+        &mut self,
+        overlay_id: AerialOverlayId,
+    ) -> Result<Option<AerialOverlayImage>, MapConfigurationStorageError> {
+        Ok(self
+            .aerial_overlay_images
+            .iter()
+            .find(|(id, _)| *id == overlay_id)
+            .map(|(_, image)| image.clone()))
     }
 }
 

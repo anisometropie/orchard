@@ -1,10 +1,11 @@
 use orchard_api::adapters::secondary::PostgresOrchardStorage;
 use orchard_api::hexagon::models::{
-    BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon,
-    LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, OrchardTree, PlantIdentity,
-    PlantIdentityId, ReproductiveRole, Tree, TreeId,
+    AerialOverlay, AerialOverlayId, AerialOverlayImage, BotanicalTaxon, GeoPoint,
+    IdentificationStatus, InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification,
+    LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardTree, PlantIdentity, PlantIdentityId,
+    ReproductiveRole, Tree, TreeId,
 };
-use orchard_api::hexagon::ports::{OrchardStorage, OrchardStorageError};
+use orchard_api::hexagon::ports::{MapConfigurationStorage, OrchardStorage, OrchardStorageError};
 use orchard_api::hexagon::use_cases::change_tree_condition::{
     TreeConditionChanged, change_tree_condition,
 };
@@ -253,6 +254,80 @@ fn change_tree_life_status_by_numeric_id_and_clear_danger() {
         .unwrap();
     assert!(!row.get::<_, bool>(0));
     assert!(!row.get::<_, bool>(1));
+}
+
+#[test]
+fn read_default_map_configuration_and_aerial_image() {
+    let _database_lock = database_lock();
+    let (database_url, mut connection) = empty_orchard_database();
+    let user_id: i64 = connection
+        .query_one(
+            "INSERT INTO users (username, default_center, is_default)
+             VALUES ('owner', ST_SetSRID(ST_MakePoint(0.5, 0.5), 4326), TRUE)
+             RETURNING id",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    let image_bytes = vec![1_u8, 2, 3, 4];
+    connection
+        .execute(
+            "INSERT INTO aerial_overlays (
+                user_id, name, image_bytes, media_type,
+                top_left, top_right, bottom_right, bottom_left
+             ) VALUES (
+                $1, 'Main orchard', $2, 'image/png',
+                ST_SetSRID(ST_MakePoint(0.0, 1.0), 4326),
+                ST_SetSRID(ST_MakePoint(1.0, 1.0), 4326),
+                ST_SetSRID(ST_MakePoint(1.0, 0.0), 4326),
+                ST_SetSRID(ST_MakePoint(0.0, 0.0), 4326)
+             )",
+            &[&user_id, &image_bytes],
+        )
+        .unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+
+    let configuration = storage.map_configuration().unwrap();
+    let image = storage.aerial_overlay_image(AerialOverlayId(1)).unwrap();
+
+    assert_eq!(
+        configuration,
+        Some(MapConfiguration {
+            default_center: GeoPoint {
+                longitude: 0.5,
+                latitude: 0.5,
+            },
+            aerial_overlays: vec![AerialOverlay {
+                id: AerialOverlayId(1),
+                name: "Main orchard".into(),
+                corners: [
+                    GeoPoint {
+                        longitude: 0.0,
+                        latitude: 1.0,
+                    },
+                    GeoPoint {
+                        longitude: 1.0,
+                        latitude: 1.0,
+                    },
+                    GeoPoint {
+                        longitude: 1.0,
+                        latitude: 0.0,
+                    },
+                    GeoPoint {
+                        longitude: 0.0,
+                        latitude: 0.0,
+                    },
+                ],
+            }],
+        })
+    );
+    assert_eq!(
+        image,
+        Some(AerialOverlayImage {
+            media_type: "image/png".into(),
+            bytes: image_bytes,
+        })
+    );
 }
 
 #[test]
@@ -668,7 +743,15 @@ fn empty_orchard_database() -> (String, Client) {
         ))
         .unwrap();
     verification_connection
-        .batch_execute("TRUNCATE TABLE trees, plant_identities RESTART IDENTITY CASCADE")
+        .batch_execute(include_str!(
+            "../../../../db/migrations/006_create_users_and_aerial_overlays.sql"
+        ))
+        .unwrap();
+    verification_connection
+        .batch_execute(
+            "TRUNCATE TABLE aerial_overlays, users, trees, plant_identities
+             RESTART IDENTITY CASCADE",
+        )
         .unwrap();
     (database_url, verification_connection)
 }

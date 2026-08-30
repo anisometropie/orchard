@@ -16,6 +16,9 @@ writing the smallest Green implementation.
 | --- | --- | --- | --- |
 | Implemented | `TREE_CREATION_REQUESTED` | Create tree | A valid tree at a map coordinate is persisted with a reusable plant identity. |
 | Implemented | `TREE_CONDITION_CHANGED` | Change tree condition | Any supplied danger/life fields change atomically without changing another tree; marking a tree dead clears danger. |
+| Implemented | `MAP_CONFIGURATION_REQUESTED` | Load map configuration | The default user's center and aerial-overlay placement are loaded from persistent storage. |
+| Implemented | `AERIAL_OVERLAY_IMAGE_REQUESTED` | Load aerial overlay image | An aerial overlay's image bytes and media type are loaded from persistent storage. |
+| Not started | `USER_AUTHENTICATION_REQUESTED` | Authenticate user | A user proves their identity before private orchard coordinates, overlays, trees, or write operations are returned. |
 | Not started | `TREE_FIELD_SUGGESTIONS_REQUESTED` | Suggest tree fields | While entering a tree, an orchardist receives matching known species/cultivar suggestions from the fields already typed and may use suggested Latin name, roles, and harvest start/end days without retyping them. |
 | Not started | `TREE_DETAILS_CHANGED` | Update tree | A selected tree's editable fields change without changing its identity. |
 | Not started | `TREE_SEARCH_REQUESTED` | Search/list trees | Matching trees are returned for name, Latin name, role, harvest day, and danger filters. |
@@ -24,6 +27,15 @@ writing the smallest Green implementation.
 | Not started | `NEXT_TREE_TO_WATER_REQUESTED` | Get next tree to water | The first unwatered tree in the row's defined order is returned. |
 | Not started | `TREE_WATERED` | Record watering | One tree is recorded as watered in the active run and the next result advances. |
 | Implemented | `LEGACY_ORCHARD_IMPORT_REQUESTED` | Import legacy orchard | The existing GeoJSON trees and rows are migrated atomically with reviewed taxonomy mappings. |
+
+## Privacy boundary
+
+Map centers and aerial-overlay images/coordinates are stored in PostgreSQL and
+are no longer embedded in tracked frontend files. Until user authentication is
+implemented, the map configuration, aerial image, and tree endpoints remain
+public to anyone who can reach the server. Authentication must protect all
+coordinate-bearing reads as one feature; a user table alone is not access
+control.
 
 ## Plant identity catalog
 

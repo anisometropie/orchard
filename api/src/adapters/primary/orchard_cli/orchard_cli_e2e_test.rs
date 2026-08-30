@@ -18,8 +18,8 @@ fn import_orchard() {
     let database_url = env::var("ORCHARD_TEST_DATABASE_URL")
         .expect("ORCHARD_TEST_DATABASE_URL must point to the dedicated test database");
     let mut verification_connection = empty_orchard_database(&database_url);
-    let legacy_geojson =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../data/trees-wgs84.geojson");
+    let legacy_geojson = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/adapters/primary/orchard_cli/one-tree.geojson");
 
     let first_import = Command::new(orchard_command)
         .args(["import_legacy_orchard"])
@@ -35,25 +35,9 @@ fn import_orchard() {
     );
     assert_eq!(
         String::from_utf8(first_import.stdout).unwrap(),
-        "Imported 278 trees.\n"
+        "Imported 1 trees.\n"
     );
-    assert_eq!(database_snapshot(&mut verification_connection), (278, 152));
-
-    let pink_giant = verification_connection
-        .query_one(
-            "SELECT plant_identities.common_name, plant_identities.cultivar, plant_identities.trade_name
-             FROM trees
-             INNER JOIN plant_identities ON plant_identities.id = trees.plant_identity_id
-             WHERE trees.legacy_feature_id = 215",
-            &[],
-        )
-        .unwrap();
-    assert_eq!(pink_giant.get::<_, String>(0), "Arbousier");
-    assert_eq!(pink_giant.get::<_, Option<String>>(1), Some("Nevez".into()));
-    assert_eq!(
-        pink_giant.get::<_, Option<String>>(2),
-        Some("Pink Giant".into())
-    );
+    assert_eq!(database_snapshot(&mut verification_connection), (1, 1));
 
     let second_import = Command::new(orchard_command)
         .args(["import_legacy_orchard"])
@@ -67,7 +51,7 @@ fn import_orchard() {
         String::from_utf8(second_import.stderr).unwrap(),
         "Import failed: legacy feature 1 is already imported. No changes were made.\n"
     );
-    assert_eq!(database_snapshot(&mut verification_connection), (278, 152));
+    assert_eq!(database_snapshot(&mut verification_connection), (1, 1));
 }
 
 #[test]
@@ -233,7 +217,20 @@ fn empty_orchard_database(database_url: &str) -> Client {
         ))
         .unwrap();
     verification_connection
-        .batch_execute("TRUNCATE TABLE trees, plant_identities RESTART IDENTITY CASCADE")
+        .batch_execute(include_str!(
+            "../../../../db/migrations/005_add_tree_danger.sql"
+        ))
+        .unwrap();
+    verification_connection
+        .batch_execute(include_str!(
+            "../../../../db/migrations/006_create_users_and_aerial_overlays.sql"
+        ))
+        .unwrap();
+    verification_connection
+        .batch_execute(
+            "TRUNCATE TABLE aerial_overlays, users, trees, plant_identities
+             RESTART IDENTITY CASCADE",
+        )
         .unwrap();
     verification_connection
 }

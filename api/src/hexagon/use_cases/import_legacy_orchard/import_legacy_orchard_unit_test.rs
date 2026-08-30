@@ -495,18 +495,8 @@ fn pistachio() -> LegacyTreeSnapshot {
 
 fn fig(feature_id: u32) -> LegacyTreeSnapshot {
     let (longitude, latitude, planted_on, row_name) = match feature_id {
-        2 => (
-            0.13,
-            0.41,
-            Some("2023-03-19"),
-            "10. Bas bas bas",
-        ),
-        249 => (
-            0.88,
-            0.76,
-            Some("2024-12-09"),
-            "1. Haut haut haut",
-        ),
+        2 => (0.13, 0.41, Some("2023-03-19"), "10. Bas bas bas"),
+        249 => (0.88, 0.76, Some("2024-12-09"), "1. Haut haut haut"),
         _ => panic!("only real Goutte d’Or feature ids belong in this fixture"),
     };
     legacy_tree(LegacyTreeFixture {

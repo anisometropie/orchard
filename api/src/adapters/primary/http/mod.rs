@@ -5,8 +5,10 @@ use std::{
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Path, State},
-    http::StatusCode,
+    http::{StatusCode, header},
+    response::Response,
     routing::{get, patch, post},
 };
 use serde::Deserialize;
@@ -14,21 +16,28 @@ use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::hexagon::models::{
-    BotanicalTaxon, InfraspecificRank, NamedTaxon, OrchardTree, PlantIdentity, Tree, TreeId,
+    AerialOverlayId, BotanicalTaxon, InfraspecificRank, MapConfiguration, NamedTaxon, OrchardTree,
+    PlantIdentity, Tree, TreeId,
 };
-use crate::hexagon::ports::OrchardStorage;
+use crate::hexagon::ports::{MapConfigurationStorage, OrchardStorage};
 use crate::hexagon::use_cases::change_tree_condition::{
     TreeConditionChangeError, TreeConditionChanged, change_tree_condition,
 };
 use crate::hexagon::use_cases::create_tree::{TreeCreationRequested, create_tree};
 use crate::hexagon::use_cases::list_orchard_trees::list_orchard_trees;
+use crate::hexagon::use_cases::load_aerial_overlay_image::{
+    AerialOverlayImageLoadError, load_aerial_overlay_image,
+};
+use crate::hexagon::use_cases::load_map_configuration::{
+    MapConfigurationLoadError, load_map_configuration,
+};
 
 pub async fn start_http_server<U>(
     orchard_storage: U,
     address: SocketAddr,
 ) -> Result<RunningHttpServer, std::io::Error>
 where
-    U: OrchardStorage + Send + 'static,
+    U: OrchardStorage + MapConfigurationStorage + Send + 'static,
 {
     let listener = TcpListener::bind(address).await?;
     let address = listener.local_addr()?;
@@ -46,12 +55,17 @@ where
 
 pub fn router<U>(orchard_storage: Arc<Mutex<U>>) -> Router
 where
-    U: OrchardStorage + Send + 'static,
+    U: OrchardStorage + MapConfigurationStorage + Send + 'static,
 {
     Router::new()
         .route("/trees", post(create_tree_handler::<U>))
         .route("/trees/{tree_id}", patch(change_tree_handler::<U>))
         .route("/trees.geojson", get(list_trees_handler::<U>))
+        .route("/map-config", get(map_configuration_handler::<U>))
+        .route(
+            "/aerial-overlays/{overlay_id}/image",
+            get(aerial_overlay_image_handler::<U>),
+        )
         .with_state(orchard_storage)
 }
 
@@ -80,6 +94,69 @@ impl Drop for RunningHttpServer {
             server_task.abort();
         }
     }
+}
+
+async fn map_configuration_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: MapConfigurationStorage + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || load_map_configuration(&mut *storage.lock().unwrap()))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(|configuration| Json(map_configuration_json(configuration)))
+        .map_err(|error| match error {
+            MapConfigurationLoadError::ConfigurationNotFound => StatusCode::NOT_FOUND,
+            MapConfigurationLoadError::ConfigurationCouldNotBeRead => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+}
+
+async fn aerial_overlay_image_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path(overlay_id): Path<u64>,
+) -> Result<Response, StatusCode>
+where
+    U: MapConfigurationStorage + Send + 'static,
+{
+    let image = tokio::task::spawn_blocking(move || {
+        load_aerial_overlay_image(AerialOverlayId(overlay_id), &mut *storage.lock().unwrap())
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|error| match error {
+        AerialOverlayImageLoadError::ImageNotFound => StatusCode::NOT_FOUND,
+        AerialOverlayImageLoadError::ImageCouldNotBeRead => StatusCode::INTERNAL_SERVER_ERROR,
+    })?;
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, image.media_type)
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(image.bytes))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn map_configuration_json(configuration: MapConfiguration) -> Value {
+    let aerial_overlays = configuration.aerial_overlays.into_iter().map(|overlay| {
+        let coordinates = overlay
+            .corners
+            .map(|point| vec![point.longitude, point.latitude]);
+        json!({
+            "id": overlay.id.0,
+            "name": overlay.name,
+            "coordinates": coordinates,
+        })
+    });
+
+    json!({
+        "default_center": [
+            configuration.default_center.longitude,
+            configuration.default_center.latitude
+        ],
+        "aerial_overlays": aerial_overlays.collect::<Vec<_>>(),
+    })
 }
 
 async fn list_trees_handler<U>(

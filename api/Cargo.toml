@@ -41,6 +41,14 @@ name = "list_orchard_trees_unit"
 path = "src/hexagon/use_cases/list_orchard_trees/list_orchard_trees_unit_test.rs"
 
 [[test]]
+name = "load_map_configuration_unit"
+path = "src/hexagon/use_cases/load_map_configuration/load_map_configuration_unit_test.rs"
+
+[[test]]
+name = "load_aerial_overlay_image_unit"
+path = "src/hexagon/use_cases/load_aerial_overlay_image/load_aerial_overlay_image_unit_test.rs"
+
+[[test]]
 name = "change_tree_condition_unit"
 path = "src/hexagon/use_cases/change_tree_condition/change_tree_condition_unit_test.rs"
 

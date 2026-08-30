@@ -1,7 +1,8 @@
 use orchard_api::adapters::primary::http::start_http_server;
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
-    BotanicalTaxon, IdentificationStatus, NamedTaxon, PlantIdentity, PlantIdentityId, Tree,
+    AerialOverlay, AerialOverlayId, AerialOverlayImage, BotanicalTaxon, GeoPoint,
+    IdentificationStatus, MapConfiguration, NamedTaxon, PlantIdentity, PlantIdentityId, Tree,
 };
 use reqwest::StatusCode;
 
@@ -206,6 +207,82 @@ async fn reject_an_empty_partial_tree_update() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn serve_default_map_configuration_and_aerial_image() {
+    let image = AerialOverlayImage {
+        media_type: "image/png".into(),
+        bytes: vec![1, 2, 3, 4],
+    };
+    let orchard = InMemoryOrchardStorage::with_map_configuration(
+        MapConfiguration {
+            default_center: GeoPoint {
+                longitude: 0.5,
+                latitude: 0.5,
+            },
+            aerial_overlays: vec![AerialOverlay {
+                id: AerialOverlayId(7),
+                name: "Main orchard".into(),
+                corners: [
+                    GeoPoint {
+                        longitude: 0.0,
+                        latitude: 1.0,
+                    },
+                    GeoPoint {
+                        longitude: 1.0,
+                        latitude: 1.0,
+                    },
+                    GeoPoint {
+                        longitude: 1.0,
+                        latitude: 0.0,
+                    },
+                    GeoPoint {
+                        longitude: 0.0,
+                        latitude: 0.0,
+                    },
+                ],
+            }],
+        },
+        vec![(AerialOverlayId(7), image.clone())],
+    );
+    let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+
+    let configuration_response = reqwest::get(format!("{}/map-config", server.url()))
+        .await
+        .unwrap();
+    let image_response = reqwest::get(format!("{}/aerial-overlays/7/image", server.url()))
+        .await
+        .unwrap();
+
+    assert_eq!(configuration_response.status(), StatusCode::OK);
+    assert_eq!(
+        configuration_response
+            .json::<serde_json::Value>()
+            .await
+            .unwrap(),
+        serde_json::json!({
+            "default_center": [0.5, 0.5],
+            "aerial_overlays": [{
+                "id": 7,
+                "name": "Main orchard",
+                "coordinates": [
+                    [0.0, 1.0],
+                    [1.0, 1.0],
+                    [1.0, 0.0],
+                    [0.0, 0.0]
+                ]
+            }]
+        })
+    );
+    assert_eq!(image_response.status(), StatusCode::OK);
+    assert_eq!(
+        image_response.headers().get("content-type").unwrap(),
+        "image/png"
+    );
+    assert_eq!(image_response.bytes().await.unwrap(), image.bytes);
 }
 
 fn tree_with_condition(is_alive: bool, is_in_danger: bool) -> Tree {
