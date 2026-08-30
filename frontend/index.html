@@ -258,6 +258,21 @@
         padding: 4px 5px;
         width: 72px;
       }
+      .harvest-window-list,
+      .harvest-schedule {
+        display: grid;
+        gap: 5px;
+      }
+      .harvest-window-row {
+        align-items: end;
+        display: flex;
+        gap: 5px;
+      }
+      .harvest-schedule + .harvest-schedule {
+        border-top: 1px solid #ddd;
+        margin-top: 6px;
+        padding-top: 6px;
+      }
       .harvest-editor-actions {
         display: flex;
         gap: 5px;
@@ -506,12 +521,14 @@
     <script type="module">
       import {
         filterTreeFeatures,
+        harvestScheduleEndpoint,
         summarizeSpecies,
         taxonomyOptions,
       } from "./orchard-inventory.mjs";
       import {
         harvestAvailability,
         harvestAvailabilitySummary,
+        harvestLayerFilter,
         parseAnnualDate,
       } from "./harvest-window.mjs";
 
@@ -966,33 +983,63 @@
 
       function appendHarvestCell(row, speciesSummary) {
         const cell = document.createElement("td");
-        const value = document.createElement("span");
-        value.textContent =
-          speciesSummary.harvestStart && speciesSummary.harvestEnd
-            ? `${speciesSummary.harvestStart} → ${speciesSummary.harvestEnd}`
-            : "Not set";
-        const editButton = document.createElement("button");
-        editButton.type = "button";
-        editButton.className = "harvest-edit-button";
-        editButton.textContent = "Edit";
-        editButton.addEventListener("click", () => {
-          showHarvestEditor(cell, speciesSummary);
+        const schedules = [];
+        if (speciesSummary.cultivarless) {
+          schedules.push({
+            label: "No cultivar",
+            count: speciesSummary.cultivarless.count,
+            plantIdentityId: speciesSummary.plantIdentityId,
+            cultivarId: null,
+            harvestWindows: speciesSummary.cultivarless.harvestWindows,
+          });
+        }
+        speciesSummary.cultivars.forEach((cultivar) => {
+          schedules.push({
+            label: cultivar.name,
+            count: cultivar.count,
+            plantIdentityId: speciesSummary.plantIdentityId,
+            cultivarId: cultivar.id,
+            harvestWindows: cultivar.harvestWindows,
+          });
         });
-        cell.append(value, editButton);
+        schedules.forEach((schedule) => {
+          const scheduleRow = document.createElement("div");
+          scheduleRow.className = "harvest-schedule";
+          const value = document.createElement("span");
+          value.textContent = `${schedule.label} (${schedule.count}): ${formatHarvestWindows(schedule.harvestWindows)}`;
+          const editButton = document.createElement("button");
+          editButton.type = "button";
+          editButton.className = "harvest-edit-button";
+          editButton.textContent = "Edit";
+          editButton.addEventListener("click", () => {
+            showHarvestEditor(cell, schedule);
+          });
+          scheduleRow.append(value, editButton);
+          cell.append(scheduleRow);
+        });
         row.append(cell);
       }
 
-      function showHarvestEditor(cell, speciesSummary) {
+      function formatHarvestWindows(windows) {
+        return windows.length > 0
+          ? windows.map(({ start, end }) => `${start} → ${end}`).join(" · ")
+          : "Not set";
+      }
+
+      function showHarvestEditor(cell, schedule) {
         const form = document.createElement("form");
         form.className = "harvest-editor";
-        const startInput = annualDateInput(
-          "Start (MM-DD)",
-          speciesSummary.harvestStart,
-        );
-        const endInput = annualDateInput(
-          "End (MM-DD)",
-          speciesSummary.harvestEnd,
-        );
+        const title = document.createElement("strong");
+        title.textContent = schedule.label;
+        const windowList = document.createElement("div");
+        windowList.className = "harvest-window-list";
+        const windowEditors = [];
+        const addWindow = document.createElement("button");
+        addWindow.type = "button";
+        addWindow.textContent = "Add window";
+        addWindow.addEventListener("click", () => addHarvestWindowRow());
+        const clearHint = document.createElement("small");
+        clearHint.textContent = "Remove every window, then OK, to clear the schedule.";
         const error = document.createElement("div");
         error.className = "harvest-editor-error";
         error.hidden = true;
@@ -1007,35 +1054,68 @@
         save.type = "submit";
         save.textContent = "OK";
         actions.append(cancel, save);
-        form.append(startInput.label, endInput.label, error, actions);
+        form.append(title, windowList, addWindow, clearHint, error, actions);
+
+        function addHarvestWindowRow(window = {}) {
+          const editor = {
+            row: document.createElement("div"),
+            startInput: annualDateInput("Start", window.start),
+            endInput: annualDateInput("End", window.end),
+          };
+          editor.row.className = "harvest-window-row";
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.textContent = "Remove";
+          remove.addEventListener("click", () => {
+            windowEditors.splice(windowEditors.indexOf(editor), 1);
+            editor.row.remove();
+          });
+          editor.remove = remove;
+          editor.row.append(
+            editor.startInput.label,
+            editor.endInput.label,
+            remove,
+          );
+          windowEditors.push(editor);
+          windowList.append(editor.row);
+          editor.startInput.input.focus();
+        }
+
+        schedule.harvestWindows.forEach(addHarvestWindowRow);
 
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
-          const harvestStart = parseAnnualDate(startInput.input.value);
-          const harvestEnd = parseAnnualDate(endInput.input.value);
-          if (!harvestStart || !harvestEnd) {
+          const windows = windowEditors.map((editor) => ({
+            start: parseAnnualDate(editor.startInput.input.value),
+            end: parseAnnualDate(editor.endInput.input.value),
+          }));
+          if (windows.some(({ start, end }) => !start || !end)) {
             error.textContent = "Use a valid MM-DD date, for example 08-30.";
             error.hidden = false;
             return;
           }
           error.hidden = true;
-          startInput.input.disabled = true;
-          endInput.input.disabled = true;
+          windowEditors.forEach((editor) => {
+            editor.startInput.input.disabled = true;
+            editor.endInput.input.disabled = true;
+            editor.remove.disabled = true;
+          });
+          addWindow.disabled = true;
           cancel.disabled = true;
           save.disabled = true;
           save.textContent = "Saving…";
           try {
-            await updatePlantIdentityHarvestWindow(
-              speciesSummary.plantIdentityId,
-              harvestStart,
-              harvestEnd,
-            );
+            await updateHarvestWindows(schedule, windows);
             await loadOrchardTrees();
           } catch (requestError) {
             error.textContent = requestError.message;
             error.hidden = false;
-            startInput.input.disabled = false;
-            endInput.input.disabled = false;
+            windowEditors.forEach((editor) => {
+              editor.startInput.input.disabled = false;
+              editor.endInput.input.disabled = false;
+              editor.remove.disabled = false;
+            });
+            addWindow.disabled = false;
             cancel.disabled = false;
             save.disabled = false;
             save.textContent = "OK";
@@ -1043,7 +1123,6 @@
         });
 
         cell.replaceChildren(form);
-        startInput.input.focus();
       }
 
       function annualDateInput(text, value) {
@@ -1059,31 +1138,18 @@
         return { label, input };
       }
 
-      async function updatePlantIdentityHarvestWindow(
-        plantIdentityId,
-        harvestStart,
-        harvestEnd,
-      ) {
-        if (plantIdentityId == null) {
-          throw new Error("This plant identity has no editable ID.");
-        }
-        const response = await fetch(
-          `/api/plant-identities/${encodeURIComponent(plantIdentityId)}`,
-          {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              harvest_start: harvestStart,
-              harvest_end: harvestEnd,
-            }),
-          },
-        );
+      async function updateHarvestWindows(schedule, windows) {
+        const response = await fetch(harvestScheduleEndpoint(schedule), {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ windows }),
+        });
         if (response.ok) return;
         if (response.status === 400) {
           throw new Error("The harvest dates are invalid.");
         }
         if (response.status === 404) {
-          throw new Error("This plant identity no longer exists.");
+          throw new Error("This species or cultivar no longer exists.");
         }
         throw new Error("Could not update the harvest dates. Please try again.");
       }
@@ -1308,7 +1374,12 @@
 
       function applyDateFilter() {
         if (!dateFilterEnabled.checked) {
-          if (map.isStyleLoaded()) map.setFilter("trees", null);
+          if (map.isStyleLoaded()) {
+            map.setFilter("trees", null);
+            if (map.getLayer("harvest-rings")) {
+              map.setFilter("harvest-rings", harvestLayerFilter());
+            }
+          }
           dateLabel.textContent = "All dates";
           dateMinSlider.disabled = true;
           dateMaxSlider.disabled = true;
@@ -1333,11 +1404,18 @@
         dateLabel.textContent = `${formatDate(from)} → ${formatDate(to)}`;
 
         if (map.isStyleLoaded()) {
-          map.setFilter("trees", [
+          const plantingDateFilter = [
             "all",
             [">=", ["get", "planted_on"], formatDate(from)],
             ["<=", ["get", "planted_on"], formatDate(to)],
-          ]);
+          ];
+          map.setFilter("trees", plantingDateFilter);
+          if (map.getLayer("harvest-rings")) {
+            map.setFilter(
+              "harvest-rings",
+              harvestLayerFilter(plantingDateFilter),
+            );
+          }
         }
       }
 

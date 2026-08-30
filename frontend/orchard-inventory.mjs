@@ -45,6 +45,8 @@ export function summarizeSpecies(features) {
     const taxonName = properties.plant_identity_taxon_name || "Unknown taxon";
     const plantIdentityId = properties.plant_identity_id ?? null;
     const cultivar = properties.plant_identity_cultivar;
+    const cultivarId = properties.plant_cultivar_id ?? null;
+    const harvestWindows = arrayProperty(properties.harvest_windows);
     const summaryKey = plantIdentityId ?? taxonName;
     let summary = species.get(summaryKey);
 
@@ -54,19 +56,29 @@ export function summarizeSpecies(features) {
         taxonName,
         names: new Set(),
         count: 0,
-        cultivarCounts: new Map(),
-        harvestStart: properties.harvest_start ?? null,
-        harvestEnd: properties.harvest_end ?? null,
+        cultivarSummaries: new Map(),
+        cultivarless: null,
       };
       species.set(summaryKey, summary);
     }
     summary.names.add(name);
     summary.count += 1;
     if (cultivar) {
-      summary.cultivarCounts.set(
-        cultivar,
-        (summary.cultivarCounts.get(cultivar) || 0) + 1,
-      );
+      const cultivarKey = cultivarId ?? cultivar;
+      let cultivarSummary = summary.cultivarSummaries.get(cultivarKey);
+      if (!cultivarSummary) {
+        cultivarSummary = {
+          id: cultivarId,
+          name: cultivar,
+          count: 0,
+          harvestWindows,
+        };
+        summary.cultivarSummaries.set(cultivarKey, cultivarSummary);
+      }
+      cultivarSummary.count += 1;
+    } else {
+      summary.cultivarless ??= { count: 0, harvestWindows };
+      summary.cultivarless.count += 1;
     }
   });
 
@@ -76,21 +88,28 @@ export function summarizeSpecies(features) {
       taxonName,
       names,
       count,
-      cultivarCounts,
-      harvestStart,
-      harvestEnd,
+      cultivarSummaries,
+      cultivarless,
     }) => ({
       plantIdentityId,
       taxonName,
       names: [...names].sort(compareText),
       count,
-      harvestStart,
-      harvestEnd,
-      cultivars: [...cultivarCounts]
-        .map(([name, cultivarCount]) => ({ name, count: cultivarCount }))
+      cultivarless,
+      cultivars: [...cultivarSummaries.values()]
         .sort((left, right) => compareText(left.name, right.name)),
     }))
     .sort((left, right) => compareText(left.taxonName, right.taxonName));
+}
+
+export function harvestScheduleEndpoint({ plantIdentityId, cultivarId }) {
+  if (cultivarId != null) {
+    return `/api/plant-cultivars/${encodeURIComponent(cultivarId)}/harvest-windows`;
+  }
+  if (plantIdentityId != null) {
+    return `/api/plant-identities/${encodeURIComponent(plantIdentityId)}/harvest-windows`;
+  }
+  throw new Error("This harvest schedule has no editable ID.");
 }
 
 function arrayProperty(value) {

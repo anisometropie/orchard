@@ -22,17 +22,27 @@ export function harvestAvailability(features, startDate, weekCount) {
       properties.is_alive !== false &&
       Array.isArray(properties.roles) &&
       properties.roles.includes("fruit") &&
-      recurringWindowOverlaps(
-        properties.harvest_start,
-        properties.harvest_end,
-        selectionStart,
-        selectionEnd,
+      harvestWindows(properties).some(({ start, end }) =>
+        recurringWindowOverlaps(start, end, selectionStart, selectionEnd),
       );
     return {
       ...feature,
       properties: { ...properties, harvest_available: isAvailable },
     };
   });
+}
+
+export function harvestLayerFilter(plantingDateFilter = null) {
+  const availabilityFilter = ["==", ["get", "harvest_available"], true];
+  return plantingDateFilter
+    ? ["all", availabilityFilter, plantingDateFilter]
+    : availabilityFilter;
+}
+
+function harvestWindows(properties) {
+  return Array.isArray(properties.harvest_windows)
+    ? properties.harvest_windows
+    : [];
 }
 
 export function harvestAvailabilitySummary(features) {
@@ -62,8 +72,10 @@ function recurringWindowOverlaps(
   for (let year = firstYear; year <= lastYear; year += 1) {
     const recurringStart = annualDateInYear(harvestStart, year);
     let recurringEnd = annualDateInYear(harvestEnd, year);
+    if (!recurringStart || !recurringEnd) continue;
     if (recurringEnd < recurringStart) {
       recurringEnd = annualDateInYear(harvestEnd, year + 1);
+      if (!recurringEnd) continue;
     }
     if (recurringStart <= selectionEnd && recurringEnd >= selectionStart) {
       return true;
@@ -74,9 +86,8 @@ function recurringWindowOverlaps(
 
 function annualDateInYear(annualDate, year) {
   const lastDay = new Date(Date.UTC(year, annualDate.month, 0)).getUTCDate();
-  return new Date(
-    Date.UTC(year, annualDate.month - 1, Math.min(annualDate.day, lastDay)),
-  );
+  if (annualDate.day > lastDay) return null;
+  return new Date(Date.UTC(year, annualDate.month - 1, annualDate.day));
 }
 
 function startOfUtcDay(date) {
