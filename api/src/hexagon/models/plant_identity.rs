@@ -36,6 +36,12 @@ pub struct AnnualHarvestWindow {
     pub end: AnnualDate,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HarvestScheduleOwner {
+    PlantIdentity(PlantIdentityId),
+    PlantCultivar(PlantCultivarId),
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PlantIdentity {
     pub common_name: String,

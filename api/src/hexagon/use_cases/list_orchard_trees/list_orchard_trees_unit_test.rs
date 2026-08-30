@@ -47,7 +47,7 @@ fn list_a_stored_tree_with_its_plant_identity() {
             tree,
             plant_identity: apple,
             plant_cultivar: None,
-            harvest_window: None,
+            harvest_windows: vec![],
         }])
     );
 }

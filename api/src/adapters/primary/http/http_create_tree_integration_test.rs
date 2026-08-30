@@ -2,8 +2,9 @@ use orchard_api::adapters::primary::http::start_http_server;
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
-    BotanicalTaxon, GeoPoint, IdentificationStatus, MapConfiguration, NamedTaxon,
-    PlantIdentification, PlantIdentity, PlantIdentityId, Tree,
+    BotanicalTaxon, GeoPoint, HarvestScheduleOwner, IdentificationStatus, MapConfiguration,
+    NamedTaxon, PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity,
+    PlantIdentityId, Tree,
 };
 use reqwest::StatusCode;
 
@@ -99,8 +100,7 @@ async fn list_orchard_trees_as_geojson() {
                     "plant_identity_botanical_name": "Malus domestica",
                     "plant_identity_cultivar": null,
                     "identification_status": "Confirmed",
-                    "harvest_start": null,
-                    "harvest_end": null,
+                    "harvest_windows": [],
                     "botanical_genera": ["Malus"],
                     "botanical_species": ["Malus domestica"],
                     "planted_on": "2024-02-03",
@@ -117,7 +117,7 @@ async fn list_orchard_trees_as_geojson() {
 }
 
 #[tokio::test]
-async fn change_a_plant_identity_recurring_harvest_window_http() {
+async fn replace_and_clear_a_cultivarless_species_recurring_harvest_windows_http() {
     let (orchard, observer) =
         InMemoryOrchardStorage::with_existing_orchard(vec![malus_domestica()], vec![]);
     let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
@@ -125,10 +125,21 @@ async fn change_a_plant_identity_recurring_harvest_window_http() {
         .unwrap();
 
     let response = reqwest::Client::new()
-        .patch(format!("{}/plant-identities/1", server.url()))
+        .put(format!(
+            "{}/plant-identities/1/harvest-windows",
+            server.url()
+        ))
         .json(&serde_json::json!({
-            "harvest_start": { "month": 8, "day": 20 },
-            "harvest_end": { "month": 10, "day": 5 }
+            "windows": [
+                {
+                    "start": { "month": 6, "day": 15 },
+                    "end": { "month": 7, "day": 5 }
+                },
+                {
+                    "start": { "month": 8, "day": 20 },
+                    "end": { "month": 10, "day": 5 }
+                }
+            ]
         }))
         .send()
         .await
@@ -136,12 +147,114 @@ async fn change_a_plant_identity_recurring_harvest_window_http() {
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(
-        observer.harvest_window(PlantIdentityId(1)),
-        Some(AnnualHarvestWindow {
-            start: AnnualDate { month: 8, day: 20 },
-            end: AnnualDate { month: 10, day: 5 },
-        })
+        observer.harvest_windows(HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1))),
+        vec![
+            AnnualHarvestWindow {
+                start: AnnualDate { month: 6, day: 15 },
+                end: AnnualDate { month: 7, day: 5 },
+            },
+            AnnualHarvestWindow {
+                start: AnnualDate { month: 8, day: 20 },
+                end: AnnualDate { month: 10, day: 5 },
+            },
+        ]
     );
+
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{}/plant-identities/1/harvest-windows",
+            server.url()
+        ))
+        .json(&serde_json::json!({ "windows": [] }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(
+        observer
+            .harvest_windows(HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)))
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn replace_a_cultivar_harvest_window_without_changing_the_species_schedule() {
+    let (orchard, observer) = InMemoryOrchardStorage::new();
+    let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let mut apple = confirmed(malus_domestica());
+    apple.plant_cultivar = Some(PlantCultivar {
+        cultivar: "Boskoop".into(),
+        trade_name: None,
+    });
+    let create_response = reqwest::Client::new()
+        .post(format!("{}/trees", server.url()))
+        .json(&serde_json::json!({
+            "longitude": 0.72,
+            "latitude": 0.24,
+            "plant_identity": apple,
+            "roles": ["fruit"],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{}/plant-cultivars/1/harvest-windows",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "windows": [{
+                "start": { "month": 9, "day": 1 },
+                "end": { "month": 10, "day": 15 }
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        observer.harvest_windows(HarvestScheduleOwner::PlantCultivar(PlantCultivarId(1))),
+        vec![AnnualHarvestWindow {
+            start: AnnualDate { month: 9, day: 1 },
+            end: AnnualDate { month: 10, day: 15 },
+        }]
+    );
+    assert!(
+        observer
+            .harvest_windows(HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)))
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn reject_obsolete_tree_level_harvest_fields() {
+    let (orchard, observer) = InMemoryOrchardStorage::new();
+    let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/trees", server.url()))
+        .json(&serde_json::json!({
+            "longitude": 0.72,
+            "latitude": 0.24,
+            "plant_identity": confirmed(malus_domestica()),
+            "roles": ["fruit"],
+            "harvest_start_day": 210,
+            "harvest_end_day": 280
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(observer.trees().is_empty());
 }
 
 #[tokio::test]

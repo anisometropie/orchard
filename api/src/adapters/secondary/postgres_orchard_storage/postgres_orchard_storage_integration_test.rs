@@ -1,10 +1,10 @@
 use orchard_api::adapters::secondary::PostgresOrchardStorage;
 use orchard_api::hexagon::models::{
-    AerialOverlay, AerialOverlayId, AerialOverlayImage, BotanicalTaxon, GeoPoint,
-    IdentificationStatus, InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification,
-    LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardTree, PlantCultivar, PlantCultivarId,
-    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole,
-    Tree, TreeId,
+    AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
+    BotanicalTaxon, GeoPoint, HarvestScheduleOwner, IdentificationStatus, InfraspecificRank,
+    InfraspecificTaxon, LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, NamedTaxon,
+    OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity,
+    PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId,
 };
 use orchard_api::hexagon::ports::{MapConfigurationStorage, OrchardStorage, OrchardStorageError};
 use orchard_api::hexagon::use_cases::change_tree_condition::{
@@ -174,9 +174,77 @@ fn read_tree_with_its_identity() {
             tree,
             plant_identity: apple,
             plant_cultivar: None,
-            harvest_window: None,
+            harvest_windows: vec![],
         }])
     );
+}
+
+#[test]
+fn read_and_clear_exact_cultivar_or_cultivarless_harvest_schedules() {
+    let _database_lock = database_lock();
+    let (database_url, _) = empty_orchard_database();
+    let apple = PlantIdentity {
+        common_name: "Pommier".into(),
+        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+            genus: "Malus".into(),
+            species: Some("domestica".into()),
+            species_is_hybrid: false,
+            infraspecific: None,
+            is_aggregate: false,
+            cultivar_group: None,
+        }),
+    };
+    let identity_window = AnnualHarvestWindow {
+        start: AnnualDate { month: 8, day: 1 },
+        end: AnnualDate { month: 8, day: 31 },
+    };
+    let cultivar_windows = vec![
+        AnnualHarvestWindow {
+            start: AnnualDate { month: 6, day: 15 },
+            end: AnnualDate { month: 7, day: 5 },
+        },
+        AnnualHarvestWindow {
+            start: AnnualDate { month: 9, day: 1 },
+            end: AnnualDate { month: 10, day: 15 },
+        },
+    ];
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let (_, cultivar) = storage
+        .transaction(|orchard| {
+            let identity =
+                orchard.resolve_plant_identification(identification(apple.clone(), None))?;
+            let cultivar = orchard
+                .resolve_plant_identification(identification(apple.clone(), Some("Boskoop")))?;
+            orchard.replace_harvest_windows(
+                HarvestScheduleOwner::PlantIdentity(identity.plant_identity_id),
+                vec![identity_window],
+            )?;
+            orchard.replace_harvest_windows(
+                HarvestScheduleOwner::PlantCultivar(cultivar.cultivar_id.unwrap()),
+                cultivar_windows.clone(),
+            )?;
+            orchard.save_tree(tree(identity, 17))?;
+            orchard.save_tree(tree(cultivar, 18))?;
+            Ok::<_, OrchardStorageError>((identity, cultivar))
+        })
+        .unwrap();
+
+    let trees = storage.trees().unwrap();
+    assert_eq!(trees[0].harvest_windows, vec![identity_window]);
+    assert_eq!(trees[1].harvest_windows, cultivar_windows);
+
+    storage
+        .transaction(|orchard| {
+            assert!(orchard.replace_harvest_windows(
+                HarvestScheduleOwner::PlantCultivar(cultivar.cultivar_id.unwrap()),
+                vec![],
+            )?);
+            Ok::<_, OrchardStorageError>(())
+        })
+        .unwrap();
+    let trees = storage.trees().unwrap();
+    assert_eq!(trees[0].harvest_windows, vec![identity_window]);
+    assert!(trees[1].harvest_windows.is_empty());
 }
 
 #[test]
@@ -659,8 +727,95 @@ fn normalization_migration_splits_cultivars_and_moves_tree_specific_fields() {
     assert_eq!(trees[2].get::<_, String>(2), "uncertain");
 
     connection
+        .batch_execute(include_str!(
+            "../../../../db/migrations/008_create_plant_harvest_windows.sql"
+        ))
+        .unwrap();
+    let migrated_window = connection
+        .query_one(
+            "SELECT plant_identity_id, cultivar_id, start_month, start_day, end_month, end_day
+             FROM plant_harvest_windows",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(migrated_window.get::<_, i64>(0), 1);
+    assert_eq!(migrated_window.get::<_, Option<i64>>(1), None);
+    assert_eq!(migrated_window.get::<_, i16>(2), 7);
+    assert_eq!(migrated_window.get::<_, i16>(3), 28);
+    assert_eq!(migrated_window.get::<_, i16>(4), 9);
+    assert_eq!(migrated_window.get::<_, i16>(5), 16);
+    let old_harvest_column_count: i64 = connection
+        .query_one(
+            "SELECT count(*) FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'plant_identities'
+               AND column_name LIKE 'harvest_%'",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(old_harvest_column_count, 0);
+
+    connection
         .batch_execute("DROP SCHEMA normalization_test CASCADE")
         .unwrap();
+}
+
+#[test]
+fn seed_all_raspberry_cultivar_harvest_waves() {
+    let _database_lock = database_lock();
+    let (_, mut connection) = empty_orchard_database();
+    let identity_id: i64 = connection
+        .query_one(
+            r#"INSERT INTO plant_identities (common_name, botanical_taxon)
+               VALUES (
+                 'Framboisier',
+                 '{"Named":{"genus":"Rubus","species":"idaeus","species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}'
+               ) RETURNING id"#,
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    for cultivar in [
+        "Autumn Bliss",
+        "Autumn First",
+        "Bohème",
+        "EMR 201201",
+        "Fall Gold",
+        "Glen Ample",
+        "Heritage",
+        "Jdeboer005",
+        "MA 2920",
+        "Malling Happy",
+        "Malling Promise",
+        "Paris",
+        "Sucrée de Metz",
+        "Surprise d’Automne",
+        "Zeva",
+    ] {
+        connection
+            .execute(
+                "INSERT INTO plant_cultivars (plant_identity_id, cultivar)
+                 VALUES ($1, $2)",
+                &[&identity_id, &cultivar],
+            )
+            .unwrap();
+    }
+    connection
+        .batch_execute(include_str!(
+            "../../../../db/migrations/009_seed_raspberry_harvest_windows.sql"
+        ))
+        .unwrap();
+
+    let totals = connection
+        .query_one(
+            "SELECT count(*), count(DISTINCT cultivar_id)
+             FROM plant_harvest_windows",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(totals.get::<_, i64>(0), 20);
+    assert_eq!(totals.get::<_, i64>(1), 15);
 }
 
 #[test]
@@ -882,9 +1037,29 @@ fn empty_orchard_database() -> (String, Client) {
             ))
             .unwrap();
     }
+    let harvest_windows_were_applied: bool = verification_connection
+        .query_one(
+            "SELECT to_regclass('plant_harvest_windows') IS NOT NULL",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !harvest_windows_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/008_create_plant_harvest_windows.sql"
+            ))
+            .unwrap();
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/009_seed_raspberry_harvest_windows.sql"
+            ))
+            .unwrap();
+    }
     verification_connection
         .batch_execute(
-            "TRUNCATE TABLE aerial_overlays, users, trees, plant_cultivars, plant_identities
+            "TRUNCATE TABLE plant_harvest_windows, aerial_overlays, users, trees,
+                            plant_cultivars, plant_identities
              RESTART IDENTITY CASCADE",
         )
         .unwrap();

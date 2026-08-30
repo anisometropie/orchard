@@ -1,5 +1,6 @@
 use crate::hexagon::models::{
-    LegacyTreeSource, PlantIdentification, PlantIdentityReference, ReproductiveRole, Tree,
+    AnnualHarvestWindow, HarvestScheduleOwner, LegacyTreeSource, PlantIdentification,
+    PlantIdentityReference, ReproductiveRole, Tree,
 };
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
@@ -8,6 +9,7 @@ pub struct LegacyTreeSnapshot {
     pub longitude: f64,
     pub latitude: f64,
     pub plant_identification: PlantIdentification,
+    pub harvest_window: Option<AnnualHarvestWindow>,
     pub planted_on: Option<String>,
     pub row_name: String,
     pub is_pioneer: bool,
@@ -24,6 +26,8 @@ pub struct LegacyOrchardImportRequested {
 #[derive(Debug, PartialEq)]
 pub enum LegacyOrchardImportError {
     PlantIdentityCouldNotBeResolved { legacy_feature_id: u32 },
+    ConflictingHarvestWindows { legacy_feature_id: u32 },
+    HarvestWindowsCouldNotBeReplaced { legacy_feature_id: u32 },
     TreeCouldNotBeSaved { legacy_feature_id: u32 },
     LegacyFeatureAlreadyImported { legacy_feature_id: u32 },
     ExistingLegacyFeaturesCouldNotBeChecked,
@@ -38,6 +42,22 @@ pub fn import_legacy_orchard<U>(
 where
     U: OrchardStorage,
 {
+    for (index, tree) in request.trees.iter().enumerate() {
+        let Some(window) = tree.harvest_window else {
+            continue;
+        };
+        if request.trees[..index].iter().any(|existing| {
+            same_schedule_owner(existing, tree)
+                && existing
+                    .harvest_window
+                    .is_some_and(|existing_window| existing_window != window)
+        }) {
+            return Err(LegacyOrchardImportError::ConflictingHarvestWindows {
+                legacy_feature_id: tree.legacy_source.feature_id,
+            });
+        }
+    }
+
     orchard_storage.transaction(|orchard| {
         let mut imported_tree_count = 0;
         for legacy_tree in request.trees {
@@ -61,6 +81,20 @@ where
                         legacy_feature_id,
                     },
                 )?;
+            if let Some(harvest_window) = legacy_tree.harvest_window {
+                let owner = plant_identity.cultivar_id.map_or(
+                    HarvestScheduleOwner::PlantIdentity(plant_identity.plant_identity_id),
+                    HarvestScheduleOwner::PlantCultivar,
+                );
+                match orchard.replace_harvest_windows(owner, vec![harvest_window]) {
+                    Ok(true) => {}
+                    _ => {
+                        return Err(LegacyOrchardImportError::HarvestWindowsCouldNotBeReplaced {
+                            legacy_feature_id,
+                        });
+                    }
+                }
+            }
             let tree = map_legacy_tree(legacy_tree, plant_identity, identification_status);
             orchard
                 .save_tree(tree)
@@ -69,6 +103,21 @@ where
         }
         Ok(imported_tree_count)
     })
+}
+
+fn same_schedule_owner(left: &LegacyTreeSnapshot, right: &LegacyTreeSnapshot) -> bool {
+    left.plant_identification.plant_identity.botanical_taxon
+        == right.plant_identification.plant_identity.botanical_taxon
+        && left
+            .plant_identification
+            .plant_cultivar
+            .as_ref()
+            .map(|cultivar| &cultivar.cultivar)
+            == right
+                .plant_identification
+                .plant_cultivar
+                .as_ref()
+                .map(|cultivar| &cultivar.cultivar)
 }
 
 impl From<OrchardStorageError> for LegacyOrchardImportError {

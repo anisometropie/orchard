@@ -108,6 +108,9 @@ fn import_error_message(error: GeoJsonLegacyOrchardImportError) -> String {
         GeoJsonLegacyOrchardImportError::CouldNotParsePlantIdentity { legacy_feature_id } => {
             format!("could not parse plant identity for legacy feature {legacy_feature_id}.")
         }
+        GeoJsonLegacyOrchardImportError::CouldNotParseHarvestWindow { legacy_feature_id } => {
+            format!("could not parse harvest window for legacy feature {legacy_feature_id}.")
+        }
         GeoJsonLegacyOrchardImportError::CouldNotImportOrchard(_) => {
             "the orchard could not be imported. No changes were made.".into()
         }

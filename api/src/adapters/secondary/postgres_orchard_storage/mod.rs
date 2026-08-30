@@ -2,9 +2,9 @@ use postgres::{Client, NoTls};
 
 use crate::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow, GeoPoint,
-    IdentificationStatus, LegacyPlantIdentification, LegacyTreeSource, MapConfiguration,
-    OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity,
-    PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId,
+    HarvestScheduleOwner, IdentificationStatus, LegacyPlantIdentification, LegacyTreeSource,
+    MapConfiguration, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
+    PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId,
 };
 use crate::hexagon::ports::{
     MapConfigurationStorage, MapConfigurationStorageError, OrchardStorage, OrchardStorageError,
@@ -65,33 +65,69 @@ impl OrchardStorage for PostgresOrchardStorage {
         resolve_plant_identification(&mut self.client, plant_identification)
     }
 
-    fn change_plant_identity_harvest_window(
+    fn replace_harvest_windows(
         &mut self,
-        plant_identity_id: PlantIdentityId,
-        harvest_window: AnnualHarvestWindow,
+        owner: HarvestScheduleOwner,
+        harvest_windows: Vec<AnnualHarvestWindow>,
     ) -> Result<bool, OrchardStorageError> {
-        let plant_identity_id = i64::try_from(plant_identity_id.0)
-            .map_err(|_| OrchardStorageError::PlantIdentityHarvestWindowCouldNotBeChanged)?;
-        let start_month = i16::from(harvest_window.start.month);
-        let start_day = i16::from(harvest_window.start.day);
-        let end_month = i16::from(harvest_window.end.month);
-        let end_day = i16::from(harvest_window.end.day);
+        let (plant_identity_id, cultivar_id) = match owner {
+            HarvestScheduleOwner::PlantIdentity(id) => {
+                let id = i64::try_from(id.0)
+                    .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+                let exists = self
+                    .client
+                    .query_opt("SELECT id FROM plant_identities WHERE id = $1", &[&id])
+                    .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?
+                    .is_some();
+                if !exists {
+                    return Ok(false);
+                }
+                (id, None)
+            }
+            HarvestScheduleOwner::PlantCultivar(id) => {
+                let id = i64::try_from(id.0)
+                    .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+                let identity = self
+                    .client
+                    .query_opt(
+                        "SELECT plant_identity_id FROM plant_cultivars WHERE id = $1",
+                        &[&id],
+                    )
+                    .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+                let Some(identity) = identity else {
+                    return Ok(false);
+                };
+                (identity.get::<_, i64>(0), Some(id))
+            }
+        };
+
         self.client
             .execute(
-                "UPDATE plant_identities
-                 SET harvest_start_month = $2, harvest_start_day = $3,
-                     harvest_end_month = $4, harvest_end_day = $5
-                 WHERE id = $1",
-                &[
-                    &plant_identity_id,
-                    &start_month,
-                    &start_day,
-                    &end_month,
-                    &end_day,
-                ],
+                "DELETE FROM plant_harvest_windows
+                 WHERE plant_identity_id = $1
+                   AND cultivar_id IS NOT DISTINCT FROM $2",
+                &[&plant_identity_id, &cultivar_id],
             )
-            .map(|changed_rows| changed_rows == 1)
-            .map_err(|_| OrchardStorageError::PlantIdentityHarvestWindowCouldNotBeChanged)
+            .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+        for window in harvest_windows {
+            self.client
+                .execute(
+                    "INSERT INTO plant_harvest_windows (
+                        plant_identity_id, cultivar_id,
+                        start_month, start_day, end_month, end_day
+                     ) VALUES ($1, $2, $3, $4, $5, $6)",
+                    &[
+                        &plant_identity_id,
+                        &cultivar_id,
+                        &i16::from(window.start.month),
+                        &i16::from(window.start.day),
+                        &i16::from(window.end.month),
+                        &i16::from(window.end.day),
+                    ],
+                )
+                .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+        }
+        Ok(true)
     }
 
     fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardStorageError> {
@@ -151,11 +187,20 @@ impl OrchardStorage for PostgresOrchardStorage {
                     t.reproductive_role, t.adult_height_meters, t.adult_width_meters,
                     t.is_in_danger, t.cultivar_id, t.identification_status,
                     p.common_name, p.botanical_taxon::text, c.cultivar, c.trade_name,
-                    p.harvest_start_month, p.harvest_start_day,
-                    p.harvest_end_month, p.harvest_end_day, t.id
+                    t.id, COALESCE(harvest.windows, '[]')
                  FROM trees t
                  JOIN plant_identities p ON p.id = t.plant_identity_id
                  LEFT JOIN plant_cultivars c ON c.id = t.cultivar_id
+                 LEFT JOIN LATERAL (
+                    SELECT json_agg(
+                        json_build_array(
+                            w.start_month, w.start_day, w.end_month, w.end_day
+                        ) ORDER BY w.start_month, w.start_day, w.end_month, w.end_day, w.id
+                    )::text AS windows
+                    FROM plant_harvest_windows w
+                    WHERE w.plant_identity_id = t.plant_identity_id
+                      AND w.cultivar_id IS NOT DISTINCT FROM t.cultivar_id
+                 ) harvest ON TRUE
                  ORDER BY t.id",
                 &[],
             )
@@ -300,11 +345,11 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
     };
     let botanical_taxon = serde_json::from_str(&row.get::<_, String>(20))
         .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?;
-    let harvest_window = harvest_window_from_row(row)?;
+    let harvest_windows = harvest_windows_from_row(row)?;
 
     Ok(OrchardTree {
         id: TreeId(
-            u64::try_from(row.get::<_, i64>(27))
+            u64::try_from(row.get::<_, i64>(23))
                 .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?,
         ),
         tree: Tree {
@@ -343,28 +388,24 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
                 cultivar,
                 trade_name: row.get(22),
             }),
-        harvest_window,
+        harvest_windows,
     })
 }
 
-fn harvest_window_from_row(
+fn harvest_windows_from_row(
     row: &postgres::Row,
-) -> Result<Option<AnnualHarvestWindow>, OrchardStorageError> {
-    let values = (
-        row.get::<_, Option<i16>>(23),
-        row.get::<_, Option<i16>>(24),
-        row.get::<_, Option<i16>>(25),
-        row.get::<_, Option<i16>>(26),
-    );
-    match values {
-        (None, None, None, None) => Ok(None),
-        (Some(start_month), Some(start_day), Some(end_month), Some(end_day)) => {
-            let start = annual_date(start_month, start_day)?;
-            let end = annual_date(end_month, end_day)?;
-            Ok(Some(AnnualHarvestWindow { start, end }))
-        }
-        _ => Err(OrchardStorageError::TreesCouldNotBeRead),
-    }
+) -> Result<Vec<AnnualHarvestWindow>, OrchardStorageError> {
+    let values = serde_json::from_str::<Vec<[i16; 4]>>(&row.get::<_, String>(24))
+        .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?;
+    values
+        .into_iter()
+        .map(|[start_month, start_day, end_month, end_day]| {
+            Ok(AnnualHarvestWindow {
+                start: annual_date(start_month, start_day)?,
+                end: annual_date(end_month, end_day)?,
+            })
+        })
+        .collect()
 }
 
 fn annual_date(month: i16, day: i16) -> Result<AnnualDate, OrchardStorageError> {

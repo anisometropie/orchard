@@ -3,9 +3,9 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::hexagon::models::{
-    BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon,
-    LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantCultivar, PlantIdentification,
-    PlantIdentity, ReproductiveRole,
+    AnnualDate, AnnualHarvestWindow, BotanicalTaxon, IdentificationStatus, InfraspecificRank,
+    InfraspecificTaxon, LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantCultivar,
+    PlantIdentification, PlantIdentity, ReproductiveRole,
 };
 use crate::hexagon::ports::OrchardStorage;
 use crate::hexagon::use_cases::import_legacy_orchard::{
@@ -18,6 +18,7 @@ pub enum GeoJsonLegacyOrchardImportError {
     CouldNotReadGeoJson,
     CouldNotParseGeoJson,
     CouldNotParsePlantIdentity { legacy_feature_id: u32 },
+    CouldNotParseHarvestWindow { legacy_feature_id: u32 },
     CouldNotImportOrchard(LegacyOrchardImportError),
 }
 
@@ -46,6 +47,13 @@ where
             .map_err(|_| {
                 GeoJsonLegacyOrchardImportError::CouldNotParsePlantIdentity { legacy_feature_id }
             })?;
+            let harvest_window = parse_legacy_harvest_window(
+                properties.harvest_start_day,
+                properties.harvest_end_day,
+            )
+            .ok_or(
+                GeoJsonLegacyOrchardImportError::CouldNotParseHarvestWindow { legacy_feature_id },
+            )?;
             Ok(LegacyTreeSnapshot {
                 legacy_source: LegacyTreeSource {
                     feature_id: legacy_feature_id,
@@ -62,6 +70,7 @@ where
                 longitude: feature.geometry.coordinates[0],
                 latitude: feature.geometry.coordinates[1],
                 plant_identification,
+                harvest_window,
                 planted_on: properties.planted_on,
                 row_name: properties.row_name,
                 is_pioneer: properties.is_pioneer,
@@ -109,6 +118,40 @@ struct GeoJsonTreeProperties {
     adult_height_meters: f64,
     #[serde(rename = "adult_width")]
     adult_width_meters: f64,
+    #[serde(rename = "harvest_date_min")]
+    harvest_start_day: Option<u16>,
+    #[serde(rename = "harvest_date_max")]
+    harvest_end_day: Option<u16>,
+}
+
+fn parse_legacy_harvest_window(
+    start_ordinal: Option<u16>,
+    end_ordinal: Option<u16>,
+) -> Option<Option<AnnualHarvestWindow>> {
+    match (start_ordinal, end_ordinal) {
+        (None, None) => Some(None),
+        (Some(start), Some(end)) => Some(Some(AnnualHarvestWindow {
+            start: annual_date_from_ordinal(start)?,
+            end: annual_date_from_ordinal(end)?,
+        })),
+        _ => None,
+    }
+}
+
+fn annual_date_from_ordinal(mut ordinal: u16) -> Option<AnnualDate> {
+    if !(1..=366).contains(&ordinal) {
+        return None;
+    }
+    for (index, days) in [31_u16, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        .into_iter()
+        .enumerate()
+    {
+        if ordinal <= days {
+            return AnnualDate::new(u8::try_from(index + 1).ok()?, u8::try_from(ordinal).ok()?);
+        }
+        ordinal -= days;
+    }
+    None
 }
 
 #[derive(Deserialize)]
@@ -302,3 +345,28 @@ fn split_cultivar(
 
 #[cfg(test)]
 mod legacy_plant_identity_unit_test;
+
+#[cfg(test)]
+mod legacy_harvest_window_unit_test {
+    use crate::hexagon::models::{AnnualDate, AnnualHarvestWindow};
+
+    use super::parse_legacy_harvest_window;
+
+    #[test]
+    fn convert_legacy_leap_year_ordinals_to_month_and_day() {
+        assert_eq!(
+            parse_legacy_harvest_window(Some(167), Some(289)),
+            Some(Some(AnnualHarvestWindow {
+                start: AnnualDate { month: 6, day: 15 },
+                end: AnnualDate { month: 10, day: 15 },
+            }))
+        );
+    }
+
+    #[test]
+    fn reject_a_partial_or_out_of_range_legacy_window() {
+        assert_eq!(parse_legacy_harvest_window(Some(167), None), None);
+        assert_eq!(parse_legacy_harvest_window(Some(0), Some(289)), None);
+        assert_eq!(parse_legacy_harvest_window(Some(167), Some(367)), None);
+    }
+}
