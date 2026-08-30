@@ -127,6 +127,16 @@ fn runserver() {
         let client = reqwest::Client::new();
         let first_tree = create_apple_tree(&client, &server_url, 0.72).await;
         let second_tree = create_apple_tree(&client, &server_url, 0.18).await;
+        let harvest_response = client
+            .patch(format!("{server_url}/plant-identities/1"))
+            .json(&serde_json::json!({
+                "harvest_start": { "month": 8, "day": 20 },
+                "harvest_end": { "month": 10, "day": 5 }
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(harvest_response.status(), StatusCode::NO_CONTENT);
         (first_tree, second_tree)
     });
     drop(runtime);
@@ -142,7 +152,10 @@ fn runserver() {
     let persisted_tree = verification_connection
         .query_one(
             "SELECT plant_identities.common_name, trees.roles,
-                    trees.harvest_start_day, trees.harvest_end_day
+                    plant_identities.harvest_start_month,
+                    plant_identities.harvest_start_day,
+                    plant_identities.harvest_end_month,
+                    plant_identities.harvest_end_day
              FROM trees
              INNER JOIN plant_identities ON plant_identities.id = trees.plant_identity_id
              ORDER BY trees.id
@@ -152,8 +165,10 @@ fn runserver() {
         .unwrap();
     assert_eq!(persisted_tree.get::<_, String>(0), "Pommier");
     assert_eq!(persisted_tree.get::<_, Vec<String>>(1), vec!["fruit"]);
-    assert_eq!(persisted_tree.get::<_, Option<i16>>(2), Some(210));
-    assert_eq!(persisted_tree.get::<_, Option<i16>>(3), Some(260));
+    assert_eq!(persisted_tree.get::<_, Option<i16>>(2), Some(8));
+    assert_eq!(persisted_tree.get::<_, Option<i16>>(3), Some(20));
+    assert_eq!(persisted_tree.get::<_, Option<i16>>(4), Some(10));
+    assert_eq!(persisted_tree.get::<_, Option<i16>>(5), Some(5));
 }
 
 async fn create_apple_tree(
@@ -182,9 +197,7 @@ async fn create_apple_tree(
                 "trade_name": null,
                 "identification_status": "Confirmed"
             },
-            "roles": ["fruit"],
-            "harvest_start_day": 210,
-            "harvest_end_day": 260
+            "roles": ["fruit"]
         }))
         .send()
         .await
@@ -226,9 +239,20 @@ fn empty_orchard_database(database_url: &str) -> Client {
             "../../../../db/migrations/006_create_users_and_aerial_overlays.sql"
         ))
         .unwrap();
+    let normalization_was_applied: bool = verification_connection
+        .query_one("SELECT to_regclass('plant_cultivars') IS NOT NULL", &[])
+        .unwrap()
+        .get(0);
+    if !normalization_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/007_normalize_plant_identities.sql"
+            ))
+            .unwrap();
+    }
     verification_connection
         .batch_execute(
-            "TRUNCATE TABLE aerial_overlays, users, trees, plant_identities
+            "TRUNCATE TABLE aerial_overlays, users, trees, plant_cultivars, plant_identities
              RESTART IDENTITY CASCADE",
         )
         .unwrap();

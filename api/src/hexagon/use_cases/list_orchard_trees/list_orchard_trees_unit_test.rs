@@ -18,13 +18,12 @@ fn list_a_stored_tree_with_its_plant_identity() {
             is_aggregate: false,
             cultivar_group: None,
         }),
-        cultivar: None,
-        trade_name: None,
-        identification_status: IdentificationStatus::Confirmed,
     };
     let tree = Tree {
         legacy_source: None,
         plant_identity_id: PlantIdentityId(1),
+        cultivar_id: None,
+        identification_status: IdentificationStatus::Confirmed,
         longitude: 0.64,
         latitude: 0.68,
         planted_on: Some("2024-02-03".into()),
@@ -33,8 +32,6 @@ fn list_a_stored_tree_with_its_plant_identity() {
         is_alive: true,
         is_in_danger: true,
         reproductive_role: None,
-        harvest_start_day: Some(210),
-        harvest_end_day: Some(260),
         adult_height_meters: Some(4.0),
         adult_width_meters: Some(3.0),
     };
@@ -49,6 +46,8 @@ fn list_a_stored_tree_with_its_plant_identity() {
             id: TreeId(1),
             tree,
             plant_identity: apple,
+            plant_cultivar: None,
+            harvest_window: None,
         }])
     );
 }

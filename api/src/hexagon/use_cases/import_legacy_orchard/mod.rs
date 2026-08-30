@@ -1,5 +1,5 @@
 use crate::hexagon::models::{
-    LegacyTreeSource, PlantIdentity, PlantIdentityId, ReproductiveRole, Tree,
+    LegacyTreeSource, PlantIdentification, PlantIdentityReference, ReproductiveRole, Tree,
 };
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
@@ -7,14 +7,12 @@ pub struct LegacyTreeSnapshot {
     pub legacy_source: LegacyTreeSource,
     pub longitude: f64,
     pub latitude: f64,
-    pub plant_identity: PlantIdentity,
+    pub plant_identification: PlantIdentification,
     pub planted_on: Option<String>,
     pub row_name: String,
     pub is_pioneer: bool,
     pub is_alive: bool,
     pub reproductive_role: Option<ReproductiveRole>,
-    pub harvest_start_day: Option<u16>,
-    pub harvest_end_day: Option<u16>,
     pub adult_height_meters: f64,
     pub adult_width_meters: f64,
 }
@@ -55,14 +53,15 @@ where
                     return Err(LegacyOrchardImportError::ExistingLegacyFeaturesCouldNotBeChecked);
                 }
             }
-            let plant_identity_id = orchard
-                .find_or_create_plant_identity(legacy_tree.plant_identity.clone())
+            let identification_status = legacy_tree.plant_identification.identification_status;
+            let plant_identity = orchard
+                .resolve_plant_identification(legacy_tree.plant_identification.clone())
                 .map_err(
                     |_| LegacyOrchardImportError::PlantIdentityCouldNotBeResolved {
                         legacy_feature_id,
                     },
                 )?;
-            let tree = map_legacy_tree(legacy_tree, plant_identity_id);
+            let tree = map_legacy_tree(legacy_tree, plant_identity, identification_status);
             orchard
                 .save_tree(tree)
                 .map_err(|_| LegacyOrchardImportError::TreeCouldNotBeSaved { legacy_feature_id })?;
@@ -85,10 +84,16 @@ impl From<OrchardStorageError> for LegacyOrchardImportError {
     }
 }
 
-fn map_legacy_tree(legacy_tree: LegacyTreeSnapshot, plant_identity_id: PlantIdentityId) -> Tree {
+fn map_legacy_tree(
+    legacy_tree: LegacyTreeSnapshot,
+    plant_identity: PlantIdentityReference,
+    identification_status: crate::hexagon::models::IdentificationStatus,
+) -> Tree {
     Tree {
         legacy_source: Some(legacy_tree.legacy_source),
-        plant_identity_id,
+        plant_identity_id: plant_identity.plant_identity_id,
+        cultivar_id: plant_identity.cultivar_id,
+        identification_status,
         longitude: legacy_tree.longitude,
         latitude: legacy_tree.latitude,
         planted_on: legacy_tree.planted_on,
@@ -101,8 +106,6 @@ fn map_legacy_tree(legacy_tree: LegacyTreeSnapshot, plant_identity_id: PlantIden
         is_alive: legacy_tree.is_alive,
         is_in_danger: false,
         reproductive_role: legacy_tree.reproductive_role,
-        harvest_start_day: legacy_tree.harvest_start_day,
-        harvest_end_day: legacy_tree.harvest_end_day,
         adult_height_meters: Some(legacy_tree.adult_height_meters),
         adult_width_meters: Some(legacy_tree.adult_width_meters),
     }

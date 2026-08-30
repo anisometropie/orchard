@@ -19,7 +19,7 @@ const trees = [
     roles: ["fruit", "pioneer"],
   }),
   tree(2, {
-    identityId: 11,
+    identityId: 10,
     name: "Apple",
     taxonName: "Malus domestica",
     botanicalName: "Malus domestica ‘Golden Delicious’",
@@ -89,24 +89,33 @@ test("list unique genus and species filter options", () => {
 test("count planted trees by species and detail their cultivars", () => {
   assert.deepEqual(summarizeSpecies(trees), [
     {
+      plantIdentityId: 10,
       taxonName: "Malus domestica",
       names: ["Apple"],
       count: 3,
+      harvestStart: null,
+      harvestEnd: null,
       cultivars: [
         { name: "Gala", count: 2 },
         { name: "Golden Delicious", count: 1 },
       ],
     },
     {
+      plantIdentityId: 30,
       taxonName: "Malus domestica × Pyrus communis",
       names: ["Apple × pear"],
       count: 1,
+      harvestStart: null,
+      harvestEnd: null,
       cultivars: [],
     },
     {
+      plantIdentityId: 20,
       taxonName: "Pyrus communis",
       names: ["European pear"],
       count: 1,
+      harvestStart: null,
+      harvestEnd: null,
       cultivars: [],
     },
   ]);
@@ -121,6 +130,8 @@ function tree(id, identity) {
       plant_identity_taxon_name: identity.taxonName,
       plant_identity_botanical_name: identity.botanicalName,
       plant_identity_cultivar: identity.cultivar ?? null,
+      harvest_start: identity.harvestStart ?? null,
+      harvest_end: identity.harvestEnd ?? null,
       botanical_genera: identity.genera,
       botanical_species: identity.species,
       roles: identity.roles,

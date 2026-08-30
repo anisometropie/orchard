@@ -136,6 +136,8 @@ fn apple_tree(longitude: f64, is_alive: bool, is_in_danger: bool) -> Tree {
     Tree {
         legacy_source: None,
         plant_identity_id: PlantIdentityId(1),
+        cultivar_id: None,
+        identification_status: IdentificationStatus::Confirmed,
         longitude,
         latitude: 0.68,
         planted_on: Some("2024-02-03".into()),
@@ -144,8 +146,6 @@ fn apple_tree(longitude: f64, is_alive: bool, is_in_danger: bool) -> Tree {
         is_alive,
         is_in_danger,
         reproductive_role: None,
-        harvest_start_day: Some(210),
-        harvest_end_day: Some(260),
         adult_height_meters: Some(4.0),
         adult_width_meters: Some(3.0),
     }
@@ -162,8 +162,5 @@ fn apple_identity() -> PlantIdentity {
             is_aggregate: false,
             cultivar_group: None,
         }),
-        cultivar: None,
-        trade_name: None,
-        identification_status: IdentificationStatus::Confirmed,
     }
 }

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{LegacyTreeSource, PlantIdentityId};
+use super::{IdentificationStatus, LegacyTreeSource, PlantCultivarId, PlantIdentityId};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TreeId(pub u64);
@@ -18,6 +18,8 @@ pub enum ReproductiveRole {
 pub struct Tree {
     pub legacy_source: Option<LegacyTreeSource>,
     pub plant_identity_id: PlantIdentityId,
+    pub cultivar_id: Option<PlantCultivarId>,
+    pub identification_status: IdentificationStatus,
     pub longitude: f64,
     pub latitude: f64,
     pub planted_on: Option<String>,
@@ -26,8 +28,6 @@ pub struct Tree {
     pub is_alive: bool,
     pub is_in_danger: bool,
     pub reproductive_role: Option<ReproductiveRole>,
-    pub harvest_start_day: Option<u16>,
-    pub harvest_end_day: Option<u16>,
     pub adult_height_meters: Option<f64>,
     pub adult_width_meters: Option<f64>,
 }

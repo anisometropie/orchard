@@ -1,8 +1,9 @@
 use orchard_api::adapters::primary::http::start_http_server;
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
-    AerialOverlay, AerialOverlayId, AerialOverlayImage, BotanicalTaxon, GeoPoint,
-    IdentificationStatus, MapConfiguration, NamedTaxon, PlantIdentity, PlantIdentityId, Tree,
+    AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
+    BotanicalTaxon, GeoPoint, IdentificationStatus, MapConfiguration, NamedTaxon,
+    PlantIdentification, PlantIdentity, PlantIdentityId, Tree,
 };
 use reqwest::StatusCode;
 
@@ -12,7 +13,7 @@ async fn create_tree_http() {
     let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
-    let apple = malus_domestica();
+    let apple = confirmed(malus_domestica());
 
     let response = reqwest::Client::new()
         .post(format!("{}/trees", server.url()))
@@ -21,8 +22,6 @@ async fn create_tree_http() {
             "latitude": 0.24,
             "plant_identity": apple,
             "roles": ["fruit"],
-            "harvest_start_day": 210,
-            "harvest_end_day": 260
         }))
         .send()
         .await
@@ -31,6 +30,8 @@ async fn create_tree_http() {
     let expected_tree = Tree {
         legacy_source: None,
         plant_identity_id: PlantIdentityId(1),
+        cultivar_id: None,
+        identification_status: IdentificationStatus::Confirmed,
         longitude: 0.72,
         latitude: 0.24,
         planted_on: None,
@@ -39,8 +40,6 @@ async fn create_tree_http() {
         is_alive: true,
         is_in_danger: false,
         reproductive_role: None,
-        harvest_start_day: Some(210),
-        harvest_end_day: Some(260),
         adult_height_meters: None,
         adult_width_meters: None,
     };
@@ -56,6 +55,8 @@ async fn list_orchard_trees_as_geojson() {
     let tree = Tree {
         legacy_source: None,
         plant_identity_id: PlantIdentityId(1),
+        cultivar_id: None,
+        identification_status: IdentificationStatus::Confirmed,
         longitude: 0.64,
         latitude: 0.68,
         planted_on: Some("2024-02-03".into()),
@@ -64,8 +65,6 @@ async fn list_orchard_trees_as_geojson() {
         is_alive: true,
         is_in_danger: true,
         reproductive_role: None,
-        harvest_start_day: Some(210),
-        harvest_end_day: Some(260),
         adult_height_meters: Some(4.0),
         adult_width_meters: Some(3.0),
     };
@@ -94,10 +93,14 @@ async fn list_orchard_trees_as_geojson() {
                     "name": "Pommier",
                     "latin_name": "Malus domestica",
                     "plant_identity_id": 1,
+                    "plant_cultivar_id": null,
                     "plant_identity_name": "Pommier",
                     "plant_identity_taxon_name": "Malus domestica",
                     "plant_identity_botanical_name": "Malus domestica",
                     "plant_identity_cultivar": null,
+                    "identification_status": "Confirmed",
+                    "harvest_start": null,
+                    "harvest_end": null,
                     "botanical_genera": ["Malus"],
                     "botanical_species": ["Malus domestica"],
                     "planted_on": "2024-02-03",
@@ -109,6 +112,34 @@ async fn list_orchard_trees_as_geojson() {
                     "adult_width": 3.0
                 }
             }]
+        })
+    );
+}
+
+#[tokio::test]
+async fn change_a_plant_identity_recurring_harvest_window_http() {
+    let (orchard, observer) =
+        InMemoryOrchardStorage::with_existing_orchard(vec![malus_domestica()], vec![]);
+    let server = start_http_server(orchard, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+
+    let response = reqwest::Client::new()
+        .patch(format!("{}/plant-identities/1", server.url()))
+        .json(&serde_json::json!({
+            "harvest_start": { "month": 8, "day": 20 },
+            "harvest_end": { "month": 10, "day": 5 }
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        observer.harvest_window(PlantIdentityId(1)),
+        Some(AnnualHarvestWindow {
+            start: AnnualDate { month: 8, day: 20 },
+            end: AnnualDate { month: 10, day: 5 },
         })
     );
 }
@@ -296,6 +327,8 @@ fn tree_with_condition(is_alive: bool, is_in_danger: bool) -> Tree {
     Tree {
         legacy_source: None,
         plant_identity_id: PlantIdentityId(1),
+        cultivar_id: None,
+        identification_status: IdentificationStatus::Confirmed,
         longitude: 0.64,
         latitude: 0.68,
         planted_on: Some("2024-02-03".into()),
@@ -304,8 +337,6 @@ fn tree_with_condition(is_alive: bool, is_in_danger: bool) -> Tree {
         is_alive,
         is_in_danger,
         reproductive_role: None,
-        harvest_start_day: Some(210),
-        harvest_end_day: Some(260),
         adult_height_meters: Some(4.0),
         adult_width_meters: Some(3.0),
     }
@@ -322,8 +353,13 @@ fn malus_domestica() -> PlantIdentity {
             is_aggregate: false,
             cultivar_group: None,
         }),
-        cultivar: None,
-        trade_name: None,
+    }
+}
+
+fn confirmed(plant_identity: PlantIdentity) -> PlantIdentification {
+    PlantIdentification {
+        plant_identity,
+        plant_cultivar: None,
         identification_status: IdentificationStatus::Confirmed,
     }
 }

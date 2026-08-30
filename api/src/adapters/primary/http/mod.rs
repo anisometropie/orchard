@@ -16,10 +16,14 @@ use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::hexagon::models::{
-    AerialOverlayId, BotanicalTaxon, InfraspecificRank, MapConfiguration, NamedTaxon, OrchardTree,
-    PlantIdentity, Tree, TreeId,
+    AerialOverlayId, AnnualDate, BotanicalTaxon, InfraspecificRank, MapConfiguration, NamedTaxon,
+    OrchardTree, PlantIdentification, PlantIdentity, Tree, TreeId,
 };
 use crate::hexagon::ports::{MapConfigurationStorage, OrchardStorage};
+use crate::hexagon::use_cases::change_plant_identity_harvest_window::{
+    PlantIdentityHarvestWindowChangeError, PlantIdentityHarvestWindowChanged,
+    change_plant_identity_harvest_window,
+};
 use crate::hexagon::use_cases::change_tree_condition::{
     TreeConditionChangeError, TreeConditionChanged, change_tree_condition,
 };
@@ -60,6 +64,10 @@ where
     Router::new()
         .route("/trees", post(create_tree_handler::<U>))
         .route("/trees/{tree_id}", patch(change_tree_handler::<U>))
+        .route(
+            "/plant-identities/{plant_identity_id}",
+            patch(change_plant_identity_handler::<U>),
+        )
         .route("/trees.geojson", get(list_trees_handler::<U>))
         .route("/map-config", get(map_configuration_handler::<U>))
         .route(
@@ -176,16 +184,53 @@ where
 pub struct CreateTreeRequest {
     pub longitude: f64,
     pub latitude: f64,
-    pub plant_identity: PlantIdentity,
+    pub plant_identity: PlantIdentification,
     pub roles: Vec<String>,
-    pub harvest_start_day: Option<u16>,
-    pub harvest_end_day: Option<u16>,
 }
 
 #[derive(Deserialize)]
 struct ChangeTreeRequest {
     is_alive: Option<bool>,
     is_in_danger: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct ChangePlantIdentityRequest {
+    harvest_start: AnnualDate,
+    harvest_end: AnnualDate,
+}
+
+async fn change_plant_identity_handler<U>(
+    State(orchard_storage): State<Arc<Mutex<U>>>,
+    Path(plant_identity_id): Path<u64>,
+    Json(request): Json<ChangePlantIdentityRequest>,
+) -> StatusCode
+where
+    U: OrchardStorage + Send + 'static,
+{
+    match tokio::task::spawn_blocking(move || {
+        change_plant_identity_harvest_window(
+            PlantIdentityHarvestWindowChanged {
+                plant_identity_id: crate::hexagon::models::PlantIdentityId(plant_identity_id),
+                start_month: request.harvest_start.month,
+                start_day: request.harvest_start.day,
+                end_month: request.harvest_end.month,
+                end_day: request.harvest_end.day,
+            },
+            &mut *orchard_storage.lock().unwrap(),
+        )
+    })
+    .await
+    {
+        Ok(Ok(())) => StatusCode::NO_CONTENT,
+        Ok(Err(PlantIdentityHarvestWindowChangeError::InvalidAnnualDate)) => {
+            StatusCode::BAD_REQUEST
+        }
+        Ok(Err(PlantIdentityHarvestWindowChangeError::PlantIdentityNotFound)) => {
+            StatusCode::NOT_FOUND
+        }
+        Ok(Err(_)) | Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 async fn change_tree_handler<U>(
@@ -230,10 +275,8 @@ where
             TreeCreationRequested {
                 longitude: request.longitude,
                 latitude: request.latitude,
-                plant_identity: request.plant_identity,
+                plant_identification: request.plant_identity,
                 roles: request.roles,
-                harvest_start_day: request.harvest_start_day,
-                harvest_end_day: request.harvest_end_day,
             },
             &mut *orchard_storage.lock().unwrap(),
         )
@@ -247,9 +290,12 @@ where
 fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
     let features = trees.into_iter().map(|orchard_tree| {
         let tree_id = orchard_tree.id;
+        let harvest_window = orchard_tree.harvest_window;
         let Tree {
             legacy_source,
             plant_identity_id,
+            cultivar_id,
+            identification_status,
             longitude,
             latitude,
             planted_on,
@@ -264,8 +310,14 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
         let plant_identity_name = orchard_tree.plant_identity.common_name.clone();
         let plant_identity_taxon_name =
             botanical_taxon_name(&orchard_tree.plant_identity.botanical_taxon);
-        let plant_identity_botanical_name = botanical_name(&orchard_tree.plant_identity);
-        let plant_identity_cultivar = orchard_tree.plant_identity.cultivar.clone();
+        let plant_identity_botanical_name = botanical_name_with_cultivar(
+            &orchard_tree.plant_identity,
+            orchard_tree.plant_cultivar.as_ref(),
+        );
+        let plant_identity_cultivar = orchard_tree
+            .plant_cultivar
+            .as_ref()
+            .map(|cultivar| cultivar.cultivar.clone());
         let (botanical_genera, botanical_species) =
             botanical_filter_values(&orchard_tree.plant_identity);
         let name = legacy_source
@@ -277,7 +329,12 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
             .as_ref()
             .map(|source| source.latin_name.clone())
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| botanical_name(&orchard_tree.plant_identity));
+            .unwrap_or_else(|| {
+                botanical_name_with_cultivar(
+                    &orchard_tree.plant_identity,
+                    orchard_tree.plant_cultivar.as_ref(),
+                )
+            });
 
         json!({
             "type": "Feature",
@@ -290,10 +347,14 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
                 "name": name,
                 "latin_name": latin_name,
                 "plant_identity_id": plant_identity_id.0,
+                "plant_cultivar_id": cultivar_id.map(|id| id.0),
                 "plant_identity_name": plant_identity_name,
                 "plant_identity_taxon_name": plant_identity_taxon_name,
                 "plant_identity_botanical_name": plant_identity_botanical_name,
                 "plant_identity_cultivar": plant_identity_cultivar,
+                "identification_status": identification_status,
+                "harvest_start": harvest_window.map(|window| annual_date_string(window.start)),
+                "harvest_end": harvest_window.map(|window| annual_date_string(window.end)),
                 "botanical_genera": botanical_genera,
                 "botanical_species": botanical_species,
                 "planted_on": planted_on,
@@ -311,6 +372,10 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
         "type": "FeatureCollection",
         "features": features.collect::<Vec<_>>()
     })
+}
+
+fn annual_date_string(date: AnnualDate) -> String {
+    format!("{:02}-{:02}", date.month, date.day)
 }
 
 fn botanical_filter_values(plant_identity: &PlantIdentity) -> (Vec<String>, Vec<String>) {
@@ -338,8 +403,16 @@ fn botanical_filter_values(plant_identity: &PlantIdentity) -> (Vec<String>, Vec<
 }
 
 fn botanical_name(plant_identity: &PlantIdentity) -> String {
-    let mut name = botanical_taxon_name(&plant_identity.botanical_taxon);
-    if let Some(cultivar) = &plant_identity.cultivar {
+    botanical_taxon_name(&plant_identity.botanical_taxon)
+}
+
+fn botanical_name_with_cultivar(
+    plant_identity: &PlantIdentity,
+    plant_cultivar: Option<&crate::hexagon::models::PlantCultivar>,
+) -> String {
+    let mut name = botanical_name(plant_identity);
+    if let Some(cultivar) = plant_cultivar {
+        let cultivar = &cultivar.cultivar;
         name.push_str(&format!(" ‘{cultivar}’"));
     }
     name

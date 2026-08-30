@@ -1,8 +1,8 @@
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, InfraspecificRank, InfraspecificTaxon,
-    LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantIdentity, PlantIdentityId,
-    ReproductiveRole, Tree,
+    LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantCultivar, PlantCultivarId,
+    PlantIdentification, PlantIdentity, PlantIdentityId, ReproductiveRole, Tree,
 };
 use orchard_api::hexagon::use_cases::import_legacy_orchard::{
     LegacyOrchardImportError, LegacyOrchardImportRequested, LegacyTreeSnapshot,
@@ -13,7 +13,7 @@ use orchard_api::hexagon::use_cases::import_legacy_orchard::{
 fn import_john_rivers() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let john_rivers = john_rivers();
-    let expected_identity = john_rivers.plant_identity.clone();
+    let expected_identity = john_rivers.plant_identification.plant_identity.clone();
     let expected_tree = imported_tree(&john_rivers, 1);
 
     let import_result = import_legacy_orchard(
@@ -33,7 +33,10 @@ fn import_tree_batch() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let pistachio = pistachio();
     let fig = fig(2);
-    let expected_identities = vec![pistachio.plant_identity.clone(), fig.plant_identity.clone()];
+    let expected_identities = vec![
+        pistachio.plant_identification.plant_identity.clone(),
+        fig.plant_identification.plant_identity.clone(),
+    ];
     let expected_trees = vec![imported_tree(&pistachio, 1), imported_tree(&fig, 2)];
 
     let import_result = import_legacy_orchard(
@@ -53,7 +56,7 @@ fn reuse_identity() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let first_fig = fig(2);
     let second_fig = fig(249);
-    let expected_identity = first_fig.plant_identity.clone();
+    let expected_identity = first_fig.plant_identification.plant_identity.clone();
     let expected_trees = vec![imported_tree(&first_fig, 1), imported_tree(&second_fig, 1)];
 
     let import_result = import_legacy_orchard(
@@ -73,7 +76,7 @@ fn reuse_identity_with_different_legacy_names() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let first_raspberry = surprise_dautomne(190);
     let second_raspberry = surprise_dautomne(209);
-    let expected_identity = first_raspberry.plant_identity.clone();
+    let expected_identity = first_raspberry.plant_identification.plant_identity.clone();
     let expected_trees = vec![
         imported_tree(&first_raspberry, 1),
         imported_tree(&second_raspberry, 1),
@@ -102,7 +105,7 @@ fn preserve_reproductive_role_and_historical_identification() {
             legacy_identification: None,
             source_url: None,
         },
-        plant_identity: named_identity("Kiwi", "Actinidia", "deliciosa", Some("Boskoop")),
+        plant_identification: named_identity("Kiwi", "Actinidia", "deliciosa", Some("Boskoop")),
         longitude: 0.81,
         latitude: 0.68,
         planted_on: Some("2024-12-07".into()),
@@ -110,10 +113,8 @@ fn preserve_reproductive_role_and_historical_identification() {
         is_pioneer: false,
         is_alive: true,
         reproductive_role: Some(ReproductiveRole::SelfFertile),
-        harvest_start_day: None,
         adult_height_meters: 6.0,
         adult_width_meters: 5.0,
-        harvest_end_day: None,
     };
     let cranberry = LegacyTreeSnapshot {
         legacy_source: LegacyTreeSource {
@@ -128,14 +129,12 @@ fn preserve_reproductive_role_and_historical_identification() {
         },
         longitude: 0.36,
         latitude: 0.17,
-        plant_identity: named_identity("Canneberge commune", "Vaccinium", "oxycoccos", None),
+        plant_identification: named_identity("Canneberge commune", "Vaccinium", "oxycoccos", None),
         planted_on: Some("2024-12-07".into()),
         row_name: "4. Bas bas".into(),
         is_pioneer: false,
         is_alive: true,
         reproductive_role: None,
-        harvest_start_day: None,
-        harvest_end_day: None,
         adult_height_meters: 0.2,
         adult_width_meters: 0.5,
     };
@@ -196,21 +195,25 @@ fn preserve_source_url() {
                 },
                 longitude: 0.57,
                 latitude: 0.83,
-                plant_identity: PlantIdentity {
-                    common_name: "Camérisier du Kamtchatka".into(),
-                    botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-                        genus: "Lonicera".into(),
-                        species: Some("caerulea".into()),
-                        species_is_hybrid: false,
-                        infraspecific: Some(InfraspecificTaxon {
-                            rank: InfraspecificRank::Variety,
-                            name: "kamtschatica".into(),
+                plant_identification: PlantIdentification {
+                    plant_identity: PlantIdentity {
+                        common_name: "Camérisier du Kamtchatka".into(),
+                        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                            genus: "Lonicera".into(),
+                            species: Some("caerulea".into()),
+                            species_is_hybrid: false,
+                            infraspecific: Some(InfraspecificTaxon {
+                                rank: InfraspecificRank::Variety,
+                                name: "kamtschatica".into(),
+                            }),
+                            is_aggregate: false,
+                            cultivar_group: None,
                         }),
-                        is_aggregate: false,
-                        cultivar_group: None,
+                    },
+                    plant_cultivar: Some(PlantCultivar {
+                        cultivar: "Eisbär".into(),
+                        trade_name: None,
                     }),
-                    cultivar: Some("Eisbär".into()),
-                    trade_name: None,
                     identification_status: IdentificationStatus::Confirmed,
                 },
                 planted_on: Some("2023-10-21".into()),
@@ -218,8 +221,6 @@ fn preserve_source_url() {
                 is_pioneer: false,
                 is_alive: true,
                 reproductive_role: None,
-                harvest_start_day: None,
-                harvest_end_day: None,
                 adult_height_meters: 1.5,
                 adult_width_meters: 1.2,
             }],
@@ -285,7 +286,7 @@ fn roll_back_when_identity_cannot_be_resolved() {
 #[test]
 fn preserve_existing_orchard_on_save_failure() {
     let existing = pistachio();
-    let existing_identity = existing.plant_identity.clone();
+    let existing_identity = existing.plant_identification.plant_identity.clone();
     let existing_tree = imported_tree(&existing, 1);
     let (mut orchard_storage, observed_orchard) =
         InMemoryOrchardStorage::with_existing_orchard_failing_when_saving_tree_with_legacy_feature_id(
@@ -314,7 +315,7 @@ fn preserve_existing_orchard_on_save_failure() {
 #[test]
 fn reject_duplicate_legacy_feature() {
     let existing = pistachio();
-    let existing_identity = existing.plant_identity.clone();
+    let existing_identity = existing.plant_identification.plant_identity.clone();
     let existing_tree = imported_tree(&existing, 1);
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::with_existing_orchard(
         vec![existing_identity.clone()],
@@ -382,7 +383,7 @@ fn roll_back_batch_on_commit_failure() {
 fn preserve_pioneer() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let caragana = caragana();
-    let expected_identity = caragana.plant_identity.clone();
+    let expected_identity = caragana.plant_identification.plant_identity.clone();
     let expected_tree = imported_tree(&caragana, 1);
 
     let import_result = import_legacy_orchard(
@@ -447,21 +448,25 @@ fn john_rivers() -> LegacyTreeSnapshot {
         },
         longitude: 0.72,
         latitude: 0.24,
-        plant_identity: PlantIdentity {
-            common_name: "Brugnon blanc".into(),
-            botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-                genus: "Prunus".into(),
-                species: Some("persica".into()),
-                species_is_hybrid: false,
-                infraspecific: Some(InfraspecificTaxon {
-                    rank: InfraspecificRank::Variety,
-                    name: "nucipersica".into(),
+        plant_identification: PlantIdentification {
+            plant_identity: PlantIdentity {
+                common_name: "Brugnon blanc".into(),
+                botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                    genus: "Prunus".into(),
+                    species: Some("persica".into()),
+                    species_is_hybrid: false,
+                    infraspecific: Some(InfraspecificTaxon {
+                        rank: InfraspecificRank::Variety,
+                        name: "nucipersica".into(),
+                    }),
+                    is_aggregate: false,
+                    cultivar_group: None,
                 }),
-                is_aggregate: false,
-                cultivar_group: None,
+            },
+            plant_cultivar: Some(PlantCultivar {
+                cultivar: "John Rivers".into(),
+                trade_name: None,
             }),
-            cultivar: Some("John Rivers".into()),
-            trade_name: None,
             identification_status: IdentificationStatus::Confirmed,
         },
         planted_on: Some("2024-12-07".into()),
@@ -469,8 +474,6 @@ fn john_rivers() -> LegacyTreeSnapshot {
         is_pioneer: false,
         is_alive: true,
         reproductive_role: None,
-        harvest_start_day: None,
-        harvest_end_day: None,
         adult_height_meters: 4.0,
         adult_width_meters: 3.0,
     }
@@ -481,7 +484,12 @@ fn pistachio() -> LegacyTreeSnapshot {
         feature_id: 1,
         name: "Pistachier térébinthe",
         latin_name: "Pistacia terebinthus",
-        plant_identity: named_identity("Pistachier térébinthe", "Pistacia", "terebinthus", None),
+        plant_identification: named_identity(
+            "Pistachier térébinthe",
+            "Pistacia",
+            "terebinthus",
+            None,
+        ),
         longitude: 0.72,
         latitude: 0.24,
         planted_on: Some("2022-06-23"),
@@ -503,7 +511,7 @@ fn fig(feature_id: u32) -> LegacyTreeSnapshot {
         feature_id,
         name: "Figuier ‘Goutte d’Or’",
         latin_name: "Ficus carica ‘Goutte d’Or’",
-        plant_identity: named_identity("Figuier", "Ficus", "carica", Some("Goutte d’Or")),
+        plant_identification: named_identity("Figuier", "Ficus", "carica", Some("Goutte d’Or")),
         longitude,
         latitude,
         planted_on,
@@ -520,7 +528,12 @@ fn caragana() -> LegacyTreeSnapshot {
         feature_id: 3,
         name: "Caraganier de Sibérie",
         latin_name: "Caragana arborescens",
-        plant_identity: named_identity("Caraganier de Sibérie", "Caragana", "arborescens", None),
+        plant_identification: named_identity(
+            "Caraganier de Sibérie",
+            "Caragana",
+            "arborescens",
+            None,
+        ),
         longitude: 0.45,
         latitude: 0.11,
         planted_on: Some("2024-12-07"),
@@ -559,7 +572,12 @@ fn surprise_dautomne(feature_id: u32) -> LegacyTreeSnapshot {
         feature_id,
         name,
         latin_name: "Rubus idaeus ‘Surprise d’Automne’",
-        plant_identity: named_identity(common_name, "Rubus", "idaeus", Some("Surprise d’Automne")),
+        plant_identification: named_identity(
+            common_name,
+            "Rubus",
+            "idaeus",
+            Some("Surprise d’Automne"),
+        ),
         longitude,
         latitude,
         planted_on: Some("2024-12-09"),
@@ -575,7 +593,7 @@ struct LegacyTreeFixture<'a> {
     feature_id: u32,
     name: &'a str,
     latin_name: &'a str,
-    plant_identity: PlantIdentity,
+    plant_identification: PlantIdentification,
     longitude: f64,
     latitude: f64,
     planted_on: Option<&'a str>,
@@ -597,14 +615,12 @@ fn legacy_tree(fixture: LegacyTreeFixture<'_>) -> LegacyTreeSnapshot {
         },
         longitude: fixture.longitude,
         latitude: fixture.latitude,
-        plant_identity: fixture.plant_identity,
+        plant_identification: fixture.plant_identification,
         planted_on: fixture.planted_on.map(str::to_owned),
         row_name: fixture.row_name.into(),
         is_pioneer: fixture.is_pioneer,
         is_alive: fixture.is_alive,
         reproductive_role: None,
-        harvest_start_day: None,
-        harvest_end_day: None,
         adult_height_meters: fixture.adult_height_meters,
         adult_width_meters: fixture.adult_width_meters,
     }
@@ -615,19 +631,23 @@ fn named_identity(
     genus: &str,
     species: &str,
     cultivar: Option<&str>,
-) -> PlantIdentity {
-    PlantIdentity {
-        common_name: common_name.into(),
-        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
-            genus: genus.into(),
-            species: Some(species.into()),
-            species_is_hybrid: false,
-            infraspecific: None,
-            is_aggregate: false,
-            cultivar_group: None,
+) -> PlantIdentification {
+    PlantIdentification {
+        plant_identity: PlantIdentity {
+            common_name: common_name.into(),
+            botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+                genus: genus.into(),
+                species: Some(species.into()),
+                species_is_hybrid: false,
+                infraspecific: None,
+                is_aggregate: false,
+                cultivar_group: None,
+            }),
+        },
+        plant_cultivar: cultivar.map(|cultivar| PlantCultivar {
+            cultivar: cultivar.into(),
+            trade_name: None,
         }),
-        cultivar: cultivar.map(str::to_owned),
-        trade_name: None,
         identification_status: IdentificationStatus::Confirmed,
     }
 }
@@ -636,6 +656,12 @@ fn imported_tree(legacy_tree: &LegacyTreeSnapshot, plant_identity_id: u64) -> Tr
     Tree {
         legacy_source: Some(legacy_tree.legacy_source.clone()),
         plant_identity_id: PlantIdentityId(plant_identity_id),
+        cultivar_id: legacy_tree
+            .plant_identification
+            .plant_cultivar
+            .as_ref()
+            .map(|_| PlantCultivarId(1)),
+        identification_status: legacy_tree.plant_identification.identification_status,
         longitude: legacy_tree.longitude,
         latitude: legacy_tree.latitude,
         planted_on: legacy_tree.planted_on.clone(),
@@ -648,8 +674,6 @@ fn imported_tree(legacy_tree: &LegacyTreeSnapshot, plant_identity_id: u64) -> Tr
         is_alive: legacy_tree.is_alive,
         is_in_danger: false,
         reproductive_role: legacy_tree.reproductive_role,
-        harvest_start_day: legacy_tree.harvest_start_day,
-        harvest_end_day: legacy_tree.harvest_end_day,
         adult_height_meters: Some(legacy_tree.adult_height_meters),
         adult_width_meters: Some(legacy_tree.adult_width_meters),
     }

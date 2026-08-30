@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use crate::hexagon::models::{
-    AerialOverlayId, AerialOverlayImage, BotanicalTaxon, MapConfiguration, OrchardTree,
-    PlantIdentity, PlantIdentityId, Tree, TreeId,
+    AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, MapConfiguration,
+    OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity,
+    PlantIdentityId, PlantIdentityReference, Tree, TreeId,
 };
 use crate::hexagon::ports::{
     MapConfigurationStorage, MapConfigurationStorageError, OrchardStorage, OrchardStorageError,
@@ -26,13 +27,24 @@ pub struct InMemoryOrchardStorage {
 #[derive(Default)]
 struct InMemoryOrchard {
     plant_identities: Vec<PlantIdentity>,
+    plant_cultivars: Vec<StoredCultivar>,
+    harvest_windows: Vec<Option<AnnualHarvestWindow>>,
     trees: Vec<Tree>,
+}
+
+#[derive(Clone)]
+struct StoredCultivar {
+    plant_identity_id: PlantIdentityId,
+    cultivar: String,
+    trade_name: Option<String>,
 }
 
 #[derive(Default)]
 struct InMemoryOrchardTransaction {
     staged_plant_identities: Vec<PlantIdentity>,
+    staged_plant_cultivars: Vec<StoredCultivar>,
     staged_trees: Vec<Tree>,
+    staged_harvest_window_changes: Vec<(PlantIdentityId, AnnualHarvestWindow)>,
     staged_tree_danger_changes: Vec<(TreeId, bool)>,
     staged_tree_life_status_changes: Vec<(TreeId, bool)>,
 }
@@ -150,8 +162,11 @@ impl InMemoryOrchardStorage {
     fn with_configuration(
         configuration: InMemoryOrchardConfiguration,
     ) -> (Self, InMemoryOrchardObserver) {
+        let harvest_windows = vec![None; configuration.plant_identities.len()];
         let orchard = Arc::new(Mutex::new(InMemoryOrchard {
             plant_identities: configuration.plant_identities,
+            plant_cultivars: Vec::new(),
+            harvest_windows,
             trees: configuration.trees,
         }));
         (
@@ -219,9 +234,28 @@ impl OrchardStorage for InMemoryOrchardStorage {
             Ok(value) => {
                 let mut committed_orchard = self.orchard.lock().unwrap();
                 committed_orchard
+                    .harvest_windows
+                    .extend(std::iter::repeat_n(
+                        None,
+                        transaction.staged_plant_identities.len(),
+                    ));
+                committed_orchard
                     .plant_identities
                     .extend(transaction.staged_plant_identities);
+                committed_orchard
+                    .plant_cultivars
+                    .extend(transaction.staged_plant_cultivars);
                 committed_orchard.trees.extend(transaction.staged_trees);
+                for (plant_identity_id, harvest_window) in transaction.staged_harvest_window_changes
+                {
+                    let index = plant_identity_index(plant_identity_id)
+                        .expect("a harvest-window change should have a positive identity ID");
+                    *committed_orchard
+                        .harvest_windows
+                        .get_mut(index)
+                        .expect("a harvest-window change should target an existing identity") =
+                        Some(harvest_window);
+                }
                 for (tree_id, is_in_danger) in transaction.staged_tree_danger_changes {
                     let index = tree_index(tree_id)
                         .expect("a staged danger change should have a positive tree ID");
@@ -264,10 +298,15 @@ impl OrchardStorage for InMemoryOrchardStorage {
         Ok(exists_in_committed_orchard || exists_in_staged_trees)
     }
 
-    fn find_or_create_plant_identity(
+    fn resolve_plant_identification(
         &mut self,
-        plant_identity: PlantIdentity,
-    ) -> Result<PlantIdentityId, OrchardStorageError> {
+        plant_identification: PlantIdentification,
+    ) -> Result<PlantIdentityReference, OrchardStorageError> {
+        let PlantIdentification {
+            plant_identity,
+            plant_cultivar,
+            ..
+        } = plant_identification;
         if self
             .failing_plant_identity_genus
             .as_ref()
@@ -281,33 +320,98 @@ impl OrchardStorage for InMemoryOrchardStorage {
             return Err(OrchardStorageError::PlantIdentityCouldNotBeResolved);
         }
         let committed_orchard = self.orchard.lock().unwrap();
-        if let Some(position) = committed_orchard
+        let committed_identity_position = committed_orchard
             .plant_identities
             .iter()
-            .position(|existing| existing.has_same_catalog_identity_as(&plant_identity))
-        {
-            return Ok(PlantIdentityId((position + 1) as u64));
-        }
+            .position(|existing| existing.has_same_taxon_as(&plant_identity));
         let committed_identity_count = committed_orchard.plant_identities.len();
+        let committed_cultivar_count = committed_orchard.plant_cultivars.len();
+        let committed_cultivar_id = committed_identity_position.and_then(|position| {
+            plant_cultivar.as_ref().and_then(|plant_cultivar| {
+                let plant_identity_id = PlantIdentityId((position + 1) as u64);
+                committed_orchard
+                    .plant_cultivars
+                    .iter()
+                    .position(|stored| {
+                        stored.plant_identity_id == plant_identity_id
+                            && stored.cultivar == plant_cultivar.cultivar
+                    })
+                    .map(|position| PlantCultivarId((position + 1) as u64))
+            })
+        });
         drop(committed_orchard);
 
         let transaction = self
             .transaction
             .as_mut()
             .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
-        if let Some(position) = transaction
-            .staged_plant_identities
-            .iter()
-            .position(|existing| existing.has_same_catalog_identity_as(&plant_identity))
-        {
-            return Ok(PlantIdentityId(
-                (committed_identity_count + position + 1) as u64,
-            ));
+        let plant_identity_id = committed_identity_position.map_or_else(
+            || {
+                if let Some(position) = transaction
+                    .staged_plant_identities
+                    .iter()
+                    .position(|existing| existing.has_same_taxon_as(&plant_identity))
+                {
+                    return PlantIdentityId((committed_identity_count + position + 1) as u64);
+                }
+                transaction.staged_plant_identities.push(plant_identity);
+                PlantIdentityId(
+                    (committed_identity_count + transaction.staged_plant_identities.len()) as u64,
+                )
+            },
+            |position| PlantIdentityId((position + 1) as u64),
+        );
+        let cultivar_id = match plant_cultivar {
+            None => None,
+            Some(_) if committed_cultivar_id.is_some() => committed_cultivar_id,
+            Some(PlantCultivar {
+                cultivar,
+                trade_name,
+            }) => {
+                let position = transaction
+                    .staged_plant_cultivars
+                    .iter()
+                    .position(|stored| {
+                        stored.plant_identity_id == plant_identity_id && stored.cultivar == cultivar
+                    });
+                let position = position.unwrap_or_else(|| {
+                    transaction.staged_plant_cultivars.push(StoredCultivar {
+                        plant_identity_id,
+                        cultivar,
+                        trade_name,
+                    });
+                    transaction.staged_plant_cultivars.len() - 1
+                });
+                Some(PlantCultivarId(
+                    (committed_cultivar_count + position + 1) as u64,
+                ))
+            }
+        };
+        Ok(PlantIdentityReference {
+            plant_identity_id,
+            cultivar_id,
+        })
+    }
+
+    fn change_plant_identity_harvest_window(
+        &mut self,
+        plant_identity_id: PlantIdentityId,
+        harvest_window: AnnualHarvestWindow,
+    ) -> Result<bool, OrchardStorageError> {
+        let committed_identity_count = self.orchard.lock().unwrap().plant_identities.len();
+        let transaction = self
+            .transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        let available_identity_count =
+            committed_identity_count + transaction.staged_plant_identities.len();
+        if plant_identity_id.0 == 0 || plant_identity_id.0 > available_identity_count as u64 {
+            return Ok(false);
         }
-        transaction.staged_plant_identities.push(plant_identity);
-        Ok(PlantIdentityId(
-            (committed_identity_count + transaction.staged_plant_identities.len()) as u64,
-        ))
+        transaction
+            .staged_harvest_window_changes
+            .push((plant_identity_id, harvest_window));
+        Ok(true)
     }
 
     fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardStorageError> {
@@ -321,6 +425,14 @@ impl OrchardStorage for InMemoryOrchardStorage {
         }
         let committed_orchard = self.orchard.lock().unwrap();
         let committed_identity_count = committed_orchard.plant_identities.len();
+        let committed_cultivar_count = committed_orchard.plant_cultivars.len();
+        let cultivar_is_valid = tree.cultivar_id.is_none_or(|cultivar_id| {
+            cultivar_belongs_to_identity(
+                &committed_orchard.plant_cultivars,
+                cultivar_id,
+                tree.plant_identity_id,
+            )
+        });
         if has_tree_with_same_legacy_feature(&committed_orchard.trees, &tree) {
             return Err(OrchardStorageError::TreeCouldNotBeSaved);
         }
@@ -332,8 +444,20 @@ impl OrchardStorage for InMemoryOrchardStorage {
             .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
         let available_identity_count =
             committed_identity_count + transaction.staged_plant_identities.len();
+        let staged_cultivar_is_valid = tree.cultivar_id.is_none_or(|cultivar_id| {
+            if cultivar_id.0 <= committed_cultivar_count as u64 {
+                cultivar_is_valid
+            } else {
+                let staged_index = cultivar_id.0 as usize - committed_cultivar_count - 1;
+                transaction
+                    .staged_plant_cultivars
+                    .get(staged_index)
+                    .is_some_and(|cultivar| cultivar.plant_identity_id == tree.plant_identity_id)
+            }
+        });
         if tree.plant_identity_id.0 == 0
             || tree.plant_identity_id.0 > available_identity_count as u64
+            || !staged_cultivar_is_valid
             || has_tree_with_same_legacy_feature(&transaction.staged_trees, &tree)
         {
             return Err(OrchardStorageError::TreeCouldNotBeSaved);
@@ -410,10 +534,30 @@ impl OrchardStorage for InMemoryOrchardStorage {
                     .get(identity_index)
                     .cloned()
                     .ok_or(OrchardStorageError::TreesCouldNotBeRead)?;
+                let plant_cultivar = if let Some(cultivar_id) = tree.cultivar_id {
+                    let cultivar_index = cultivar_id
+                        .0
+                        .checked_sub(1)
+                        .and_then(|index| usize::try_from(index).ok())
+                        .ok_or(OrchardStorageError::TreesCouldNotBeRead)?;
+                    let cultivar = orchard
+                        .plant_cultivars
+                        .get(cultivar_index)
+                        .filter(|cultivar| cultivar.plant_identity_id == tree.plant_identity_id)
+                        .ok_or(OrchardStorageError::TreesCouldNotBeRead)?;
+                    Some(PlantCultivar {
+                        cultivar: cultivar.cultivar.clone(),
+                        trade_name: cultivar.trade_name.clone(),
+                    })
+                } else {
+                    None
+                };
                 Ok(OrchardTree {
                     id: TreeId((index + 1) as u64),
                     tree: tree.clone(),
                     plant_identity,
+                    plant_cultivar,
+                    harvest_window: orchard.harvest_windows[identity_index],
                 })
             })
             .collect()
@@ -433,6 +577,26 @@ fn tree_index(tree_id: TreeId) -> Option<usize> {
         .0
         .checked_sub(1)
         .and_then(|index| usize::try_from(index).ok())
+}
+
+fn plant_identity_index(plant_identity_id: PlantIdentityId) -> Option<usize> {
+    plant_identity_id
+        .0
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok())
+}
+
+fn cultivar_belongs_to_identity(
+    cultivars: &[StoredCultivar],
+    cultivar_id: PlantCultivarId,
+    plant_identity_id: PlantIdentityId,
+) -> bool {
+    cultivar_id
+        .0
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| cultivars.get(index))
+        .is_some_and(|cultivar| cultivar.plant_identity_id == plant_identity_id)
 }
 
 fn has_tree_with_same_legacy_feature(trees: &[Tree], candidate: &Tree) -> bool {
@@ -456,5 +620,13 @@ impl InMemoryOrchardObserver {
 
     pub fn trees(&self) -> Vec<Tree> {
         self.orchard.lock().unwrap().trees.clone()
+    }
+
+    pub fn harvest_window(
+        &self,
+        plant_identity_id: PlantIdentityId,
+    ) -> Option<AnnualHarvestWindow> {
+        plant_identity_index(plant_identity_id)
+            .and_then(|index| self.orchard.lock().unwrap().harvest_windows[index])
     }
 }
