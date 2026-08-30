@@ -80,11 +80,303 @@
         cursor: wait;
         opacity: 0.6;
       }
+      #inventory-toggle {
+        position: absolute;
+        left: 20px;
+        top: 20px;
+        z-index: 10;
+      }
+      .inventory-button {
+        background: #245c2a;
+        border: 1px solid #245c2a;
+        border-radius: 6px;
+        color: white;
+        cursor: pointer;
+        font: 600 13px sans-serif;
+        padding: 8px 12px;
+      }
+      #inventory-panel {
+        background: rgba(255, 255, 255, 0.98);
+        border-radius: 10px;
+        bottom: 20px;
+        box-shadow: 0 3px 16px rgba(0, 0, 0, 0.3);
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        font-family: sans-serif;
+        left: 20px;
+        max-width: calc(100vw - 40px);
+        padding: 16px;
+        position: absolute;
+        top: 20px;
+        width: 760px;
+        z-index: 20;
+      }
+      #inventory-panel[hidden],
+      .inventory-view[hidden] {
+        display: none;
+      }
+      .inventory-header,
+      .inventory-tabs,
+      .inventory-filters,
+      .inventory-result-summary {
+        flex: 0 0 auto;
+      }
+      .inventory-header {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+      }
+      .inventory-header h2 {
+        font-size: 19px;
+        margin: 0;
+      }
+      .inventory-close {
+        background: transparent;
+        border: 0;
+        cursor: pointer;
+        font-size: 24px;
+        line-height: 1;
+        padding: 2px 5px;
+      }
+      .inventory-tabs {
+        border-bottom: 1px solid #ccc;
+        display: flex;
+        gap: 4px;
+        margin-top: 12px;
+      }
+      .inventory-tab {
+        background: transparent;
+        border: 0;
+        border-bottom: 3px solid transparent;
+        cursor: pointer;
+        font: 600 13px sans-serif;
+        padding: 8px 12px 7px;
+      }
+      .inventory-tab[aria-selected="true"] {
+        border-bottom-color: #245c2a;
+        color: #245c2a;
+      }
+      .inventory-view {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .inventory-filters {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 12px;
+      }
+      .inventory-filters label {
+        color: #333;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .inventory-filters select {
+        background: white;
+        border: 1px solid #999;
+        border-radius: 4px;
+        box-sizing: border-box;
+        display: block;
+        font: 13px sans-serif;
+        margin-top: 4px;
+        padding: 6px;
+        width: 100%;
+      }
+      .inventory-result-summary {
+        color: #555;
+        font-size: 12px;
+        margin: 10px 0 7px;
+      }
+      .inventory-table-wrap {
+        border: 1px solid #d5d5d5;
+        border-radius: 5px;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+      }
+      .inventory-table {
+        border-collapse: collapse;
+        font-size: 13px;
+        width: 100%;
+      }
+      .inventory-table th,
+      .inventory-table td {
+        border-bottom: 1px solid #e2e2e2;
+        padding: 8px 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+      .inventory-table th {
+        background: #f2f5f1;
+        position: sticky;
+        top: 0;
+        white-space: nowrap;
+        z-index: 1;
+      }
+      .inventory-table tbody tr:last-child td {
+        border-bottom: 0;
+      }
+      .inventory-table .inventory-number {
+        text-align: right;
+      }
+      .inventory-empty {
+        color: #666;
+        text-align: center !important;
+      }
+      #species-inventory .inventory-result-summary {
+        margin-top: 12px;
+      }
+      .inventory-cultivars {
+        margin-top: 6px;
+      }
+      .inventory-cultivars summary {
+        color: #245c2a;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .inventory-cultivars ul {
+        margin: 5px 0 0;
+        padding-left: 20px;
+      }
+      @media (max-width: 620px) {
+        #inventory-toggle {
+          left: 10px;
+          top: 10px;
+        }
+        #inventory-panel {
+          bottom: 10px;
+          left: 10px;
+          max-width: calc(100vw - 20px);
+          padding: 12px;
+          top: 10px;
+          width: calc(100vw - 20px);
+        }
+        .inventory-filters {
+          grid-template-columns: 1fr;
+        }
+      }
     </style>
   </head>
   <body>
     <div id="map"></div>
     <div id="map-status">Loading orchard trees…</div>
+    <button
+      id="inventory-toggle"
+      class="inventory-button"
+      type="button"
+      aria-controls="inventory-panel"
+      aria-expanded="false"
+    >
+      Tree inventory
+    </button>
+    <aside id="inventory-panel" aria-labelledby="inventory-title" hidden>
+      <header class="inventory-header">
+        <h2 id="inventory-title">Orchard inventory</h2>
+        <button
+          id="inventory-close"
+          class="inventory-close"
+          type="button"
+          aria-label="Close inventory"
+        >
+          ×
+        </button>
+      </header>
+      <div class="inventory-tabs" role="tablist" aria-label="Inventory views">
+        <button
+          id="trees-tab"
+          class="inventory-tab"
+          type="button"
+          role="tab"
+          aria-controls="tree-inventory"
+          aria-selected="true"
+        >
+          Trees
+        </button>
+        <button
+          id="species-tab"
+          class="inventory-tab"
+          type="button"
+          role="tab"
+          aria-controls="species-inventory"
+          aria-selected="false"
+        >
+          Species planted
+        </button>
+      </div>
+      <section
+        id="tree-inventory"
+        class="inventory-view"
+        role="tabpanel"
+        aria-labelledby="trees-tab"
+      >
+        <div class="inventory-filters">
+          <label>
+            Role
+            <select id="inventory-role-filter">
+              <option value="">All roles</option>
+              <option value="fruit">Fruit</option>
+              <option value="pioneer">Pioneer</option>
+            </select>
+          </label>
+          <label>
+            Genus
+            <select id="inventory-genus-filter">
+              <option value="">All genera</option>
+            </select>
+          </label>
+          <label>
+            Species
+            <select id="inventory-species-filter">
+              <option value="">All species</option>
+            </select>
+          </label>
+        </div>
+        <div id="tree-result-summary" class="inventory-result-summary">
+          0 trees
+        </div>
+        <div class="inventory-table-wrap">
+          <table class="inventory-table">
+            <thead>
+              <tr>
+                <th scope="col">ID</th>
+                <th scope="col">Name</th>
+                <th scope="col">Botanical identity</th>
+                <th scope="col">Roles</th>
+                <th scope="col">Planted</th>
+                <th scope="col">Condition</th>
+              </tr>
+            </thead>
+            <tbody id="tree-inventory-body"></tbody>
+          </table>
+        </div>
+      </section>
+      <section
+        id="species-inventory"
+        class="inventory-view"
+        role="tabpanel"
+        aria-labelledby="species-tab"
+        hidden
+      >
+        <div id="identity-result-summary" class="inventory-result-summary">
+          0 planted species
+        </div>
+        <div class="inventory-table-wrap">
+          <table class="inventory-table">
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Botanical identity</th>
+                <th scope="col" class="inventory-number">Trees</th>
+              </tr>
+            </thead>
+            <tbody id="identity-inventory-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </aside>
     <div
       id="date-filter"
       style="
@@ -134,7 +426,13 @@
         style="width: 100%; margin-top: 4px"
       />
     </div>
-    <script>
+    <script type="module">
+      import {
+        filterTreeFeatures,
+        summarizeSpecies,
+        taxonomyOptions,
+      } from "./orchard-inventory.mjs";
+
       const map = new maplibregl.Map({
         container: "map",
         style: {
@@ -256,6 +554,25 @@
 
       let treeTooltip;
       let treeEditor;
+      let orchardFeatures = [];
+      const inventoryToggle = document.getElementById("inventory-toggle");
+      const inventoryPanel = document.getElementById("inventory-panel");
+      const inventoryClose = document.getElementById("inventory-close");
+      const treesTab = document.getElementById("trees-tab");
+      const speciesTab = document.getElementById("species-tab");
+      const treeInventory = document.getElementById("tree-inventory");
+      const speciesInventory = document.getElementById("species-inventory");
+      const roleFilter = document.getElementById("inventory-role-filter");
+      const genusFilter = document.getElementById("inventory-genus-filter");
+      const speciesFilter = document.getElementById("inventory-species-filter");
+      const treeResultSummary = document.getElementById("tree-result-summary");
+      const identityResultSummary = document.getElementById(
+        "identity-result-summary",
+      );
+      const treeInventoryBody = document.getElementById("tree-inventory-body");
+      const identityInventoryBody = document.getElementById(
+        "identity-inventory-body",
+      );
 
       function createDeadTreeCrossImage() {
         const size = 18;
@@ -417,6 +734,142 @@
         throw new Error("Could not update this tree. Please try again.");
       }
 
+      function setInventoryOpen(isOpen) {
+        inventoryPanel.hidden = !isOpen;
+        inventoryToggle.hidden = isOpen;
+        inventoryToggle.setAttribute("aria-expanded", String(isOpen));
+        if (isOpen) inventoryClose.focus();
+      }
+
+      function selectInventoryView(view) {
+        const showsTrees = view === "trees";
+        treesTab.setAttribute("aria-selected", String(showsTrees));
+        speciesTab.setAttribute("aria-selected", String(!showsTrees));
+        treeInventory.hidden = !showsTrees;
+        speciesInventory.hidden = showsTrees;
+      }
+
+      function setSelectOptions(select, values, allLabel) {
+        const previousValue = select.value;
+        const allOption = document.createElement("option");
+        allOption.value = "";
+        allOption.textContent = allLabel;
+        const options = values.map((value) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = value;
+          return option;
+        });
+        select.replaceChildren(allOption, ...options);
+        select.value = values.includes(previousValue) ? previousValue : "";
+      }
+
+      function refreshTaxonomyFilters() {
+        const { genera } = taxonomyOptions(orchardFeatures);
+        setSelectOptions(genusFilter, genera, "All genera");
+        refreshSpeciesFilter();
+      }
+
+      function refreshSpeciesFilter() {
+        const { species } = taxonomyOptions(orchardFeatures, genusFilter.value);
+        setSelectOptions(speciesFilter, species, "All species");
+      }
+
+      function renderInventory() {
+        renderTreeInventory();
+        renderSpeciesInventory();
+      }
+
+      function renderTreeInventory() {
+        const filteredTrees = filterTreeFeatures(orchardFeatures, {
+          role: roleFilter.value,
+          genus: genusFilter.value,
+          species: speciesFilter.value,
+        });
+        treeResultSummary.textContent = `${filteredTrees.length} of ${orchardFeatures.length} trees`;
+        const rows = filteredTrees.map((feature) => {
+          const properties = feature.properties || {};
+          const row = document.createElement("tr");
+          appendCell(row, feature.id);
+          appendCell(row, properties.name);
+          appendCell(row, properties.latin_name);
+          appendCell(row, (properties.roles || []).join(", "));
+          appendCell(row, properties.planted_on);
+          appendCell(row, treeCondition(properties));
+          return row;
+        });
+        treeInventoryBody.replaceChildren(...rows);
+        if (rows.length === 0) {
+          treeInventoryBody.append(emptyRow("No trees match these filters.", 6));
+        }
+      }
+
+      function renderSpeciesInventory() {
+        const species = summarizeSpecies(orchardFeatures);
+        identityResultSummary.textContent = `${species.length} planted species · ${orchardFeatures.length} trees`;
+        const rows = species.map((speciesSummary) => {
+          const row = document.createElement("tr");
+          appendCell(row, speciesSummary.names.join(" / "));
+          appendSpeciesCell(row, speciesSummary);
+          appendCell(row, speciesSummary.count, "inventory-number");
+          return row;
+        });
+        identityInventoryBody.replaceChildren(...rows);
+        if (rows.length === 0) {
+          identityInventoryBody.append(
+            emptyRow("No planted species yet.", 3),
+          );
+        }
+      }
+
+      function appendSpeciesCell(row, speciesSummary) {
+        const cell = document.createElement("td");
+        const taxonName = document.createElement("div");
+        taxonName.textContent = speciesSummary.taxonName;
+        cell.append(taxonName);
+
+        if (speciesSummary.cultivars.length > 0) {
+          const details = document.createElement("details");
+          details.className = "inventory-cultivars";
+          const summary = document.createElement("summary");
+          const cultivarCount = speciesSummary.cultivars.length;
+          summary.textContent = `${cultivarCount} cultivar${cultivarCount === 1 ? "" : "s"}`;
+          const list = document.createElement("ul");
+          speciesSummary.cultivars.forEach((cultivar) => {
+            const item = document.createElement("li");
+            item.textContent = `${cultivar.name} — ${cultivar.count}`;
+            list.append(item);
+          });
+          details.append(summary, list);
+          cell.append(details);
+        }
+
+        row.append(cell);
+      }
+
+      function appendCell(row, value, className) {
+        const cell = document.createElement("td");
+        if (className) cell.className = className;
+        cell.textContent = value == null || value === "" ? "—" : String(value);
+        row.append(cell);
+      }
+
+      function emptyRow(message, columnCount) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.className = "inventory-empty";
+        cell.colSpan = columnCount;
+        cell.textContent = message;
+        row.append(cell);
+        return row;
+      }
+
+      function treeCondition(properties) {
+        if (properties.is_alive === false) return "Dead";
+        if (properties.is_in_danger === true) return "In danger";
+        return "Healthy";
+      }
+
       map.on("mouseenter", "trees", (event) => {
         map.getCanvas().style.cursor = "pointer";
         if (treeEditor) return;
@@ -484,6 +937,7 @@
           },
         });
 
+        applyDateFilter();
         initializeMap();
       });
 
@@ -527,7 +981,11 @@
       async function fetchOrchardTrees() {
         const response = await fetch("/api/trees.geojson");
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        map.getSource("orchard").setData(await response.json());
+        const orchard = await response.json();
+        orchardFeatures = orchard.features || [];
+        map.getSource("orchard").setData(orchard);
+        refreshTaxonomyFilters();
+        renderInventory();
       }
 
       async function loadOrchardTrees() {
@@ -564,7 +1022,7 @@
 
       function applyDateFilter() {
         if (!dateFilterEnabled.checked) {
-          map.setFilter("trees", null);
+          if (map.isStyleLoaded()) map.setFilter("trees", null);
           dateLabel.textContent = "All dates";
           dateMinSlider.disabled = true;
           dateMaxSlider.disabled = true;
@@ -588,16 +1046,31 @@
 
         dateLabel.textContent = `${formatDate(from)} → ${formatDate(to)}`;
 
-        map.setFilter("trees", [
-          "all",
-          [">=", ["get", "planted_on"], formatDate(from)],
-          ["<=", ["get", "planted_on"], formatDate(to)],
-        ]);
+        if (map.isStyleLoaded()) {
+          map.setFilter("trees", [
+            "all",
+            [">=", ["get", "planted_on"], formatDate(from)],
+            ["<=", ["get", "planted_on"], formatDate(to)],
+          ]);
+        }
       }
 
       dateMinSlider.addEventListener("input", applyDateFilter);
       dateMaxSlider.addEventListener("input", applyDateFilter);
       dateFilterEnabled.addEventListener("change", applyDateFilter);
+
+      inventoryToggle.addEventListener("click", () => setInventoryOpen(true));
+      inventoryClose.addEventListener("click", () => setInventoryOpen(false));
+      treesTab.addEventListener("click", () => selectInventoryView("trees"));
+      speciesTab.addEventListener("click", () =>
+        selectInventoryView("species"),
+      );
+      roleFilter.addEventListener("change", renderTreeInventory);
+      speciesFilter.addEventListener("change", renderTreeInventory);
+      genusFilter.addEventListener("change", () => {
+        refreshSpeciesFilter();
+        renderTreeInventory();
+      });
 
       // Init
       dateMinSlider.max = totalDays;
