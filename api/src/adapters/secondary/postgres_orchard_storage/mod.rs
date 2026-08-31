@@ -2,9 +2,10 @@ use postgres::{Client, NoTls};
 
 use crate::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow, GeoPoint,
-    HarvestScheduleOwner, IdentificationStatus, LegacyPlantIdentification, LegacyTreeSource,
-    MapConfiguration, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
-    PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId,
+    HarvestDataOrigin, HarvestScheduleOwner, HarvestedPart, IdentificationStatus,
+    LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, OrchardTree, PlantCultivar,
+    PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
+    ReproductiveRole, Tree, TreeId,
 };
 use crate::hexagon::ports::{
     MapConfigurationStorage, MapConfigurationStorageError, OrchardStorage, OrchardStorageError,
@@ -114,8 +115,11 @@ impl OrchardStorage for PostgresOrchardStorage {
                 .execute(
                     "INSERT INTO plant_harvest_windows (
                         plant_identity_id, cultivar_id,
-                        start_month, start_day, end_month, end_day
-                     ) VALUES ($1, $2, $3, $4, $5, $6)",
+                        start_month, start_day, end_month, end_day,
+                        reference_region, harvested_part, data_origin, source_url
+                     ) VALUES ($1, $2, $3, $4, $5, $6, $7,
+                               $8::text::harvested_part,
+                               $9::text::harvest_data_origin, $10)",
                     &[
                         &plant_identity_id,
                         &cultivar_id,
@@ -123,6 +127,10 @@ impl OrchardStorage for PostgresOrchardStorage {
                         &i16::from(window.start.day),
                         &i16::from(window.end.month),
                         &i16::from(window.end.day),
+                        &window.reference_region,
+                        &window.harvested_part.as_str(),
+                        &window.data_origin.as_str(),
+                        &window.source_url,
                     ],
                 )
                 .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
@@ -193,8 +201,15 @@ impl OrchardStorage for PostgresOrchardStorage {
                  LEFT JOIN plant_cultivars c ON c.id = t.cultivar_id
                  LEFT JOIN LATERAL (
                     SELECT json_agg(
-                        json_build_array(
-                            w.start_month, w.start_day, w.end_month, w.end_day
+                        json_build_object(
+                            'start_month', w.start_month,
+                            'start_day', w.start_day,
+                            'end_month', w.end_month,
+                            'end_day', w.end_day,
+                            'reference_region', w.reference_region,
+                            'harvested_part', w.harvested_part,
+                            'data_origin', w.data_origin,
+                            'source_url', w.source_url
                         ) ORDER BY w.start_month, w.start_day, w.end_month, w.end_day, w.id
                     )::text AS windows
                     FROM plant_harvest_windows w
@@ -395,14 +410,30 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
 fn harvest_windows_from_row(
     row: &postgres::Row,
 ) -> Result<Vec<AnnualHarvestWindow>, OrchardStorageError> {
-    let values = serde_json::from_str::<Vec<[i16; 4]>>(&row.get::<_, String>(24))
+    #[derive(serde::Deserialize)]
+    struct StoredHarvestWindow {
+        start_month: i16,
+        start_day: i16,
+        end_month: i16,
+        end_day: i16,
+        reference_region: Option<String>,
+        harvested_part: HarvestedPart,
+        data_origin: HarvestDataOrigin,
+        source_url: Option<String>,
+    }
+
+    let values = serde_json::from_str::<Vec<StoredHarvestWindow>>(&row.get::<_, String>(24))
         .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?;
     values
         .into_iter()
-        .map(|[start_month, start_day, end_month, end_day]| {
+        .map(|window| {
             Ok(AnnualHarvestWindow {
-                start: annual_date(start_month, start_day)?,
-                end: annual_date(end_month, end_day)?,
+                start: annual_date(window.start_month, window.start_day)?,
+                end: annual_date(window.end_month, window.end_day)?,
+                reference_region: window.reference_region,
+                harvested_part: window.harvested_part,
+                data_origin: window.data_origin,
+                source_url: window.source_url,
             })
         })
         .collect()

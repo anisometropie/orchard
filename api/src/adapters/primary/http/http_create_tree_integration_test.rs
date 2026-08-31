@@ -2,9 +2,9 @@ use orchard_api::adapters::primary::http::start_http_server;
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
-    BotanicalTaxon, GeoPoint, HarvestScheduleOwner, IdentificationStatus, MapConfiguration,
-    NamedTaxon, PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity,
-    PlantIdentityId, Tree,
+    BotanicalTaxon, GeoPoint, HarvestDataOrigin, HarvestScheduleOwner, HarvestedPart,
+    IdentificationStatus, MapConfiguration, NamedTaxon, PlantCultivar, PlantCultivarId,
+    PlantIdentification, PlantIdentity, PlantIdentityId, Tree,
 };
 use reqwest::StatusCode;
 
@@ -130,14 +130,17 @@ async fn replace_and_clear_a_cultivarless_species_recurring_harvest_windows_http
             server.url()
         ))
         .json(&serde_json::json!({
+            "reference_region": "Sapporo, Japan",
             "windows": [
                 {
                     "start": { "month": 6, "day": 15 },
-                    "end": { "month": 7, "day": 5 }
+                    "end": { "month": 7, "day": 5 },
+                    "harvested_part": "fruit"
                 },
                 {
                     "start": { "month": 8, "day": 20 },
-                    "end": { "month": 10, "day": 5 }
+                    "end": { "month": 10, "day": 5 },
+                    "harvested_part": "fruit"
                 }
             ]
         }))
@@ -152,10 +155,18 @@ async fn replace_and_clear_a_cultivarless_species_recurring_harvest_windows_http
             AnnualHarvestWindow {
                 start: AnnualDate { month: 6, day: 15 },
                 end: AnnualDate { month: 7, day: 5 },
+                reference_region: Some("Sapporo, Japan".into()),
+                harvested_part: HarvestedPart::Fruit,
+                data_origin: HarvestDataOrigin::FieldObservation,
+                source_url: None,
             },
             AnnualHarvestWindow {
                 start: AnnualDate { month: 8, day: 20 },
                 end: AnnualDate { month: 10, day: 5 },
+                reference_region: Some("Sapporo, Japan".into()),
+                harvested_part: HarvestedPart::Fruit,
+                data_origin: HarvestDataOrigin::FieldObservation,
+                source_url: None,
             },
         ]
     );
@@ -165,7 +176,10 @@ async fn replace_and_clear_a_cultivarless_species_recurring_harvest_windows_http
             "{}/plant-identities/1/harvest-windows",
             server.url()
         ))
-        .json(&serde_json::json!({ "windows": [] }))
+        .json(&serde_json::json!({
+            "reference_region": "Sapporo, Japan",
+            "windows": []
+        }))
         .send()
         .await
         .unwrap();
@@ -208,9 +222,11 @@ async fn replace_a_cultivar_harvest_window_without_changing_the_species_schedule
             server.url()
         ))
         .json(&serde_json::json!({
+            "reference_region": "Sapporo, Japan",
             "windows": [{
                 "start": { "month": 9, "day": 1 },
-                "end": { "month": 10, "day": 15 }
+                "end": { "month": 10, "day": 15 },
+                "harvested_part": "fruit"
             }]
         }))
         .send()
@@ -223,6 +239,10 @@ async fn replace_a_cultivar_harvest_window_without_changing_the_species_schedule
         vec![AnnualHarvestWindow {
             start: AnnualDate { month: 9, day: 1 },
             end: AnnualDate { month: 10, day: 15 },
+            reference_region: Some("Sapporo, Japan".into()),
+            harvested_part: HarvestedPart::Fruit,
+            data_origin: HarvestDataOrigin::FieldObservation,
+            source_url: None,
         }]
     );
     assert!(

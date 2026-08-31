@@ -16,9 +16,9 @@ use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::hexagon::models::{
-    AerialOverlayId, AnnualDate, BotanicalTaxon, HarvestScheduleOwner, InfraspecificRank,
-    MapConfiguration, NamedTaxon, OrchardTree, PlantCultivarId, PlantIdentification, PlantIdentity,
-    PlantIdentityId, Tree, TreeId,
+    AerialOverlayId, AnnualDate, BotanicalTaxon, HarvestScheduleOwner, HarvestedPart,
+    InfraspecificRank, MapConfiguration, NamedTaxon, OrchardTree, PlantCultivarId,
+    PlantIdentification, PlantIdentity, PlantIdentityId, Tree, TreeId,
 };
 use crate::hexagon::ports::{MapConfigurationStorage, OrchardStorage};
 use crate::hexagon::use_cases::change_tree_condition::{
@@ -202,6 +202,7 @@ struct ChangeTreeRequest {
 
 #[derive(Deserialize)]
 struct ReplaceHarvestWindowsRequest {
+    reference_region: String,
     windows: Vec<HarvestWindowRequest>,
 }
 
@@ -209,6 +210,7 @@ struct ReplaceHarvestWindowsRequest {
 struct HarvestWindowRequest {
     start: AnnualDate,
     end: AnnualDate,
+    harvested_part: HarvestedPart,
 }
 
 async fn replace_identity_harvest_windows_handler<U>(
@@ -251,6 +253,7 @@ async fn replace_harvest_windows_handler<U>(
 where
     U: OrchardStorage + Send + 'static,
 {
+    let reference_region = request.reference_region;
     let windows = request
         .windows
         .into_iter()
@@ -259,18 +262,26 @@ where
             start_day: window.start.day,
             end_month: window.end.month,
             end_day: window.end.day,
+            harvested_part: window.harvested_part,
         })
         .collect();
     match tokio::task::spawn_blocking(move || {
         replace_plant_harvest_windows(
-            PlantHarvestWindowsReplaced { owner, windows },
+            PlantHarvestWindowsReplaced {
+                owner,
+                reference_region,
+                windows,
+            },
             &mut *orchard_storage.lock().unwrap(),
         )
     })
     .await
     {
         Ok(Ok(())) => StatusCode::NO_CONTENT,
-        Ok(Err(PlantHarvestWindowsReplacementError::InvalidAnnualDate)) => StatusCode::BAD_REQUEST,
+        Ok(Err(
+            PlantHarvestWindowsReplacementError::InvalidAnnualDate
+            | PlantHarvestWindowsReplacementError::MissingReferenceRegion,
+        )) => StatusCode::BAD_REQUEST,
         Ok(Err(PlantHarvestWindowsReplacementError::OwnerNotFound)) => StatusCode::NOT_FOUND,
         Ok(Err(_)) | Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -341,6 +352,10 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
                 json!({
                     "start": annual_date_string(window.start),
                     "end": annual_date_string(window.end),
+                    "reference_region": window.reference_region,
+                    "harvested_part": window.harvested_part,
+                    "data_origin": window.data_origin,
+                    "source_url": window.source_url,
                 })
             })
             .collect::<Vec<_>>();
