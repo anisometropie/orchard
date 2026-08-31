@@ -112,6 +112,47 @@ export function harvestScheduleEndpoint({ plantIdentityId, cultivarId }) {
   throw new Error("This harvest schedule has no editable ID.");
 }
 
+export function harvestSchedulesForSpecies(speciesSummary) {
+  const schedules = [];
+  if (speciesSummary.cultivarless) {
+    schedules.push({
+      label: null,
+      count: speciesSummary.cultivarless.count,
+      plantIdentityId: speciesSummary.plantIdentityId,
+      cultivarId: null,
+      harvestWindows: speciesSummary.cultivarless.harvestWindows,
+    });
+  }
+  speciesSummary.cultivars.forEach((cultivar) => {
+    schedules.push({
+      label: cultivar.name,
+      count: cultivar.count,
+      plantIdentityId: speciesSummary.plantIdentityId,
+      cultivarId: cultivar.id,
+      harvestWindows: cultivar.harvestWindows,
+    });
+  });
+  return schedules;
+}
+
+export function harvestWindowSpan(schedules) {
+  const windows = schedules.flatMap(({ harvestWindows = [] }) =>
+    harvestWindows.filter(({ start, end }) => start && end),
+  );
+  if (windows.length === 0) return null;
+
+  return {
+    start: windows.reduce(
+      (earliest, window) => window.start < earliest ? window.start : earliest,
+      windows[0].start,
+    ),
+    end: windows.reduce(
+      (latest, window) => window.end > latest ? window.end : latest,
+      windows[0].end,
+    ),
+  };
+}
+
 function arrayProperty(value) {
   return Array.isArray(value) ? value : [];
 }

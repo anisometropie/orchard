@@ -236,10 +236,47 @@
         color: #245c2a;
         cursor: pointer;
         font-size: 12px;
+        width: max-content;
       }
-      .inventory-cultivars ul {
-        margin: 5px 0 0;
-        padding-left: 20px;
+      .inventory-species-name {
+        font-style: italic;
+        font-weight: 600;
+      }
+      .inventory-species-common-name {
+        color: #666;
+        font-size: 11px;
+        margin-top: 2px;
+      }
+      .inventory-cultivar-list {
+        display: none;
+        margin-top: 7px;
+      }
+      .inventory-cultivars[open] .inventory-cultivar-list {
+        display: grid;
+      }
+      .inventory-species-harvest {
+        align-items: center;
+        display: flex;
+        gap: 5px;
+        margin-top: 4px;
+        width: max-content;
+      }
+      .harvest-schedule {
+        align-items: center;
+        border-top: 1px solid #e5e5e5;
+        display: grid;
+        gap: 5px 10px;
+        grid-template-columns: minmax(110px, 1fr) auto minmax(180px, 1.5fr) 24px;
+        min-height: 28px;
+        padding: 5px 0;
+      }
+      .harvest-schedule-name {
+        font-weight: 600;
+      }
+      .harvest-schedule-count,
+      .harvest-schedule-window {
+        color: #555;
+        font-size: 12px;
       }
       .harvest-editor {
         display: grid;
@@ -261,8 +298,7 @@
       .harvest-editor input {
         width: 110px;
       }
-      .harvest-window-list,
-      .harvest-schedule {
+      .harvest-window-list {
         display: grid;
         gap: 5px;
       }
@@ -271,16 +307,13 @@
         display: flex;
         gap: 5px;
       }
-      .harvest-schedule + .harvest-schedule {
-        border-top: 1px solid #ddd;
-        margin-top: 6px;
-        padding-top: 6px;
+      .harvest-schedule .harvest-editor {
+        grid-column: 1 / -1;
       }
       .harvest-editor-actions {
         display: flex;
         gap: 5px;
       }
-      .harvest-edit-button,
       .harvest-editor button {
         border: 1px solid #777;
         border-radius: 4px;
@@ -289,7 +322,33 @@
         padding: 3px 7px;
       }
       .harvest-edit-button {
-        margin-left: 7px;
+        align-items: center;
+        background: transparent;
+        border: 0;
+        border-radius: 50%;
+        color: #245c2a;
+        cursor: pointer;
+        display: inline-flex;
+        font-size: 16px;
+        height: 24px;
+        justify-content: center;
+        opacity: 0;
+        padding: 0;
+        pointer-events: none;
+        transition: background-color 120ms ease, opacity 120ms ease;
+        width: 24px;
+      }
+      .harvest-schedule:hover .harvest-edit-button,
+      .harvest-schedule:focus-within .harvest-edit-button,
+      .inventory-species-harvest:hover .harvest-edit-button,
+      .inventory-species-harvest:focus-within .harvest-edit-button {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .harvest-edit-button:hover,
+      .harvest-edit-button:focus-visible {
+        background: #e5efe3;
+        outline: none;
       }
       .harvest-editor-error {
         color: #b42318;
@@ -335,6 +394,22 @@
         }
         .inventory-filters {
           grid-template-columns: 1fr;
+        }
+        .harvest-schedule {
+          grid-template-columns: minmax(0, 1fr) auto 24px;
+        }
+        .harvest-schedule-window {
+          grid-column: 1 / 3;
+        }
+        .harvest-edit-button {
+          grid-column: 3;
+          grid-row: 1 / 3;
+        }
+      }
+      @media (hover: none) {
+        .harvest-edit-button {
+          opacity: 0.65;
+          pointer-events: auto;
         }
       }
     </style>
@@ -446,10 +521,9 @@
           <table class="inventory-table">
             <thead>
               <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Botanical identity</th>
-                <th scope="col" class="inventory-number">Trees</th>
+                <th scope="col">Species</th>
                 <th scope="col">Harvest</th>
+                <th scope="col" class="inventory-number">Trees</th>
               </tr>
             </thead>
             <tbody id="identity-inventory-body"></tbody>
@@ -525,9 +599,11 @@
       import {
         filterTreeFeatures,
         harvestScheduleEndpoint,
+        harvestSchedulesForSpecies,
+        harvestWindowSpan,
         summarizeSpecies,
         taxonomyOptions,
-      } from "./orchard-inventory.mjs";
+      } from "./orchard-inventory.mjs?v=3";
       import {
         harvestAvailability,
         harvestAvailabilitySummary,
@@ -945,16 +1021,15 @@
         identityResultSummary.textContent = `${species.length} planted species · ${orchardFeatures.length} trees`;
         const rows = species.map((speciesSummary) => {
           const row = document.createElement("tr");
-          appendCell(row, speciesSummary.names.join(" / "));
           appendSpeciesCell(row, speciesSummary);
+          appendSpeciesHarvestCell(row, speciesSummary);
           appendCell(row, speciesSummary.count, "inventory-number");
-          appendHarvestCell(row, speciesSummary);
           return row;
         });
         identityInventoryBody.replaceChildren(...rows);
         if (rows.length === 0) {
           identityInventoryBody.append(
-            emptyRow("No planted species yet.", 4),
+            emptyRow("No planted species yet.", 3),
           );
         }
       }
@@ -962,65 +1037,106 @@
       function appendSpeciesCell(row, speciesSummary) {
         const cell = document.createElement("td");
         const taxonName = document.createElement("div");
+        taxonName.className = "inventory-species-name";
         taxonName.textContent = speciesSummary.taxonName;
-        cell.append(taxonName);
+        const commonName = document.createElement("div");
+        commonName.className = "inventory-species-common-name";
+        commonName.textContent = speciesSummary.names.join(" / ");
+        cell.append(taxonName, commonName);
+        row.append(cell);
+      }
 
-        if (speciesSummary.cultivars.length > 0) {
-          const details = document.createElement("details");
-          details.className = "inventory-cultivars";
-          const summary = document.createElement("summary");
-          const cultivarCount = speciesSummary.cultivars.length;
-          summary.textContent = `${cultivarCount} cultivar${cultivarCount === 1 ? "" : "s"}`;
-          const list = document.createElement("ul");
-          speciesSummary.cultivars.forEach((cultivar) => {
-            const item = document.createElement("li");
-            item.textContent = `${cultivar.name} — ${cultivar.count}`;
-            list.append(item);
-          });
-          details.append(summary, list);
-          cell.append(details);
+      function appendSpeciesHarvestCell(row, speciesSummary) {
+        const cell = document.createElement("td");
+        cell.className = "inventory-harvest-cell";
+        const schedules = harvestSchedulesForSpecies(speciesSummary);
+
+        const speciesSchedule = schedules.find(
+          ({ cultivarId }) => cultivarId == null,
+        );
+        if (speciesSchedule) appendSpeciesHarvest(cell, speciesSchedule);
+
+        if (speciesSummary.cultivars.length === 0) {
+          row.append(cell);
+          return;
         }
+
+        const details = document.createElement("details");
+        details.className = "inventory-cultivars";
+        const summary = document.createElement("summary");
+        const cultivarCount = speciesSummary.cultivars.length;
+        const cultivarSchedules = schedules.filter(
+          ({ cultivarId }) => cultivarId != null,
+        );
+        const windowSpan = harvestWindowSpan(cultivarSchedules);
+        summary.textContent = `${cultivarCount} cultivar${cultivarCount === 1 ? "" : "s"} · ${formatHarvestWindows(windowSpan ? [windowSpan] : [])}`;
+        const list = document.createElement("div");
+        list.className = "inventory-cultivar-list";
+        cultivarSchedules.forEach((schedule) => {
+          appendHarvestSchedule(list, schedule);
+        });
+        details.append(summary, list);
+        cell.append(details);
 
         row.append(cell);
       }
 
-      function appendHarvestCell(row, speciesSummary) {
-        const cell = document.createElement("td");
-        const schedules = [];
-        if (speciesSummary.cultivarless) {
-          schedules.push({
-            label: "No cultivar",
-            count: speciesSummary.cultivarless.count,
-            plantIdentityId: speciesSummary.plantIdentityId,
-            cultivarId: null,
-            harvestWindows: speciesSummary.cultivarless.harvestWindows,
-          });
-        }
-        speciesSummary.cultivars.forEach((cultivar) => {
-          schedules.push({
-            label: cultivar.name,
-            count: cultivar.count,
-            plantIdentityId: speciesSummary.plantIdentityId,
-            cultivarId: cultivar.id,
-            harvestWindows: cultivar.harvestWindows,
+      function appendSpeciesHarvest(cell, schedule) {
+        const scheduleRow = document.createElement("div");
+        scheduleRow.className = "inventory-species-harvest";
+        renderSpeciesHarvest(scheduleRow, schedule);
+        cell.append(scheduleRow);
+      }
+
+      function renderSpeciesHarvest(scheduleRow, schedule) {
+        const windows = document.createElement("span");
+        windows.className = "harvest-schedule-window";
+        windows.textContent = formatHarvestWindows(schedule.harvestWindows);
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "harvest-edit-button";
+        editButton.textContent = "✎";
+        editButton.title = "Edit harvest window";
+        editButton.setAttribute("aria-label", "Edit harvest window");
+        editButton.addEventListener("click", () => {
+          showHarvestEditor(scheduleRow, schedule, {
+            restore: renderSpeciesHarvest,
+            title: "Harvest window",
           });
         });
-        schedules.forEach((schedule) => {
-          const scheduleRow = document.createElement("div");
-          scheduleRow.className = "harvest-schedule";
-          const value = document.createElement("span");
-          value.textContent = `${schedule.label} (${schedule.count}): ${formatHarvestWindows(schedule.harvestWindows)}`;
-          const editButton = document.createElement("button");
-          editButton.type = "button";
-          editButton.className = "harvest-edit-button";
-          editButton.textContent = "Edit";
-          editButton.addEventListener("click", () => {
-            showHarvestEditor(cell, schedule);
-          });
-          scheduleRow.append(value, editButton);
-          cell.append(scheduleRow);
+        scheduleRow.replaceChildren(windows, editButton);
+      }
+
+      function appendHarvestSchedule(list, schedule) {
+        const scheduleRow = document.createElement("div");
+        scheduleRow.className = "harvest-schedule";
+        renderHarvestSchedule(scheduleRow, schedule);
+        list.append(scheduleRow);
+      }
+
+      function renderHarvestSchedule(scheduleRow, schedule) {
+        const name = document.createElement("span");
+        name.className = "harvest-schedule-name";
+        name.textContent = schedule.label;
+        const count = document.createElement("span");
+        count.className = "harvest-schedule-count";
+        count.textContent = `${schedule.count} tree${schedule.count === 1 ? "" : "s"}`;
+        const windows = document.createElement("span");
+        windows.className = "harvest-schedule-window";
+        windows.textContent = formatHarvestWindows(schedule.harvestWindows);
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "harvest-edit-button";
+        editButton.textContent = "✎";
+        editButton.title = `Edit ${schedule.label}`;
+        editButton.setAttribute(
+          "aria-label",
+          `Edit harvest windows for ${schedule.label}`,
+        );
+        editButton.addEventListener("click", () => {
+          showHarvestEditor(scheduleRow, schedule);
         });
-        row.append(cell);
+        scheduleRow.replaceChildren(name, count, windows, editButton);
       }
 
       function formatHarvestWindows(windows) {
@@ -1029,11 +1145,15 @@
           : "Not set";
       }
 
-      function showHarvestEditor(cell, schedule) {
+      function showHarvestEditor(
+        scheduleRow,
+        schedule,
+        { restore = renderHarvestSchedule, title: editorTitle = schedule.label } = {},
+      ) {
         const form = document.createElement("form");
         form.className = "harvest-editor";
         const title = document.createElement("strong");
-        title.textContent = schedule.label;
+        title.textContent = editorTitle;
         const referenceRegion = document.createElement("label");
         referenceRegion.append(document.createTextNode("Reference region"));
         const referenceRegionInput = document.createElement("input");
@@ -1061,7 +1181,10 @@
         const cancel = document.createElement("button");
         cancel.type = "button";
         cancel.textContent = "Cancel";
-        cancel.addEventListener("click", renderSpeciesInventory);
+        cancel.addEventListener("click", () => {
+          restore(scheduleRow, schedule);
+          scheduleRow.querySelector(".harvest-edit-button").focus();
+        });
         const save = document.createElement("button");
         save.type = "submit";
         save.textContent = "OK";
@@ -1156,7 +1279,7 @@
           }
         });
 
-        cell.replaceChildren(form);
+        scheduleRow.replaceChildren(form);
       }
 
       function annualDateInput(text, value) {
