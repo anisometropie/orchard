@@ -43,13 +43,14 @@ where
     U: OrchardStorage,
 {
     for (index, tree) in request.trees.iter().enumerate() {
-        let Some(window) = tree.harvest_window else {
+        let Some(window) = tree.harvest_window.as_ref() else {
             continue;
         };
         if request.trees[..index].iter().any(|existing| {
             same_schedule_owner(existing, tree)
                 && existing
                     .harvest_window
+                    .as_ref()
                     .is_some_and(|existing_window| existing_window != window)
         }) {
             return Err(LegacyOrchardImportError::ConflictingHarvestWindows {
@@ -81,12 +82,12 @@ where
                         legacy_feature_id,
                     },
                 )?;
-            if let Some(harvest_window) = legacy_tree.harvest_window {
+            if let Some(harvest_window) = legacy_tree.harvest_window.as_ref() {
                 let owner = plant_identity.cultivar_id.map_or(
                     HarvestScheduleOwner::PlantIdentity(plant_identity.plant_identity_id),
                     HarvestScheduleOwner::PlantCultivar,
                 );
-                match orchard.replace_harvest_windows(owner, vec![harvest_window]) {
+                match orchard.replace_harvest_windows(owner, vec![harvest_window.clone()]) {
                     Ok(true) => {}
                     _ => {
                         return Err(LegacyOrchardImportError::HarvestWindowsCouldNotBeReplaced {

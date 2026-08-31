@@ -1,9 +1,9 @@
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
-    AnnualDate, AnnualHarvestWindow, BotanicalTaxon, HarvestScheduleOwner, IdentificationStatus,
-    InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification, LegacyTreeSource, NamedTaxon,
-    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
-    ReproductiveRole, Tree,
+    AnnualDate, AnnualHarvestWindow, BotanicalTaxon, HarvestDataOrigin, HarvestScheduleOwner,
+    HarvestedPart, IdentificationStatus, InfraspecificRank, InfraspecificTaxon,
+    LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantCultivar, PlantCultivarId,
+    PlantIdentification, PlantIdentity, PlantIdentityId, ReproductiveRole, Tree,
 };
 use orchard_api::hexagon::use_cases::import_legacy_orchard::{
     LegacyOrchardImportError, LegacyOrchardImportRequested, LegacyTreeSnapshot,
@@ -102,8 +102,12 @@ fn preserve_a_legacy_harvest_window_on_its_cultivar() {
     let harvest_window = AnnualHarvestWindow {
         start: AnnualDate { month: 8, day: 5 },
         end: AnnualDate { month: 10, day: 15 },
+        reference_region: None,
+        harvested_part: HarvestedPart::Fruit,
+        data_origin: HarvestDataOrigin::FieldObservation,
+        source_url: None,
     };
-    raspberry.harvest_window = Some(harvest_window);
+    raspberry.harvest_window = Some(harvest_window.clone());
 
     assert_eq!(
         import_legacy_orchard(
@@ -132,11 +136,19 @@ fn reject_conflicting_legacy_windows_for_the_same_cultivar_before_importing() {
     first.harvest_window = Some(AnnualHarvestWindow {
         start: AnnualDate { month: 8, day: 5 },
         end: AnnualDate { month: 10, day: 15 },
+        reference_region: None,
+        harvested_part: HarvestedPart::Fruit,
+        data_origin: HarvestDataOrigin::FieldObservation,
+        source_url: None,
     });
     let mut second = surprise_dautomne(209);
     second.harvest_window = Some(AnnualHarvestWindow {
         start: AnnualDate { month: 8, day: 10 },
         end: AnnualDate { month: 10, day: 20 },
+        reference_region: None,
+        harvested_part: HarvestedPart::Fruit,
+        data_origin: HarvestDataOrigin::FieldObservation,
+        source_url: None,
     });
 
     assert_eq!(

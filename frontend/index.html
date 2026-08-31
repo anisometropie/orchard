@@ -251,12 +251,15 @@
         font-size: 11px;
         gap: 2px;
       }
-      .harvest-editor input {
+      .harvest-editor input,
+      .harvest-editor select {
         border: 1px solid #999;
         border-radius: 4px;
         font: inherit;
         padding: 4px 5px;
-        width: 72px;
+      }
+      .harvest-editor input {
+        width: 110px;
       }
       .harvest-window-list,
       .harvest-schedule {
@@ -1031,6 +1034,15 @@
         form.className = "harvest-editor";
         const title = document.createElement("strong");
         title.textContent = schedule.label;
+        const referenceRegion = document.createElement("label");
+        referenceRegion.append(document.createTextNode("Reference region"));
+        const referenceRegionInput = document.createElement("input");
+        referenceRegionInput.type = "text";
+        referenceRegionInput.required = true;
+        referenceRegionInput.value =
+          schedule.harvestWindows.find((window) => window.reference_region)
+            ?.reference_region || "";
+        referenceRegion.append(referenceRegionInput);
         const windowList = document.createElement("div");
         windowList.className = "harvest-window-list";
         const windowEditors = [];
@@ -1054,13 +1066,25 @@
         save.type = "submit";
         save.textContent = "OK";
         actions.append(cancel, save);
-        form.append(title, windowList, addWindow, clearHint, error, actions);
+        form.append(
+          title,
+          referenceRegion,
+          windowList,
+          addWindow,
+          clearHint,
+          error,
+          actions,
+        );
 
         function addHarvestWindowRow(window = {}) {
           const editor = {
             row: document.createElement("div"),
             startInput: annualDateInput("Start", window.start),
             endInput: annualDateInput("End", window.end),
+            harvestedPartInput: harvestedPartInput(
+              "Harvested part",
+              window.harvested_part || "fruit",
+            ),
           };
           editor.row.className = "harvest-window-row";
           const remove = document.createElement("button");
@@ -1074,6 +1098,7 @@
           editor.row.append(
             editor.startInput.label,
             editor.endInput.label,
+            editor.harvestedPartInput.label,
             remove,
           );
           windowEditors.push(editor);
@@ -1088,6 +1113,7 @@
           const windows = windowEditors.map((editor) => ({
             start: parseAnnualDate(editor.startInput.input.value),
             end: parseAnnualDate(editor.endInput.input.value),
+            harvested_part: editor.harvestedPartInput.input.value,
           }));
           if (windows.some(({ start, end }) => !start || !end)) {
             error.textContent = "Use a valid MM-DD date, for example 08-30.";
@@ -1098,14 +1124,20 @@
           windowEditors.forEach((editor) => {
             editor.startInput.input.disabled = true;
             editor.endInput.input.disabled = true;
+            editor.harvestedPartInput.input.disabled = true;
             editor.remove.disabled = true;
           });
+          referenceRegionInput.disabled = true;
           addWindow.disabled = true;
           cancel.disabled = true;
           save.disabled = true;
           save.textContent = "Saving…";
           try {
-            await updateHarvestWindows(schedule, windows);
+            await updateHarvestWindows(
+              schedule,
+              referenceRegionInput.value.trim(),
+              windows,
+            );
             await loadOrchardTrees();
           } catch (requestError) {
             error.textContent = requestError.message;
@@ -1113,8 +1145,10 @@
             windowEditors.forEach((editor) => {
               editor.startInput.input.disabled = false;
               editor.endInput.input.disabled = false;
+              editor.harvestedPartInput.input.disabled = false;
               editor.remove.disabled = false;
             });
+            referenceRegionInput.disabled = false;
             addWindow.disabled = false;
             cancel.disabled = false;
             save.disabled = false;
@@ -1138,11 +1172,28 @@
         return { label, input };
       }
 
-      async function updateHarvestWindows(schedule, windows) {
+      function harvestedPartInput(text, value) {
+        const label = document.createElement("label");
+        label.append(document.createTextNode(text));
+        const input = document.createElement("select");
+        ["fruit", "flower", "leaf", "seed", "cone", "nut", "pod"].forEach(
+          (part) => {
+            const option = document.createElement("option");
+            option.value = part;
+            option.textContent = part;
+            option.selected = part === value;
+            input.append(option);
+          },
+        );
+        label.append(input);
+        return { label, input };
+      }
+
+      async function updateHarvestWindows(schedule, referenceRegion, windows) {
         const response = await fetch(harvestScheduleEndpoint(schedule), {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ windows }),
+          body: JSON.stringify({ reference_region: referenceRegion, windows }),
         });
         if (response.ok) return;
         if (response.status === 400) {

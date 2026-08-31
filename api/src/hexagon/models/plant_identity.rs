@@ -30,10 +30,56 @@ impl AnnualDate {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AnnualHarvestWindow {
     pub start: AnnualDate,
     pub end: AnnualDate,
+    pub reference_region: Option<String>,
+    pub harvested_part: HarvestedPart,
+    pub data_origin: HarvestDataOrigin,
+    pub source_url: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarvestedPart {
+    Cone,
+    Flower,
+    Fruit,
+    Leaf,
+    Nut,
+    Pod,
+    Seed,
+}
+
+impl HarvestedPart {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cone => "cone",
+            Self::Flower => "flower",
+            Self::Fruit => "fruit",
+            Self::Leaf => "leaf",
+            Self::Nut => "nut",
+            Self::Pod => "pod",
+            Self::Seed => "seed",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarvestDataOrigin {
+    ExternalReference,
+    FieldObservation,
+}
+
+impl HarvestDataOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ExternalReference => "external_reference",
+            Self::FieldObservation => "field_observation",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

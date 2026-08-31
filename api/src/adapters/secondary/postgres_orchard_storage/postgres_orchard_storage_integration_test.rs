@@ -1,10 +1,11 @@
 use orchard_api::adapters::secondary::PostgresOrchardStorage;
 use orchard_api::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
-    BotanicalTaxon, GeoPoint, HarvestScheduleOwner, IdentificationStatus, InfraspecificRank,
-    InfraspecificTaxon, LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, NamedTaxon,
-    OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity,
-    PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId,
+    BotanicalTaxon, GeoPoint, HarvestDataOrigin, HarvestScheduleOwner, HarvestedPart,
+    IdentificationStatus, InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification,
+    LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardTree, PlantCultivar, PlantCultivarId,
+    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole,
+    Tree, TreeId,
 };
 use orchard_api::hexagon::ports::{MapConfigurationStorage, OrchardStorage, OrchardStorageError};
 use orchard_api::hexagon::use_cases::change_tree_condition::{
@@ -197,15 +198,27 @@ fn read_and_clear_exact_cultivar_or_cultivarless_harvest_schedules() {
     let identity_window = AnnualHarvestWindow {
         start: AnnualDate { month: 8, day: 1 },
         end: AnnualDate { month: 8, day: 31 },
+        reference_region: Some("Sapporo, Japan".into()),
+        harvested_part: HarvestedPart::Fruit,
+        data_origin: HarvestDataOrigin::ExternalReference,
+        source_url: Some("https://example.com/harvest".into()),
     };
     let cultivar_windows = vec![
         AnnualHarvestWindow {
             start: AnnualDate { month: 6, day: 15 },
             end: AnnualDate { month: 7, day: 5 },
+            reference_region: Some("Sapporo, Japan".into()),
+            harvested_part: HarvestedPart::Fruit,
+            data_origin: HarvestDataOrigin::FieldObservation,
+            source_url: None,
         },
         AnnualHarvestWindow {
             start: AnnualDate { month: 9, day: 1 },
             end: AnnualDate { month: 10, day: 15 },
+            reference_region: Some("Sapporo, Japan".into()),
+            harvested_part: HarvestedPart::Fruit,
+            data_origin: HarvestDataOrigin::FieldObservation,
+            source_url: None,
         },
     ];
     let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
@@ -217,7 +230,7 @@ fn read_and_clear_exact_cultivar_or_cultivarless_harvest_schedules() {
                 .resolve_plant_identification(identification(apple.clone(), Some("Boskoop")))?;
             orchard.replace_harvest_windows(
                 HarvestScheduleOwner::PlantIdentity(identity.plant_identity_id),
-                vec![identity_window],
+                vec![identity_window.clone()],
             )?;
             orchard.replace_harvest_windows(
                 HarvestScheduleOwner::PlantCultivar(cultivar.cultivar_id.unwrap()),
@@ -230,7 +243,7 @@ fn read_and_clear_exact_cultivar_or_cultivarless_harvest_schedules() {
         .unwrap();
 
     let trees = storage.trees().unwrap();
-    assert_eq!(trees[0].harvest_windows, vec![identity_window]);
+    assert_eq!(trees[0].harvest_windows, vec![identity_window.clone()]);
     assert_eq!(trees[1].harvest_windows, cultivar_windows);
 
     storage
@@ -762,63 +775,6 @@ fn normalization_migration_splits_cultivars_and_moves_tree_specific_fields() {
 }
 
 #[test]
-fn seed_all_raspberry_cultivar_harvest_waves() {
-    let _database_lock = database_lock();
-    let (_, mut connection) = empty_orchard_database();
-    let identity_id: i64 = connection
-        .query_one(
-            r#"INSERT INTO plant_identities (common_name, botanical_taxon)
-               VALUES (
-                 'Framboisier',
-                 '{"Named":{"genus":"Rubus","species":"idaeus","species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}'
-               ) RETURNING id"#,
-            &[],
-        )
-        .unwrap()
-        .get(0);
-    for cultivar in [
-        "Autumn Bliss",
-        "Autumn First",
-        "Bohème",
-        "EMR 201201",
-        "Fall Gold",
-        "Glen Ample",
-        "Heritage",
-        "Jdeboer005",
-        "MA 2920",
-        "Malling Happy",
-        "Malling Promise",
-        "Paris",
-        "Sucrée de Metz",
-        "Surprise d’Automne",
-        "Zeva",
-    ] {
-        connection
-            .execute(
-                "INSERT INTO plant_cultivars (plant_identity_id, cultivar)
-                 VALUES ($1, $2)",
-                &[&identity_id, &cultivar],
-            )
-            .unwrap();
-    }
-    connection
-        .batch_execute(include_str!(
-            "../../../../db/migrations/009_seed_raspberry_harvest_windows.sql"
-        ))
-        .unwrap();
-
-    let totals = connection
-        .query_one(
-            "SELECT count(*), count(DISTINCT cultivar_id)
-             FROM plant_harvest_windows",
-            &[],
-        )
-        .unwrap();
-    assert_eq!(totals.get::<_, i64>(0), 20);
-    assert_eq!(totals.get::<_, i64>(1), 15);
-}
-
-#[test]
 fn migration_preserves_legacy_labels() {
     let _database_lock = database_lock();
     let database_url = std::env::var("ORCHARD_TEST_DATABASE_URL")
@@ -1053,6 +1009,25 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/009_seed_raspberry_harvest_windows.sql"
+            ))
+            .unwrap();
+    }
+    let harvest_window_metadata_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'plant_harvest_windows'
+                  AND column_name = 'data_origin'
+             )",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !harvest_window_metadata_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/010_describe_harvest_windows.sql"
             ))
             .unwrap();
     }

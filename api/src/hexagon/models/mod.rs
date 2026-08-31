@@ -8,9 +8,10 @@ pub use map_configuration::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, GeoPoint, MapConfiguration,
 };
 pub use plant_identity::{
-    AnnualDate, AnnualHarvestWindow, BotanicalTaxon, HarvestScheduleOwner, IdentificationStatus,
-    InfraspecificRank, InfraspecificTaxon, NamedTaxon, PlantCultivar, PlantCultivarId,
-    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
+    AnnualDate, AnnualHarvestWindow, BotanicalTaxon, HarvestDataOrigin, HarvestScheduleOwner,
+    HarvestedPart, IdentificationStatus, InfraspecificRank, InfraspecificTaxon, NamedTaxon,
+    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
+    PlantIdentityReference,
 };
 pub use tree::{ReproductiveRole, Tree, TreeId};
 

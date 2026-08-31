@@ -1,4 +1,6 @@
-use crate::hexagon::models::{AnnualDate, AnnualHarvestWindow, HarvestScheduleOwner};
+use crate::hexagon::models::{
+    AnnualDate, AnnualHarvestWindow, HarvestDataOrigin, HarvestScheduleOwner, HarvestedPart,
+};
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
 #[derive(Clone, Copy)]
@@ -7,16 +9,19 @@ pub struct AnnualHarvestWindowChanged {
     pub start_day: u8,
     pub end_month: u8,
     pub end_day: u8,
+    pub harvested_part: HarvestedPart,
 }
 
 pub struct PlantHarvestWindowsReplaced {
     pub owner: HarvestScheduleOwner,
+    pub reference_region: String,
     pub windows: Vec<AnnualHarvestWindowChanged>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum PlantHarvestWindowsReplacementError {
     InvalidAnnualDate,
+    MissingReferenceRegion,
     OwnerNotFound,
     HarvestWindowsCouldNotBeReplaced,
     TransactionCouldNotBegin,
@@ -27,6 +32,10 @@ pub fn replace_plant_harvest_windows(
     event: PlantHarvestWindowsReplaced,
     orchard_storage: &mut impl OrchardStorage,
 ) -> Result<(), PlantHarvestWindowsReplacementError> {
+    let reference_region = event.reference_region.trim();
+    if !event.windows.is_empty() && reference_region.is_empty() {
+        return Err(PlantHarvestWindowsReplacementError::MissingReferenceRegion);
+    }
     let harvest_windows = event
         .windows
         .into_iter()
@@ -38,6 +47,10 @@ pub fn replace_plant_harvest_windows(
             Ok::<AnnualHarvestWindow, PlantHarvestWindowsReplacementError>(AnnualHarvestWindow {
                 start,
                 end,
+                reference_region: Some(reference_region.into()),
+                harvested_part: window.harvested_part,
+                data_origin: HarvestDataOrigin::FieldObservation,
+                source_url: None,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;

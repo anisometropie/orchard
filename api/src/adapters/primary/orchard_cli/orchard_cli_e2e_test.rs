@@ -274,6 +274,25 @@ fn empty_orchard_database(database_url: &str) -> Client {
             ))
             .unwrap();
     }
+    let harvest_window_metadata_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'plant_harvest_windows'
+                  AND column_name = 'data_origin'
+             )",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !harvest_window_metadata_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/010_describe_harvest_windows.sql"
+            ))
+            .unwrap();
+    }
     verification_connection
         .batch_execute(
             "TRUNCATE TABLE plant_harvest_windows, aerial_overlays, users, trees,

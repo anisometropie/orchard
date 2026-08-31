@@ -3,9 +3,10 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::hexagon::models::{
-    AnnualDate, AnnualHarvestWindow, BotanicalTaxon, IdentificationStatus, InfraspecificRank,
-    InfraspecificTaxon, LegacyPlantIdentification, LegacyTreeSource, NamedTaxon, PlantCultivar,
-    PlantIdentification, PlantIdentity, ReproductiveRole,
+    AnnualDate, AnnualHarvestWindow, BotanicalTaxon, HarvestDataOrigin, HarvestedPart,
+    IdentificationStatus, InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification,
+    LegacyTreeSource, NamedTaxon, PlantCultivar, PlantIdentification, PlantIdentity,
+    ReproductiveRole,
 };
 use crate::hexagon::ports::OrchardStorage;
 use crate::hexagon::use_cases::import_legacy_orchard::{
@@ -133,6 +134,10 @@ fn parse_legacy_harvest_window(
         (Some(start), Some(end)) => Some(Some(AnnualHarvestWindow {
             start: annual_date_from_ordinal(start)?,
             end: annual_date_from_ordinal(end)?,
+            reference_region: None,
+            harvested_part: HarvestedPart::Fruit,
+            data_origin: HarvestDataOrigin::FieldObservation,
+            source_url: None,
         })),
         _ => None,
     }
@@ -348,7 +353,9 @@ mod legacy_plant_identity_unit_test;
 
 #[cfg(test)]
 mod legacy_harvest_window_unit_test {
-    use crate::hexagon::models::{AnnualDate, AnnualHarvestWindow};
+    use crate::hexagon::models::{
+        AnnualDate, AnnualHarvestWindow, HarvestDataOrigin, HarvestedPart,
+    };
 
     use super::parse_legacy_harvest_window;
 
@@ -359,6 +366,10 @@ mod legacy_harvest_window_unit_test {
             Some(Some(AnnualHarvestWindow {
                 start: AnnualDate { month: 6, day: 15 },
                 end: AnnualDate { month: 10, day: 15 },
+                reference_region: None,
+                harvested_part: HarvestedPart::Fruit,
+                data_origin: HarvestDataOrigin::FieldObservation,
+                source_url: None,
             }))
         );
     }
