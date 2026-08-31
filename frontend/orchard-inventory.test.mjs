@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   filterTreeFeatures,
   harvestScheduleEndpoint,
+  harvestSchedulesForSpecies,
+  harvestWindowSpan,
   summarizeSpecies,
   taxonomyOptions,
 } from "./orchard-inventory.mjs";
@@ -144,6 +146,46 @@ test("choose exactly one harvest endpoint from the schedule owner", () => {
     harvestScheduleEndpoint({ plantIdentityId: 10, cultivarId: null }),
     "/api/plant-identities/10/harvest-windows",
   );
+});
+
+test("list cultivar and no-cultivar harvest schedules consistently", () => {
+  const species = summarizeSpecies(trees);
+
+  assert.deepEqual(harvestSchedulesForSpecies(species[0]), [
+    {
+      label: "Gala",
+      count: 2,
+      plantIdentityId: 10,
+      cultivarId: 101,
+      harvestWindows: [{ start: "08-01", end: "08-20" }],
+    },
+    {
+      label: "Golden Delicious",
+      count: 1,
+      plantIdentityId: 10,
+      cultivarId: 102,
+      harvestWindows: [{ start: "09-01", end: "10-01" }],
+    },
+  ]);
+  assert.deepEqual(harvestSchedulesForSpecies(species[2]), [
+    {
+      label: null,
+      count: 1,
+      plantIdentityId: 20,
+      cultivarId: null,
+      harvestWindows: [],
+    },
+  ]);
+});
+
+test("show the earliest start and latest end across cultivar schedules", () => {
+  const cultivarSchedules = harvestSchedulesForSpecies(summarizeSpecies(trees)[0]);
+
+  assert.deepEqual(harvestWindowSpan(cultivarSchedules), {
+    start: "08-01",
+    end: "10-01",
+  });
+  assert.equal(harvestWindowSpan([{ harvestWindows: [] }]), null);
 });
 
 function tree(id, identity) {
