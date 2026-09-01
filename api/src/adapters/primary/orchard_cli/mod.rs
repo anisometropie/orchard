@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Debug, PartialEq)]
 pub enum OrchardCommand {
+    Migrate,
     RunServer { address: SocketAddr },
     ImportLegacyOrchard { geojson_path: PathBuf },
 }
@@ -17,6 +18,8 @@ struct OrchardCli {
 
 #[derive(Subcommand)]
 enum OrchardCliCommand {
+    #[command(name = "migrate")]
+    Migrate,
     #[command(name = "runserver")]
     RunServer {
         #[arg(long, default_value = "127.0.0.1:3000")]
@@ -33,6 +36,7 @@ where
 {
     let cli = OrchardCli::try_parse_from(arguments)?;
     Ok(match cli.command {
+        OrchardCliCommand::Migrate => OrchardCommand::Migrate,
         OrchardCliCommand::RunServer { address } => OrchardCommand::RunServer { address },
         OrchardCliCommand::ImportLegacyOrchard { filename } => {
             OrchardCommand::ImportLegacyOrchard {

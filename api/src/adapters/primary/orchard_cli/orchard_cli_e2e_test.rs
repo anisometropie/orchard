@@ -12,6 +12,87 @@ use postgres::{Client, NoTls};
 use reqwest::StatusCode;
 
 #[test]
+fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
+    let orchard_command = env!("CARGO_BIN_EXE_orchard");
+    let _database_lock = database_lock();
+    let database_url = env::var("ORCHARD_TEST_DATABASE_URL")
+        .expect("ORCHARD_TEST_DATABASE_URL must point to the dedicated test database");
+    let (migration_database_url, mut verification_connection) =
+        untracked_version_10_schema(&database_url);
+
+    let adoption = Command::new(orchard_command)
+        .arg("migrate")
+        .env("ORCHARD_DATABASE_URL", &migration_database_url)
+        .output()
+        .expect("the migration command should start");
+
+    assert!(
+        adoption.status.success(),
+        "{}",
+        String::from_utf8_lossy(&adoption.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(adoption.stdout).unwrap(),
+        "Adopted the existing version-10 schema.\nDatabase schema is up to date.\n"
+    );
+    let versions = verification_connection
+        .query(
+            "SELECT version FROM orchard_schema_migrations ORDER BY version",
+            &[],
+        )
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<_, i32>(0))
+        .collect::<Vec<_>>();
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 10]);
+
+    let repeated = Command::new(orchard_command)
+        .arg("migrate")
+        .env("ORCHARD_DATABASE_URL", &migration_database_url)
+        .output()
+        .expect("the migration command should start again");
+    assert!(repeated.status.success());
+    assert_eq!(
+        String::from_utf8(repeated.stdout).unwrap(),
+        "Database schema is up to date.\n"
+    );
+    verification_connection
+        .batch_execute(
+            "SET search_path TO public;
+             DROP SCHEMA cli_migration_test CASCADE",
+        )
+        .unwrap();
+}
+
+fn untracked_version_10_schema(database_url: &str) -> (String, Client) {
+    let separator = if database_url.contains('?') { '&' } else { '?' };
+    let schema_database_url =
+        format!("{database_url}{separator}options=-csearch_path%3Dcli_migration_test%2Cpublic");
+    let mut admin = Client::connect(database_url, NoTls).unwrap();
+    admin
+        .batch_execute(
+            "DROP SCHEMA IF EXISTS cli_migration_test CASCADE;
+             CREATE SCHEMA cli_migration_test",
+        )
+        .unwrap();
+    let mut connection = Client::connect(&schema_database_url, NoTls).unwrap();
+    for migration in [
+        include_str!("../../../../db/migrations/001_create_trees.sql"),
+        include_str!("../../../../db/migrations/002_add_plant_identities.sql"),
+        include_str!("../../../../db/migrations/003_preserve_legacy_tree_details.sql"),
+        include_str!("../../../../db/migrations/004_preserve_legacy_source_url.sql"),
+        include_str!("../../../../db/migrations/005_add_tree_danger.sql"),
+        include_str!("../../../../db/migrations/006_create_users_and_aerial_overlays.sql"),
+        include_str!("../../../../db/migrations/007_normalize_plant_identities.sql"),
+        include_str!("../../../../db/migrations/008_create_plant_harvest_windows.sql"),
+        include_str!("../../../../db/migrations/010_describe_harvest_windows.sql"),
+    ] {
+        connection.batch_execute(migration).unwrap();
+    }
+    (schema_database_url, connection)
+}
+
+#[test]
 fn import_orchard() {
     let orchard_command = env!("CARGO_BIN_EXE_orchard");
     let _database_lock = database_lock();
@@ -130,9 +211,11 @@ fn runserver() {
         let harvest_response = client
             .put(format!("{server_url}/plant-identities/1/harvest-windows"))
             .json(&serde_json::json!({
+                "reference_region": "Sapporo, Japan",
                 "windows": [{
                     "start": { "month": 8, "day": 20 },
-                    "end": { "month": 10, "day": 5 }
+                    "end": { "month": 10, "day": 5 },
+                    "harvested_part": "fruit"
                 }]
             }))
             .send()
@@ -266,11 +349,6 @@ fn empty_orchard_database(database_url: &str) -> Client {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/008_create_plant_harvest_windows.sql"
-            ))
-            .unwrap();
-        verification_connection
-            .batch_execute(include_str!(
-                "../../../../db/migrations/009_seed_raspberry_harvest_windows.sql"
             ))
             .unwrap();
     }
