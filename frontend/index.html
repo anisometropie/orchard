@@ -80,7 +80,10 @@
         cursor: wait;
         opacity: 0.6;
       }
-      #inventory-toggle {
+      #map-toolbar {
+        align-items: center;
+        display: flex;
+        gap: 8px;
         position: absolute;
         left: 20px;
         top: 20px;
@@ -94,6 +97,24 @@
         cursor: pointer;
         font: 600 13px sans-serif;
         padding: 8px 12px;
+      }
+      .map-mode-switch {
+        display: flex;
+        gap: 4px;
+      }
+      .map-mode-button {
+        background: rgba(255, 255, 255, 0.96);
+        border: 1px solid #777;
+        border-radius: 6px;
+        color: #333;
+        cursor: pointer;
+        font: 600 13px sans-serif;
+        padding: 8px 12px;
+      }
+      .map-mode-button[aria-pressed="true"] {
+        background: #245c2a;
+        border-color: #245c2a;
+        color: white;
       }
       #inventory-panel {
         background: rgba(255, 255, 255, 0.98);
@@ -354,10 +375,22 @@
         color: #b42318;
         font-size: 11px;
       }
-      .harvest-map-control {
-        border-bottom: 1px solid #ddd;
-        margin-bottom: 12px;
-        padding-bottom: 12px;
+      #map-filter-panel {
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        box-sizing: border-box;
+        font-family: sans-serif;
+        padding: 12px 16px;
+        position: absolute;
+        right: 20px;
+        top: 20px;
+        width: 312px;
+        z-index: 10;
+      }
+      #map-filter-panel[hidden],
+      .map-mode-filters[hidden] {
+        display: none;
       }
       .harvest-map-control-title {
         align-items: center;
@@ -380,9 +413,18 @@
         margin-top: 7px;
       }
       @media (max-width: 620px) {
-        #inventory-toggle {
+        #map-toolbar {
           left: 10px;
           top: 10px;
+        }
+        .inventory-button,
+        .map-mode-button {
+          padding: 7px 8px;
+        }
+        #map-filter-panel {
+          right: 10px;
+          top: 58px;
+          width: min(312px, calc(100vw - 20px));
         }
         #inventory-panel {
           bottom: 10px;
@@ -417,15 +459,43 @@
   <body>
     <div id="map"></div>
     <div id="map-status">Loading orchard trees…</div>
-    <button
-      id="inventory-toggle"
-      class="inventory-button"
-      type="button"
-      aria-controls="inventory-panel"
-      aria-expanded="false"
-    >
-      Tree inventory
-    </button>
+    <div id="map-toolbar">
+      <button
+        id="inventory-toggle"
+        class="inventory-button"
+        type="button"
+        aria-controls="inventory-panel"
+        aria-expanded="false"
+      >
+        Tree inventory
+      </button>
+      <div class="map-mode-switch" role="group" aria-label="Map mode">
+        <button
+          class="map-mode-button"
+          type="button"
+          data-map-mode="normal"
+          aria-pressed="true"
+        >
+          Normal
+        </button>
+        <button
+          class="map-mode-button"
+          type="button"
+          data-map-mode="danger"
+          aria-pressed="false"
+        >
+          Danger
+        </button>
+        <button
+          class="map-mode-button"
+          type="button"
+          data-map-mode="harvest"
+          aria-pressed="false"
+        >
+          Harvest
+        </button>
+      </div>
+    </div>
     <aside id="inventory-panel" aria-labelledby="inventory-title" hidden>
       <header class="inventory-header">
         <h2 id="inventory-title">Orchard inventory</h2>
@@ -531,22 +601,13 @@
         </div>
       </section>
     </aside>
-    <div
-      id="date-filter"
-      style="
-        position: absolute;
-        top: 20px;
-        right: 20px;
-        background: white;
-        padding: 12px 16px;
-        border-radius: 8px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-        z-index: 10;
-        font-family: sans-serif;
-        width: 280px;
-      "
-    >
-      <section class="harvest-map-control" aria-label="Harvest availability">
+    <div id="map-filter-panel">
+      <section
+        id="harvest-map-filters"
+        class="map-mode-filters harvest-map-control"
+        aria-label="Harvest availability"
+        hidden
+      >
         <label class="harvest-map-control-title">
           <input type="checkbox" id="harvest-filter-enabled" checked />
           Fruit available
@@ -561,41 +622,44 @@
           <input type="range" id="harvest-weeks" min="1" max="12" value="1" />
         </label>
       </section>
-      <label
-        style="
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          margin-bottom: 8px;
-          font-weight: 600;
-        "
-      >
-        <input type="checkbox" id="date-filter-enabled" />
-        Filter by planting date
-      </label>
+      <section id="normal-map-filters" class="map-mode-filters">
+        <label
+          style="
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-weight: 600;
+          "
+        >
+          <input type="checkbox" id="date-filter-enabled" />
+          Filter by planting date
+        </label>
 
-      <div id="date-label" style="font-size: 13px; margin-bottom: 8px">
-        All dates
-      </div>
+        <div id="date-label" style="font-size: 13px; margin-bottom: 8px">
+          All dates
+        </div>
 
-      <input
-        type="range"
-        id="date-min"
-        min="0"
-        max="1000"
-        value="0"
-        style="width: 100%"
-      />
-      <input
-        type="range"
-        id="date-max"
-        min="0"
-        max="1000"
-        value="1000"
-        style="width: 100%; margin-top: 4px"
-      />
+        <input
+          type="range"
+          id="date-min"
+          min="0"
+          max="1000"
+          value="0"
+          style="width: 100%"
+        />
+        <input
+          type="range"
+          id="date-max"
+          min="0"
+          max="1000"
+          value="1000"
+          style="width: 100%; margin-top: 4px"
+        />
+      </section>
     </div>
     <script type="module">
+      import { mapModePresentation } from "./map-mode.mjs?v=1";
       import {
         filterTreeFeatures,
         harvestScheduleEndpoint,
@@ -607,7 +671,6 @@
       import {
         harvestAvailability,
         harvestAvailabilitySummary,
-        harvestLayerFilter,
         parseAnnualDate,
       } from "./harvest-window.mjs";
 
@@ -710,6 +773,7 @@
               type: "circle",
               source: "orchard",
               filter: ["==", ["get", "harvest_available"], true],
+              layout: { visibility: "none" },
               paint: {
                 "circle-radius": [
                   "case",
@@ -730,6 +794,7 @@
               type: "circle",
               source: "orchard",
               filter: ["==", ["get", "is_in_danger"], true],
+              layout: { visibility: "none" },
               paint: {
                 "circle-radius": [
                   "case",
@@ -753,6 +818,7 @@
       let treeTooltip;
       let treeEditor;
       let orchardFeatures = [];
+      let mapMode = "normal";
       const inventoryToggle = document.getElementById("inventory-toggle");
       const inventoryPanel = document.getElementById("inventory-panel");
       const inventoryClose = document.getElementById("inventory-close");
@@ -785,6 +851,10 @@
       const harvestWindowLabel = document.getElementById(
         "harvest-window-label",
       );
+      const mapModeButtons = [...document.querySelectorAll(".map-mode-button")];
+      const mapFilterPanel = document.getElementById("map-filter-panel");
+      const normalMapFilters = document.getElementById("normal-map-filters");
+      const harvestMapFilters = document.getElementById("harvest-map-filters");
 
       function createDeadTreeCrossImage() {
         const size = 18;
@@ -1481,6 +1551,46 @@
         }
       }
 
+      function currentMapModePresentation() {
+        return mapModePresentation(mapMode, {
+          harvestEnabled: harvestFilterEnabled.checked,
+        });
+      }
+
+      function renderMapMode() {
+        const presentation = currentMapModePresentation();
+        mapModeButtons.forEach((button) => {
+          button.setAttribute(
+            "aria-pressed",
+            String(button.dataset.mapMode === presentation.mode),
+          );
+        });
+        mapFilterPanel.hidden = !presentation.filterPanelVisible;
+        normalMapFilters.hidden = !presentation.normalFiltersVisible;
+        harvestMapFilters.hidden = !presentation.harvestFiltersVisible;
+
+        if (map.getLayer("danger-rings")) {
+          map.setLayoutProperty(
+            "danger-rings",
+            "visibility",
+            presentation.dangerRingsVisible ? "visible" : "none",
+          );
+        }
+        if (map.getLayer("harvest-rings")) {
+          map.setLayoutProperty(
+            "harvest-rings",
+            "visibility",
+            presentation.harvestRingsVisible ? "visible" : "none",
+          );
+        }
+      }
+
+      function setMapMode(nextMode) {
+        mapMode = nextMode;
+        applyDateFilter();
+        applyHarvestWindow();
+      }
+
       function applyHarvestWindow() {
         const start = new Date();
         start.setHours(0, 0, 0, 0);
@@ -1517,13 +1627,7 @@
             features: visibleFeatures,
           });
         }
-        if (map.getLayer("harvest-rings")) {
-          map.setLayoutProperty(
-            "harvest-rings",
-            "visibility",
-            harvestFilterEnabled.checked ? "visible" : "none",
-          );
-        }
+        renderMapMode();
       }
 
       // ===== Date range filter =====
@@ -1547,13 +1651,13 @@
       }
 
       function applyDateFilter() {
+        if (!currentMapModePresentation().plantingDateFilterActive) {
+          if (map.getLayer("trees")) map.setFilter("trees", null);
+          return;
+        }
+
         if (!dateFilterEnabled.checked) {
-          if (map.isStyleLoaded()) {
-            map.setFilter("trees", null);
-            if (map.getLayer("harvest-rings")) {
-              map.setFilter("harvest-rings", harvestLayerFilter());
-            }
-          }
+          if (map.getLayer("trees")) map.setFilter("trees", null);
           dateLabel.textContent = "All dates";
           dateMinSlider.disabled = true;
           dateMaxSlider.disabled = true;
@@ -1577,19 +1681,13 @@
 
         dateLabel.textContent = `${formatDate(from)} → ${formatDate(to)}`;
 
-        if (map.isStyleLoaded()) {
+        if (map.getLayer("trees")) {
           const plantingDateFilter = [
             "all",
             [">=", ["get", "planted_on"], formatDate(from)],
             ["<=", ["get", "planted_on"], formatDate(to)],
           ];
           map.setFilter("trees", plantingDateFilter);
-          if (map.getLayer("harvest-rings")) {
-            map.setFilter(
-              "harvest-rings",
-              harvestLayerFilter(plantingDateFilter),
-            );
-          }
         }
       }
 
@@ -1599,6 +1697,9 @@
       harvestFilterEnabled.addEventListener("change", applyHarvestWindow);
       harvestOffset.addEventListener("input", applyHarvestWindow);
       harvestWeeks.addEventListener("input", applyHarvestWindow);
+      mapModeButtons.forEach((button) => {
+        button.addEventListener("click", () => setMapMode(button.dataset.mapMode));
+      });
 
       inventoryToggle.addEventListener("click", () => setInventoryOpen(true));
       inventoryClose.addEventListener("click", () => setInventoryOpen(false));
@@ -1617,8 +1718,7 @@
       dateMinSlider.max = totalDays;
       dateMaxSlider.max = totalDays;
       dateMaxSlider.value = totalDays;
-      applyDateFilter();
-      applyHarvestWindow();
+      setMapMode("normal");
     </script>
   </body>
 </html>

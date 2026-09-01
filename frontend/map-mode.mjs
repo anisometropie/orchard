@@ -1,0 +1,15 @@
+const MAP_MODES = new Set(["normal", "danger", "harvest"]);
+
+export function mapModePresentation(mode, { harvestEnabled = true } = {}) {
+  if (!MAP_MODES.has(mode)) throw new Error(`Unknown map mode: ${mode}`);
+
+  return {
+    mode,
+    filterPanelVisible: mode !== "danger",
+    normalFiltersVisible: mode === "normal",
+    harvestFiltersVisible: mode === "harvest",
+    plantingDateFilterActive: mode === "normal",
+    dangerRingsVisible: mode === "danger",
+    harvestRingsVisible: mode === "harvest" && harvestEnabled,
+  };
+}
