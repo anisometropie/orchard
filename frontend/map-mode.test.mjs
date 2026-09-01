@@ -11,7 +11,7 @@ test("normal mode shows only planting-date controls and no rings", () => {
     harvestFiltersVisible: false,
     plantingDateFilterActive: true,
     dangerRingsVisible: false,
-    harvestRingsVisible: false,
+    harvestPinsVisible: false,
   });
 });
 
@@ -23,11 +23,11 @@ test("danger mode hides filter controls and shows only danger rings", () => {
     harvestFiltersVisible: false,
     plantingDateFilterActive: false,
     dangerRingsVisible: true,
-    harvestRingsVisible: false,
+    harvestPinsVisible: false,
   });
 });
 
-test("harvest mode shows only harvest controls and optional harvest rings", () => {
+test("harvest mode shows only harvest controls and optional harvest pins", () => {
   assert.deepEqual(mapModePresentation("harvest"), {
     mode: "harvest",
     filterPanelVisible: true,
@@ -35,11 +35,11 @@ test("harvest mode shows only harvest controls and optional harvest rings", () =
     harvestFiltersVisible: true,
     plantingDateFilterActive: false,
     dangerRingsVisible: false,
-    harvestRingsVisible: true,
+    harvestPinsVisible: true,
   });
   assert.equal(
     mapModePresentation("harvest", { harvestEnabled: false })
-      .harvestRingsVisible,
+      .harvestPinsVisible,
     false,
   );
 });

@@ -18,16 +18,32 @@ export function harvestAvailability(features, startDate, weekCount) {
 
   return features.map((feature) => {
     const properties = feature.properties || {};
-    const isAvailable =
-      properties.is_alive !== false &&
-      Array.isArray(properties.roles) &&
-      properties.roles.includes("fruit") &&
-      harvestWindows(properties).some(({ start, end }) =>
-        recurringWindowOverlaps(start, end, selectionStart, selectionEnd),
-      );
+    const availableParts =
+      properties.is_alive === false
+        ? []
+        : [
+            ...new Set(
+              harvestWindows(properties)
+                .filter(({ start, end }) =>
+                  recurringWindowOverlaps(
+                    start,
+                    end,
+                    selectionStart,
+                    selectionEnd,
+                  ),
+                )
+                .map(({ harvested_part: harvestedPart }) =>
+                  harvestedPart || "fruit",
+                ),
+            ),
+          ];
     return {
       ...feature,
-      properties: { ...properties, harvest_available: isAvailable },
+      properties: {
+        ...properties,
+        harvest_available: availableParts.length > 0,
+        harvest_available_parts: availableParts,
+      },
     };
   });
 }
