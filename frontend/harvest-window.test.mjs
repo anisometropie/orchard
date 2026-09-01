@@ -14,13 +14,18 @@ test("parse a valid recurring month and day", () => {
   assert.equal(parseAnnualDate("8-30"), null);
 });
 
-test("mark living fruit trees whose recurring window overlaps the selected weeks", () => {
+test("mark living trees and expose the parts harvestable in the selected weeks", () => {
   const result = harvestAvailability(
     [
       tree(1, "08-20", "09-05"),
       tree(2, "09-10", "09-20"),
       tree(3, "08-20", "09-05", { is_alive: false }),
-      tree(4, "08-20", "09-05", { roles: ["pioneer"] }),
+      tree(4, "08-20", "09-05", {
+        roles: ["pioneer"],
+        harvest_windows: [
+          { start: "08-20", end: "09-05", harvested_part: "flower" },
+        ],
+      }),
     ],
     new Date(2026, 7, 30),
     1,
@@ -28,7 +33,11 @@ test("mark living fruit trees whose recurring window overlaps the selected weeks
 
   assert.deepEqual(
     result.map(({ properties }) => properties.harvest_available),
-    [true, false, false, false],
+    [true, false, false, true],
+  );
+  assert.deepEqual(
+    result.map(({ properties }) => properties.harvest_available_parts),
+    [["fruit"], [], [], ["flower"]],
   );
 });
 
@@ -88,7 +97,9 @@ function tree(id, harvestStart, harvestEnd, overrides = {}) {
       plant_identity_id: id,
       roles: ["fruit"],
       is_alive: true,
-      harvest_windows: [{ start: harvestStart, end: harvestEnd }],
+      harvest_windows: [
+        { start: harvestStart, end: harvestEnd, harvested_part: "fruit" },
+      ],
       ...overrides,
     },
   };

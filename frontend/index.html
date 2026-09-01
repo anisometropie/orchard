@@ -398,7 +398,8 @@
         font-weight: 600;
         gap: 8px;
       }
-      .harvest-map-control label:not(.harvest-map-control-title) {
+      .harvest-map-control
+        label:not(.harvest-map-control-title):not(.harvest-part-filter) {
         display: block;
         font-size: 12px;
         margin-top: 8px;
@@ -406,6 +407,30 @@
       .harvest-map-control input[type="range"] {
         display: block;
         width: 100%;
+      }
+      .harvest-part-filters {
+        border: 0;
+        display: grid;
+        gap: 5px 10px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin: 10px 0 2px;
+        padding: 0;
+      }
+      .harvest-part-filters legend {
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 5px;
+        padding: 0;
+      }
+      .harvest-part-filter {
+        align-items: center;
+        display: flex;
+        font-size: 12px;
+        gap: 5px;
+      }
+      .harvest-part-filter-icon {
+        font-size: 16px;
+        line-height: 1;
       }
       #harvest-window-label {
         color: #444;
@@ -610,9 +635,15 @@
       >
         <label class="harvest-map-control-title">
           <input type="checkbox" id="harvest-filter-enabled" checked />
-          Fruit available
+          Harvest available
         </label>
         <div id="harvest-window-label">This week</div>
+        <fieldset
+          id="harvest-part-filters"
+          class="harvest-part-filters"
+        >
+          <legend>Harvested parts</legend>
+        </fieldset>
         <label>
           Start: <span id="harvest-offset-label">this week</span>
           <input type="range" id="harvest-offset" min="0" max="52" value="0" />
@@ -659,7 +690,12 @@
       </section>
     </div>
     <script type="module">
-      import { mapModePresentation } from "./map-mode.mjs?v=1";
+      import {
+        HARVEST_PIN_ICONS,
+        harvestPinImageName,
+        selectHarvestParts,
+      } from "./harvest-marker.mjs?v=2";
+      import { mapModePresentation } from "./map-mode.mjs?v=2";
       import {
         filterTreeFeatures,
         harvestScheduleEndpoint,
@@ -672,7 +708,7 @@
         harvestAvailability,
         harvestAvailabilitySummary,
         parseAnnualDate,
-      } from "./harvest-window.mjs";
+      } from "./harvest-window.mjs?v=2";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -769,24 +805,17 @@
               },
             },
             {
-              id: "harvest-rings",
-              type: "circle",
+              id: "harvest-pins",
+              type: "symbol",
               source: "orchard",
               filter: ["==", ["get", "harvest_available"], true],
-              layout: { visibility: "none" },
-              paint: {
-                "circle-radius": [
-                  "case",
-                  ["<", ["to-number", ["get", "adult_height"]], 1.4],
-                  8,
-                  ["<", ["to-number", ["get", "adult_height"]], 6],
-                  11,
-                  14,
-                ],
-                "circle-color": "rgba(255, 191, 0, 0.18)",
-                "circle-stroke-color": "#ffb000",
-                "circle-stroke-opacity": 1,
-                "circle-stroke-width": 4,
+              layout: {
+                "icon-allow-overlap": true,
+                "icon-anchor": "bottom",
+                "icon-ignore-placement": true,
+                "icon-image": ["get", "harvest_pin_image"],
+                "icon-size": 0.9,
+                visibility: "none",
               },
             },
             {
@@ -851,10 +880,84 @@
       const harvestWindowLabel = document.getElementById(
         "harvest-window-label",
       );
+      const harvestPartFilters = document.getElementById(
+        "harvest-part-filters",
+      );
       const mapModeButtons = [...document.querySelectorAll(".map-mode-button")];
       const mapFilterPanel = document.getElementById("map-filter-panel");
       const normalMapFilters = document.getElementById("normal-map-filters");
       const harvestMapFilters = document.getElementById("harvest-map-filters");
+
+      function renderHarvestPartFilters() {
+        Object.entries(HARVEST_PIN_ICONS)
+          .filter(([part]) => part !== "multiple")
+          .forEach(([part, symbol]) => {
+            const label = document.createElement("label");
+            label.className = "harvest-part-filter";
+            const input = document.createElement("input");
+            input.type = "checkbox";
+            input.value = part;
+            input.checked = true;
+            input.addEventListener("change", applyHarvestWindow);
+            const icon = document.createElement("span");
+            icon.className = "harvest-part-filter-icon";
+            icon.setAttribute("aria-hidden", "true");
+            icon.textContent = symbol;
+            label.append(
+              input,
+              icon,
+              document.createTextNode(
+                `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`,
+              ),
+            );
+            harvestPartFilters.append(label);
+          });
+      }
+
+      function selectedHarvestPartValues() {
+        return [
+          ...harvestPartFilters.querySelectorAll('input[type="checkbox"]:checked'),
+        ].map((input) => input.value);
+      }
+
+      function createHarvestPinImage(symbol) {
+        const pixelRatio = 2;
+        const width = 44;
+        const height = 54;
+        const canvas = document.createElement("canvas");
+        canvas.width = width * pixelRatio;
+        canvas.height = height * pixelRatio;
+        const context = canvas.getContext("2d");
+        context.scale(pixelRatio, pixelRatio);
+
+        context.shadowColor = "rgba(0, 0, 0, 0.35)";
+        context.shadowBlur = 3;
+        context.shadowOffsetY = 2;
+        context.beginPath();
+        context.moveTo(22, 51);
+        context.bezierCurveTo(18, 43, 4, 32, 4, 20);
+        context.bezierCurveTo(4, 10, 12, 3, 22, 3);
+        context.bezierCurveTo(32, 3, 40, 10, 40, 20);
+        context.bezierCurveTo(40, 32, 26, 43, 22, 51);
+        context.closePath();
+        context.fillStyle = "#206a3b";
+        context.fill();
+        context.shadowColor = "transparent";
+        context.lineWidth = 1.5;
+        context.strokeStyle = "white";
+        context.stroke();
+
+        context.beginPath();
+        context.arc(22, 20, 13, 0, Math.PI * 2);
+        context.fillStyle = "white";
+        context.fill();
+        context.font = '18px "Noto Color Emoji", "Apple Color Emoji", sans-serif';
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(symbol, 22, 21);
+
+        return context.getImageData(0, 0, canvas.width, canvas.height);
+      }
 
       function createDeadTreeCrossImage() {
         const size = 18;
@@ -1464,6 +1567,11 @@
       });
 
       map.on("load", () => {
+        Object.entries(HARVEST_PIN_ICONS).forEach(([part, symbol]) => {
+          map.addImage(`harvest-${part}`, createHarvestPinImage(symbol), {
+            pixelRatio: 2,
+          });
+        });
         map.addImage("dead-tree-cross", createDeadTreeCrossImage());
         map.addLayer({
           id: "dead-tree-crosses",
@@ -1576,11 +1684,11 @@
             presentation.dangerRingsVisible ? "visible" : "none",
           );
         }
-        if (map.getLayer("harvest-rings")) {
+        if (map.getLayer("harvest-pins")) {
           map.setLayoutProperty(
-            "harvest-rings",
+            "harvest-pins",
             "visibility",
-            presentation.harvestRingsVisible ? "visible" : "none",
+            presentation.harvestPinsVisible ? "visible" : "none",
           );
         }
       }
@@ -1605,12 +1713,28 @@
             ? "this week"
             : `in ${offset} week${offset === 1 ? "" : "s"}`;
         harvestWeeksLabel.textContent = `${weeks} week${weeks === 1 ? "" : "s"}`;
+        harvestPartFilters.disabled = !harvestFilterEnabled.checked;
+        const selectedParts = selectedHarvestPartValues();
 
         const visibleFeatures = harvestAvailability(
           orchardFeatures,
           start,
           weeks,
-        );
+        ).map((feature) => {
+          const visibleParts = selectHarvestParts(
+            feature.properties.harvest_available_parts,
+            selectedParts,
+          );
+          return {
+            ...feature,
+            properties: {
+              ...feature.properties,
+              harvest_available: visibleParts.length > 0,
+              harvest_available_parts: visibleParts,
+              harvest_pin_image: harvestPinImageName(visibleParts),
+            },
+          };
+        });
         const summary = harvestAvailabilitySummary(visibleFeatures);
         const dateFormatter = new Intl.DateTimeFormat(undefined, {
           day: "numeric",
@@ -1718,6 +1842,7 @@
       dateMinSlider.max = totalDays;
       dateMaxSlider.max = totalDays;
       dateMaxSlider.value = totalDays;
+      renderHarvestPartFilters();
       setMapMode("normal");
     </script>
   </body>

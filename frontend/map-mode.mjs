@@ -10,6 +10,6 @@ export function mapModePresentation(mode, { harvestEnabled = true } = {}) {
     harvestFiltersVisible: mode === "harvest",
     plantingDateFilterActive: mode === "normal",
     dangerRingsVisible: mode === "danger",
-    harvestRingsVisible: mode === "harvest" && harvestEnabled,
+    harvestPinsVisible: mode === "harvest" && harvestEnabled,
   };
 }
