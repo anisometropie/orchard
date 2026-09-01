@@ -40,6 +40,14 @@ fn runserver_at_address() {
 }
 
 #[test]
+fn migrate_database() {
+    assert_eq!(
+        parse_command(["orchard", "migrate"]).unwrap(),
+        OrchardCommand::Migrate,
+    );
+}
+
+#[test]
 fn require_filename() {
     assert_eq!(
         parse_command(["orchard", "import_legacy_orchard"])

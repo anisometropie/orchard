@@ -10,12 +10,22 @@ services:
       - "5432:5432"
     volumes:
       - orchard-db-data:/var/lib/postgresql/data
-      - ./api/db/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U orchard -d orchard"]
       interval: 2s
       timeout: 5s
       retries: 15
+
+  migrate:
+    build:
+      context: ./api
+    restart: "no"
+    environment:
+      ORCHARD_DATABASE_URL: "postgres://orchard:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/orchard"
+    command: ["migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
 
   api:
     build:
@@ -25,8 +35,8 @@ services:
       ORCHARD_DATABASE_URL: "postgres://orchard:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/orchard"
     command: ["runserver", "--address", "0.0.0.0:3000"]
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "3000:3000"
     volumes:
@@ -43,8 +53,6 @@ services:
       - "5433:5432"
     tmpfs:
       - /var/lib/postgresql/data
-    volumes:
-      - ./api/db/migrations:/docker-entrypoint-initdb.d:ro
 
   nginx:
     image: nginx:alpine

@@ -1006,11 +1006,6 @@ fn empty_orchard_database() -> (String, Client) {
                 "../../../../db/migrations/008_create_plant_harvest_windows.sql"
             ))
             .unwrap();
-        verification_connection
-            .batch_execute(include_str!(
-                "../../../../db/migrations/009_seed_raspberry_harvest_windows.sql"
-            ))
-            .unwrap();
     }
     let harvest_window_metadata_was_applied: bool = verification_connection
         .query_one(

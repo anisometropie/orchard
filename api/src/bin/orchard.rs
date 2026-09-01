@@ -8,7 +8,7 @@ use orchard_api::adapters::primary::geojson_legacy_orchard_import::GeoJsonLegacy
 use orchard_api::adapters::primary::http::start_http_server;
 use orchard_api::adapters::primary::import_legacy_geojson_file;
 use orchard_api::adapters::primary::orchard_cli::{OrchardCommand, parse_command};
-use orchard_api::adapters::secondary::PostgresOrchardStorage;
+use orchard_api::adapters::secondary::{PostgresMigrator, PostgresOrchardStorage};
 use orchard_api::hexagon::use_cases::import_legacy_orchard::LegacyOrchardImportError;
 
 fn main() -> ExitCode {
@@ -29,10 +29,44 @@ fn main() -> ExitCode {
     };
 
     match command {
+        OrchardCommand::Migrate => migrate_database(&database_url),
         OrchardCommand::ImportLegacyOrchard { geojson_path } => {
             import_orchard(&database_url, &geojson_path)
         }
         OrchardCommand::RunServer { address } => runserver(database_url, address),
+    }
+}
+
+fn migrate_database(database_url: &str) -> ExitCode {
+    let mut migrator = match PostgresMigrator::connect(database_url) {
+        Ok(migrator) => migrator,
+        Err(error) => {
+            eprintln!("Migration failed: {error}.");
+            return ExitCode::from(1);
+        }
+    };
+    match migrator.migrate() {
+        Ok(report) => {
+            if report.adopted_legacy_schema {
+                println!("Adopted the existing version-10 schema.");
+            }
+            if report.applied_versions.is_empty() {
+                println!("Database schema is up to date.");
+            } else {
+                let versions = report
+                    .applied_versions
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("Applied migrations: {versions}.");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Migration failed: {error}.");
+            ExitCode::from(1)
+        }
     }
 }
 
