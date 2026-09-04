@@ -7,8 +7,8 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{Path, State, rejection::JsonRejection},
-    http::{StatusCode, header},
-    response::Response,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
     routing::{get, patch, post, put},
 };
 use serde::Deserialize;
@@ -17,24 +17,38 @@ use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::hexagon::models::{
     AerialOverlayId, AnnualDate, BotanicalTaxon, HarvestScheduleOwner, HarvestedPart,
-    InfraspecificRank, MapConfiguration, NamedTaxon, OrchardTree, PlantCultivarId,
-    PlantIdentification, PlantIdentity, PlantIdentityId, Tree, TreeId,
+    InfraspecificRank, MapConfiguration, NamedTaxon, OrchardId, OrchardTree, PlantCultivarId,
+    PlantIdentity, PlantIdentityId, Tree, TreeId,
 };
-use crate::hexagon::ports::{MapConfigurationStorage, OrchardStorage};
+use crate::hexagon::ports::{AccessControl, MapConfigurationStorage, OrchardStorage};
+use crate::hexagon::use_cases::authorize_orchard_owner::{
+    OrchardOwnerAccessError, OrchardOwnerAccessRequested, authorize_orchard_owner,
+};
+use crate::hexagon::use_cases::authorize_orchard_reader::{
+    OrchardReadAccessError, OrchardReadAccessRequested, OrchardReadCredential,
+    authorize_orchard_reader,
+};
 use crate::hexagon::use_cases::change_tree_condition::{
-    TreeConditionChangeError, TreeConditionChanged, change_tree_condition,
+    OrchardTreeConditionChanged, TreeConditionChangeError, change_orchard_tree_condition,
 };
-use crate::hexagon::use_cases::create_tree::{TreeCreationRequested, create_tree};
-use crate::hexagon::use_cases::list_orchard_trees::list_orchard_trees;
+use crate::hexagon::use_cases::list_orchard_trees::list_trees_for_orchard;
 use crate::hexagon::use_cases::load_aerial_overlay_image::{
-    AerialOverlayImageLoadError, load_aerial_overlay_image,
+    AerialOverlayImageLoadError, load_orchard_aerial_overlay_image,
 };
 use crate::hexagon::use_cases::load_map_configuration::{
-    MapConfigurationLoadError, load_map_configuration,
+    MapConfigurationLoadError, load_orchard_map_configuration,
 };
+use crate::hexagon::use_cases::log_in_user::{UserLoginError, UserLoginRequested, log_in_user};
+use crate::hexagon::use_cases::log_out_user::log_out_user;
 use crate::hexagon::use_cases::replace_plant_harvest_windows::{
-    AnnualHarvestWindowChanged, PlantHarvestWindowsReplaced, PlantHarvestWindowsReplacementError,
-    replace_plant_harvest_windows,
+    AnnualHarvestWindowChanged, OrchardHarvestWindowsReplaced, PlantHarvestWindowsReplacementError,
+    replace_orchard_harvest_windows,
+};
+use crate::hexagon::use_cases::restore_user_session::{
+    UserSessionRestorationError, restore_user_session,
+};
+use crate::hexagon::use_cases::share_orchard::{
+    OrchardShareError, OrchardShareLinkRequested, share_orchard,
 };
 
 pub async fn start_http_server<U>(
@@ -42,7 +56,7 @@ pub async fn start_http_server<U>(
     address: SocketAddr,
 ) -> Result<RunningHttpServer, std::io::Error>
 where
-    U: OrchardStorage + MapConfigurationStorage + Send + 'static,
+    U: AccessControl + OrchardStorage + MapConfigurationStorage + Send + 'static,
 {
     let listener = TcpListener::bind(address).await?;
     let address = listener.local_addr()?;
@@ -60,26 +74,245 @@ where
 
 pub fn router<U>(orchard_storage: Arc<Mutex<U>>) -> Router
 where
-    U: OrchardStorage + MapConfigurationStorage + Send + 'static,
+    U: AccessControl + OrchardStorage + MapConfigurationStorage + Send + 'static,
 {
     Router::new()
-        .route("/trees", post(create_tree_handler::<U>))
-        .route("/trees/{tree_id}", patch(change_tree_handler::<U>))
         .route(
-            "/plant-identities/{plant_identity_id}/harvest-windows",
+            "/session",
+            post(log_in_handler::<U>)
+                .get(restore_session_handler::<U>)
+                .delete(log_out_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/trees.geojson",
+            get(list_trees_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/trees/{tree_id}",
+            patch(change_tree_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/map-config",
+            get(map_configuration_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/aerial-overlays/{overlay_id}/image",
+            get(aerial_overlay_image_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/share",
+            post(share_orchard_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/plant-identities/{plant_identity_id}/harvest-windows",
             put(replace_identity_harvest_windows_handler::<U>),
         )
         .route(
-            "/plant-cultivars/{cultivar_id}/harvest-windows",
+            "/orchards/{orchard_id}/plant-cultivars/{cultivar_id}/harvest-windows",
             put(replace_cultivar_harvest_windows_handler::<U>),
         )
-        .route("/trees.geojson", get(list_trees_handler::<U>))
-        .route("/map-config", get(map_configuration_handler::<U>))
+        .route("/trees", post(legacy_endpoint_handler))
+        .route("/trees/{tree_id}", patch(legacy_endpoint_handler))
+        .route(
+            "/plant-identities/{plant_identity_id}/harvest-windows",
+            put(legacy_endpoint_handler),
+        )
+        .route(
+            "/plant-cultivars/{cultivar_id}/harvest-windows",
+            put(legacy_endpoint_handler),
+        )
+        .route("/trees.geojson", get(legacy_endpoint_handler))
+        .route("/map-config", get(legacy_endpoint_handler))
         .route(
             "/aerial-overlays/{overlay_id}/image",
-            get(aerial_overlay_image_handler::<U>),
+            get(legacy_endpoint_handler),
         )
         .with_state(orchard_storage)
+}
+
+async fn legacy_endpoint_handler() -> StatusCode {
+    StatusCode::UNAUTHORIZED
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
+
+async fn log_in_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    request: Result<Json<LoginRequest>, JsonRejection>,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    let session = tokio::task::spawn_blocking(move || {
+        log_in_user(
+            UserLoginRequested {
+                username: request.username,
+                password: request.password,
+            },
+            &mut *access_control.lock().unwrap(),
+        )
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|error| match error {
+        UserLoginError::InvalidCredentials => StatusCode::UNAUTHORIZED,
+        UserLoginError::AuthenticationUnavailable => StatusCode::INTERNAL_SERVER_ERROR,
+    })?;
+    let cookie = HeaderValue::from_str(&format!(
+        "orchard_session={}; Path=/; HttpOnly{}; SameSite=Strict; Max-Age=2592000",
+        session.token,
+        secure_cookie_attribute(),
+    ))
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut response = Json(json!({
+        "user": session.user,
+        "orchards": session.orchards,
+    }))
+    .into_response();
+    response.headers_mut().insert(header::SET_COOKIE, cookie);
+    Ok(response)
+}
+
+async fn restore_session_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    let session_token =
+        cookie_value(&headers, "orchard_session").ok_or(StatusCode::UNAUTHORIZED)?;
+    tokio::task::spawn_blocking(move || {
+        restore_user_session(session_token, &mut *access_control.lock().unwrap())
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(|session| {
+        Json(json!({
+            "user": session.user,
+            "orchards": session.orchards,
+        }))
+    })
+    .map_err(|error| match error {
+        UserSessionRestorationError::SessionNotFound => StatusCode::UNAUTHORIZED,
+        UserSessionRestorationError::AuthenticationUnavailable => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+async fn log_out_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    let session_token =
+        cookie_value(&headers, "orchard_session").ok_or(StatusCode::UNAUTHORIZED)?;
+    tokio::task::spawn_blocking(move || {
+        log_out_user(&session_token, &mut *access_control.lock().unwrap())
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    let cookie = HeaderValue::from_str(&format!(
+        "orchard_session=; Path=/; HttpOnly{}; SameSite=Strict; Max-Age=0",
+        secure_cookie_attribute(),
+    ))
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    response.headers_mut().insert(header::SET_COOKIE, cookie);
+    Ok(response)
+}
+
+async fn share_orchard_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        share_orchard(
+            OrchardShareLinkRequested {
+                orchard_id: OrchardId(orchard_id),
+                session_token,
+            },
+            &mut *access_control.lock().unwrap(),
+        )
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(|share_token| Json(json!({ "share_token": share_token })))
+    .map_err(|error| match error {
+        OrchardShareError::SessionNotFound => StatusCode::UNAUTHORIZED,
+        OrchardShareError::OrchardNotOwned => StatusCode::NOT_FOUND,
+        OrchardShareError::ShareLinkCouldNotBeCreated => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .filter_map(|cookie| cookie.trim().split_once('='))
+        .find(|(cookie_name, _)| *cookie_name == name)
+        .map(|(_, value)| value.to_owned())
+}
+
+fn orchard_read_credential(headers: &HeaderMap) -> Result<OrchardReadCredential, StatusCode> {
+    if let Some(share_token) = headers
+        .get("x-orchard-share-token")
+        .and_then(|value| value.to_str().ok())
+    {
+        return Ok(OrchardReadCredential::ShareToken(share_token.to_owned()));
+    }
+    cookie_value(headers, "orchard_session")
+        .map(OrchardReadCredential::OwnerSession)
+        .ok_or(StatusCode::UNAUTHORIZED)
+}
+
+fn owner_session_token(headers: &HeaderMap) -> Result<String, StatusCode> {
+    if headers.contains_key("x-orchard-share-token") {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    cookie_value(headers, "orchard_session").ok_or(StatusCode::UNAUTHORIZED)
+}
+
+fn authorize_owner_access(
+    access_control: &mut impl AccessControl,
+    orchard_id: OrchardId,
+    session_token: String,
+) -> Result<(), StatusCode> {
+    authorize_orchard_owner(
+        OrchardOwnerAccessRequested {
+            orchard_id,
+            session_token,
+        },
+        access_control,
+    )
+    .map(|_| ())
+    .map_err(|error| match error {
+        OrchardOwnerAccessError::SessionNotFound => StatusCode::UNAUTHORIZED,
+        OrchardOwnerAccessError::OrchardNotOwned => StatusCode::NOT_FOUND,
+        OrchardOwnerAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+fn secure_cookie_attribute() -> &'static str {
+    match std::env::var("ORCHARD_ALLOW_INSECURE_HTTP").as_deref() {
+        Ok("true" | "1") => "",
+        _ => "; Secure",
+    }
 }
 
 pub struct RunningHttpServer {
@@ -111,42 +344,78 @@ impl Drop for RunningHttpServer {
 
 async fn map_configuration_handler<U>(
     State(storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
 ) -> Result<Json<Value>, StatusCode>
 where
-    U: MapConfigurationStorage + Send + 'static,
+    U: AccessControl + MapConfigurationStorage + Send + 'static,
 {
-    tokio::task::spawn_blocking(move || load_map_configuration(&mut *storage.lock().unwrap()))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .map(|configuration| Json(map_configuration_json(configuration)))
+    let credential = orchard_read_credential(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        authorize_orchard_reader(
+            OrchardReadAccessRequested {
+                orchard_id: OrchardId(orchard_id),
+                credential,
+            },
+            &mut *storage,
+        )
         .map_err(|error| match error {
-            MapConfigurationLoadError::ConfigurationNotFound => StatusCode::NOT_FOUND,
-            MapConfigurationLoadError::ConfigurationCouldNotBeRead => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        })
+            OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+            OrchardReadAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        load_orchard_map_configuration(OrchardId(orchard_id), &mut *storage)
+            .map(|configuration| Json(map_configuration_json(configuration)))
+            .map_err(|error| match error {
+                MapConfigurationLoadError::ConfigurationNotFound => StatusCode::NOT_FOUND,
+                MapConfigurationLoadError::ConfigurationCouldNotBeRead => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
 }
 
 async fn aerial_overlay_image_handler<U>(
     State(storage): State<Arc<Mutex<U>>>,
-    Path(overlay_id): Path<u64>,
+    Path((orchard_id, overlay_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
 ) -> Result<Response, StatusCode>
 where
-    U: MapConfigurationStorage + Send + 'static,
+    U: AccessControl + MapConfigurationStorage + Send + 'static,
 {
+    let credential = orchard_read_credential(&headers)?;
     let image = tokio::task::spawn_blocking(move || {
-        load_aerial_overlay_image(AerialOverlayId(overlay_id), &mut *storage.lock().unwrap())
+        let mut storage = storage.lock().unwrap();
+        authorize_orchard_reader(
+            OrchardReadAccessRequested {
+                orchard_id: OrchardId(orchard_id),
+                credential,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+            OrchardReadAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        load_orchard_aerial_overlay_image(
+            OrchardId(orchard_id),
+            AerialOverlayId(overlay_id),
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            AerialOverlayImageLoadError::ImageNotFound => StatusCode::NOT_FOUND,
+            AerialOverlayImageLoadError::ImageCouldNotBeRead => StatusCode::INTERNAL_SERVER_ERROR,
+        })
     })
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map_err(|error| match error {
-        AerialOverlayImageLoadError::ImageNotFound => StatusCode::NOT_FOUND,
-        AerialOverlayImageLoadError::ImageCouldNotBeRead => StatusCode::INTERNAL_SERVER_ERROR,
-    })?;
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
 
     Response::builder()
         .header(header::CONTENT_TYPE, image.media_type)
         .header(header::CACHE_CONTROL, "no-store")
+        .header("Referrer-Policy", "no-referrer")
         .body(Body::from(image.bytes))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
@@ -174,24 +443,32 @@ fn map_configuration_json(configuration: MapConfiguration) -> Value {
 
 async fn list_trees_handler<U>(
     State(orchard_storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
 ) -> Result<Json<Value>, StatusCode>
 where
-    U: OrchardStorage + Send + 'static,
+    U: AccessControl + OrchardStorage + Send + 'static,
 {
-    tokio::task::spawn_blocking(move || list_orchard_trees(&mut *orchard_storage.lock().unwrap()))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .map(|trees| Json(orchard_geojson(trees)))
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CreateTreeRequest {
-    pub longitude: f64,
-    pub latitude: f64,
-    pub plant_identity: PlantIdentification,
-    pub roles: Vec<String>,
+    let credential = orchard_read_credential(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = orchard_storage.lock().unwrap();
+        authorize_orchard_reader(
+            OrchardReadAccessRequested {
+                orchard_id: OrchardId(orchard_id),
+                credential,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+            OrchardReadAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        list_trees_for_orchard(OrchardId(orchard_id), &mut *storage)
+            .map(|trees| Json(orchard_geojson(trees)))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
 }
 
 #[derive(Deserialize)]
@@ -215,15 +492,18 @@ struct HarvestWindowRequest {
 
 async fn replace_identity_harvest_windows_handler<U>(
     State(orchard_storage): State<Arc<Mutex<U>>>,
-    Path(plant_identity_id): Path<u64>,
-    Json(request): Json<ReplaceHarvestWindowsRequest>,
+    Path((orchard_id, plant_identity_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<ReplaceHarvestWindowsRequest>, JsonRejection>,
 ) -> StatusCode
 where
-    U: OrchardStorage + Send + 'static,
+    U: AccessControl + OrchardStorage + Send + 'static,
 {
     replace_harvest_windows_handler(
         orchard_storage,
+        OrchardId(orchard_id),
         HarvestScheduleOwner::PlantIdentity(PlantIdentityId(plant_identity_id)),
+        headers,
         request,
     )
     .await
@@ -231,15 +511,18 @@ where
 
 async fn replace_cultivar_harvest_windows_handler<U>(
     State(orchard_storage): State<Arc<Mutex<U>>>,
-    Path(cultivar_id): Path<u64>,
-    Json(request): Json<ReplaceHarvestWindowsRequest>,
+    Path((orchard_id, cultivar_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<ReplaceHarvestWindowsRequest>, JsonRejection>,
 ) -> StatusCode
 where
-    U: OrchardStorage + Send + 'static,
+    U: AccessControl + OrchardStorage + Send + 'static,
 {
     replace_harvest_windows_handler(
         orchard_storage,
+        OrchardId(orchard_id),
         HarvestScheduleOwner::PlantCultivar(PlantCultivarId(cultivar_id)),
+        headers,
         request,
     )
     .await
@@ -247,12 +530,24 @@ where
 
 async fn replace_harvest_windows_handler<U>(
     orchard_storage: Arc<Mutex<U>>,
+    orchard_id: OrchardId,
     owner: HarvestScheduleOwner,
-    request: ReplaceHarvestWindowsRequest,
+    headers: HeaderMap,
+    request: Result<Json<ReplaceHarvestWindowsRequest>, JsonRejection>,
 ) -> StatusCode
 where
-    U: OrchardStorage + Send + 'static,
+    U: AccessControl + OrchardStorage + Send + 'static,
 {
+    let Ok(session_token) = owner_session_token(&headers) else {
+        return if headers.contains_key("x-orchard-share-token") {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::UNAUTHORIZED
+        };
+    };
+    let Ok(Json(request)) = request else {
+        return StatusCode::BAD_REQUEST;
+    };
     let reference_region = request.reference_region;
     let windows = request
         .windows
@@ -266,80 +561,77 @@ where
         })
         .collect();
     match tokio::task::spawn_blocking(move || {
-        replace_plant_harvest_windows(
-            PlantHarvestWindowsReplaced {
+        let mut storage = orchard_storage.lock().unwrap();
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        replace_orchard_harvest_windows(
+            OrchardHarvestWindowsReplaced {
+                orchard_id,
                 owner,
                 reference_region,
                 windows,
             },
-            &mut *orchard_storage.lock().unwrap(),
+            &mut *storage,
         )
+        .map_err(|error| match error {
+            PlantHarvestWindowsReplacementError::InvalidAnnualDate
+            | PlantHarvestWindowsReplacementError::MissingReferenceRegion => {
+                StatusCode::BAD_REQUEST
+            }
+            PlantHarvestWindowsReplacementError::OwnerNotFound => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })
     })
     .await
     {
         Ok(Ok(())) => StatusCode::NO_CONTENT,
-        Ok(Err(
-            PlantHarvestWindowsReplacementError::InvalidAnnualDate
-            | PlantHarvestWindowsReplacementError::MissingReferenceRegion,
-        )) => StatusCode::BAD_REQUEST,
-        Ok(Err(PlantHarvestWindowsReplacementError::OwnerNotFound)) => StatusCode::NOT_FOUND,
-        Ok(Err(_)) | Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(Err(status)) => status,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
 async fn change_tree_handler<U>(
-    State(orchard_storage): State<Arc<Mutex<U>>>,
-    Path(tree_id): Path<u64>,
-    Json(request): Json<ChangeTreeRequest>,
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, tree_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<ChangeTreeRequest>, JsonRejection>,
 ) -> StatusCode
 where
-    U: OrchardStorage + Send + 'static,
+    U: AccessControl + OrchardStorage + Send + 'static,
 {
+    if headers.contains_key("x-orchard-share-token") {
+        return StatusCode::FORBIDDEN;
+    }
+    let Some(session_token) = cookie_value(&headers, "orchard_session") else {
+        return StatusCode::UNAUTHORIZED;
+    };
+    let Ok(Json(request)) = request else {
+        return StatusCode::BAD_REQUEST;
+    };
     match tokio::task::spawn_blocking(move || {
-        change_tree_condition(
-            TreeConditionChanged {
+        let mut storage = storage.lock().unwrap();
+        authorize_owner_access(&mut *storage, OrchardId(orchard_id), session_token)?;
+        change_orchard_tree_condition(
+            OrchardTreeConditionChanged {
+                orchard_id: OrchardId(orchard_id),
                 tree_id: TreeId(tree_id),
                 is_alive: request.is_alive,
                 is_in_danger: request.is_in_danger,
             },
-            &mut *orchard_storage.lock().unwrap(),
+            &mut *storage,
         )
+        .map_err(|error| match error {
+            TreeConditionChangeError::NoChangesRequested => StatusCode::BAD_REQUEST,
+            TreeConditionChangeError::TreeNotFound => StatusCode::NOT_FOUND,
+            TreeConditionChangeError::DeadTreeCannotBeInDanger => StatusCode::CONFLICT,
+            TreeConditionChangeError::TreeCouldNotBeChanged => StatusCode::INTERNAL_SERVER_ERROR,
+        })
     })
     .await
     {
         Ok(Ok(())) => StatusCode::NO_CONTENT,
-        Ok(Err(TreeConditionChangeError::NoChangesRequested)) => StatusCode::BAD_REQUEST,
-        Ok(Err(TreeConditionChangeError::TreeNotFound)) => StatusCode::NOT_FOUND,
-        Ok(Err(TreeConditionChangeError::DeadTreeCannotBeInDanger)) => StatusCode::CONFLICT,
-        Ok(Err(TreeConditionChangeError::TreeCouldNotBeChanged)) | Err(_) => {
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
+        Ok(Err(status)) => status,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
-}
-
-async fn create_tree_handler<U>(
-    State(orchard_storage): State<Arc<Mutex<U>>>,
-    request: Result<Json<CreateTreeRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<Tree>), StatusCode>
-where
-    U: OrchardStorage + Send + 'static,
-{
-    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
-    tokio::task::spawn_blocking(move || {
-        create_tree(
-            TreeCreationRequested {
-                longitude: request.longitude,
-                latitude: request.latitude,
-                plant_identification: request.plant_identity,
-                roles: request.roles,
-            },
-            &mut *orchard_storage.lock().unwrap(),
-        )
-    })
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|tree| (StatusCode::CREATED, Json(tree)))
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {

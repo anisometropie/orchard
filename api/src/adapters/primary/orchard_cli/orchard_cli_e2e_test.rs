@@ -33,7 +33,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
     );
     assert_eq!(
         String::from_utf8(adoption.stdout).unwrap(),
-        "Adopted the existing version-10 schema.\nDatabase schema is up to date.\n"
+        "Adopted the existing version-10 schema.\nApplied migrations: 11, 12.\n"
     );
     let versions = verification_connection
         .query(
@@ -44,7 +44,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
         .into_iter()
         .map(|row| row.get::<_, i32>(0))
         .collect::<Vec<_>>();
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 10]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
 
     let repeated = Command::new(orchard_command)
         .arg("migrate")
@@ -64,7 +64,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
     assert!(revert.status.success());
     assert_eq!(
         String::from_utf8(revert.stdout).unwrap(),
-        "Database schema is already at or below migration 10.\n"
+        "Reverted migrations: 12, 11.\n"
     );
     verification_connection
         .batch_execute(
@@ -214,95 +214,22 @@ fn runserver() {
     let mut server = ServerProcess::start(orchard_command, &database_url);
     let server_url = server.wait_until_ready();
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let (first_tree, second_tree) = runtime.block_on(async {
-        let client = reqwest::Client::new();
-        let first_tree = create_apple_tree(&client, &server_url, 0.72).await;
-        let second_tree = create_apple_tree(&client, &server_url, 0.18).await;
-        let harvest_response = client
-            .put(format!("{server_url}/plant-identities/1/harvest-windows"))
-            .json(&serde_json::json!({
-                "reference_region": "Sapporo, Japan",
-                "windows": [{
-                    "start": { "month": 8, "day": 20 },
-                    "end": { "month": 10, "day": 5 },
-                    "harvested_part": "fruit"
-                }]
-            }))
+    let legacy_endpoint_status = runtime.block_on(async {
+        reqwest::Client::new()
+            .get(format!("{server_url}/trees.geojson"))
             .send()
             .await
-            .unwrap();
-        assert_eq!(harvest_response.status(), StatusCode::NO_CONTENT);
-        (first_tree, second_tree)
+            .unwrap()
+            .status()
     });
     drop(runtime);
 
-    assert_eq!(first_tree["plant_identity_id"], 1);
-    assert_eq!(second_tree["plant_identity_id"], 1);
+    assert_eq!(legacy_endpoint_status, StatusCode::UNAUTHORIZED);
     assert!(
         server.is_running(),
         "the server should continue accepting requests"
     );
-    assert_eq!(database_snapshot(&mut verification_connection), (2, 1));
-
-    let persisted_tree = verification_connection
-        .query_one(
-            "SELECT plant_identities.common_name, trees.roles,
-                    plant_harvest_windows.start_month,
-                    plant_harvest_windows.start_day,
-                    plant_harvest_windows.end_month,
-                    plant_harvest_windows.end_day
-             FROM trees
-             INNER JOIN plant_identities ON plant_identities.id = trees.plant_identity_id
-             INNER JOIN plant_harvest_windows
-                ON plant_harvest_windows.plant_identity_id = trees.plant_identity_id
-               AND plant_harvest_windows.cultivar_id IS NULL
-             ORDER BY trees.id
-             LIMIT 1",
-            &[],
-        )
-        .unwrap();
-    assert_eq!(persisted_tree.get::<_, String>(0), "Pommier");
-    assert_eq!(persisted_tree.get::<_, Vec<String>>(1), vec!["fruit"]);
-    assert_eq!(persisted_tree.get::<_, Option<i16>>(2), Some(8));
-    assert_eq!(persisted_tree.get::<_, Option<i16>>(3), Some(20));
-    assert_eq!(persisted_tree.get::<_, Option<i16>>(4), Some(10));
-    assert_eq!(persisted_tree.get::<_, Option<i16>>(5), Some(5));
-}
-
-async fn create_apple_tree(
-    client: &reqwest::Client,
-    server_url: &str,
-    longitude: f64,
-) -> serde_json::Value {
-    let response = client
-        .post(format!("{server_url}/trees"))
-        .json(&serde_json::json!({
-            "longitude": longitude,
-            "latitude": 0.24,
-            "plant_identity": {
-                "common_name": "Pommier",
-                "botanical_taxon": {
-                    "Named": {
-                        "genus": "Malus",
-                        "species": "domestica",
-                        "species_is_hybrid": false,
-                        "infraspecific": null,
-                        "is_aggregate": false,
-                        "cultivar_group": null
-                    }
-                },
-                "cultivar": null,
-                "trade_name": null,
-                "identification_status": "Confirmed"
-            },
-            "roles": ["fruit"]
-        }))
-        .send()
-        .await
-        .expect("the server should answer the create-tree request");
-
-    assert_eq!(response.status(), StatusCode::CREATED);
-    response.json().await.unwrap()
+    assert_eq!(database_snapshot(&mut verification_connection), (0, 0));
 }
 
 fn empty_orchard_database(database_url: &str) -> Client {

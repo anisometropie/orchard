@@ -1,5 +1,6 @@
 mod legacy_tree_source;
 mod map_configuration;
+mod orchard_access;
 mod plant_identity;
 mod tree;
 
@@ -7,6 +8,7 @@ pub use legacy_tree_source::{LegacyPlantIdentification, LegacyTreeSource};
 pub use map_configuration::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, GeoPoint, MapConfiguration,
 };
+pub use orchard_access::{AuthenticatedSession, Orchard, OrchardId, User, UserId};
 pub use plant_identity::{
     AnnualDate, AnnualHarvestWindow, BotanicalTaxon, HarvestDataOrigin, HarvestScheduleOwner,
     HarvestedPart, IdentificationStatus, InfraspecificRank, InfraspecificTaxon, NamedTaxon,

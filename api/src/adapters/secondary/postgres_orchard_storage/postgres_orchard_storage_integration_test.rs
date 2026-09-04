@@ -3,15 +3,91 @@ use orchard_api::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
     BotanicalTaxon, GeoPoint, HarvestDataOrigin, HarvestScheduleOwner, HarvestedPart,
     IdentificationStatus, InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification,
-    LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardTree, PlantCultivar, PlantCultivarId,
-    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole,
-    Tree, TreeId,
+    LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardId, OrchardTree, PlantCultivar,
+    PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
+    ReproductiveRole, Tree, TreeId, UserId,
 };
-use orchard_api::hexagon::ports::{MapConfigurationStorage, OrchardStorage, OrchardStorageError};
+use orchard_api::hexagon::ports::{
+    AccessControl, MapConfigurationStorage, OrchardStorage, OrchardStorageError,
+};
 use orchard_api::hexagon::use_cases::change_tree_condition::{
     TreeConditionChanged, change_tree_condition,
 };
 use postgres::{Client, NoTls};
+
+#[test]
+fn persist_password_sessions_ownership_and_rotating_share_tokens() {
+    let _database_lock = database_lock();
+    let (database_url, mut verification_connection) = empty_orchard_database();
+    verification_connection
+        .batch_execute(
+            "INSERT INTO users (username, default_center, is_default)
+             VALUES (
+                'owner',
+                ST_SetSRID(ST_MakePoint(5.01745, 45.25337), 4326),
+                TRUE
+             );
+             INSERT INTO orchards (owner_user_id, name, center, reference_region)
+             VALUES (
+                1,
+                'My orchard',
+                ST_SetSRID(ST_MakePoint(5.01745, 45.25337), 4326),
+                'Hauterives, Drôme, France'
+             );",
+        )
+        .unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+
+    assert!(
+        storage
+            .set_user_password("owner", "correct horse battery staple")
+            .unwrap()
+    );
+    assert_eq!(
+        storage
+            .verify_credentials("owner", "incorrect password")
+            .unwrap(),
+        None
+    );
+    let user = storage
+        .verify_credentials("owner", "correct horse battery staple")
+        .unwrap()
+        .unwrap();
+    assert_eq!(user.id, UserId(1));
+    assert_eq!(
+        storage.orchards_owned_by(user.id).unwrap()[0].id,
+        OrchardId(1)
+    );
+
+    let session = storage.create_session(user.id).unwrap();
+    assert_eq!(
+        storage.user_for_session(&session).unwrap(),
+        Some(user.clone())
+    );
+    let first_share_token = storage.replace_share_token(user.id, OrchardId(1)).unwrap();
+    assert_eq!(
+        storage.orchard_for_share_token(&first_share_token).unwrap(),
+        Some(OrchardId(1))
+    );
+    let second_share_token = storage.replace_share_token(user.id, OrchardId(1)).unwrap();
+    assert_eq!(
+        storage.orchard_for_share_token(&first_share_token).unwrap(),
+        None
+    );
+    assert_eq!(
+        storage
+            .orchard_for_share_token(&second_share_token)
+            .unwrap(),
+        Some(OrchardId(1))
+    );
+
+    assert!(
+        storage
+            .set_user_password("owner", "another correct password")
+            .unwrap()
+    );
+    assert_eq!(storage.user_for_session(&session).unwrap(), None);
+}
 
 #[test]
 fn commit_persists_identity_and_tree() {
@@ -1026,10 +1102,40 @@ fn empty_orchard_database() -> (String, Client) {
             ))
             .unwrap();
     }
+    let orchard_ownership_was_applied: bool = verification_connection
+        .query_one("SELECT to_regclass('orchards') IS NOT NULL", &[])
+        .unwrap()
+        .get(0);
+    if !orchard_ownership_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/011_create_orchard_ownership.sql"
+            ))
+            .unwrap();
+    }
+    let authentication_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'users'
+                  AND column_name = 'password_hash'
+             )",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !authentication_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/012_add_orchard_authentication.sql"
+            ))
+            .unwrap();
+    }
     verification_connection
         .batch_execute(
-            "TRUNCATE TABLE plant_harvest_windows, aerial_overlays, users, trees,
-                            plant_cultivars, plant_identities
+            "TRUNCATE TABLE user_sessions, orchards, plant_harvest_windows,
+                            aerial_overlays, users, trees, plant_cultivars, plant_identities
              RESTART IDENTITY CASCADE",
         )
         .unwrap();
