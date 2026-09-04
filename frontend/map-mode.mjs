@@ -9,7 +9,7 @@ export function mapModePresentation(mode, { harvestEnabled = true } = {}) {
     normalFiltersVisible: mode === "normal",
     harvestFiltersVisible: mode === "harvest",
     plantingDateFilterActive: mode === "normal",
-    dangerRingsVisible: mode === "danger",
+    dangerPinsVisible: mode === "danger",
     harvestPinsVisible: mode === "harvest" && harvestEnabled,
   };
 }

@@ -116,6 +116,10 @@
         border-color: #245c2a;
         color: white;
       }
+      .map-mode-button[data-map-mode="danger"][aria-pressed="true"] {
+        background: #b42318;
+        border-color: #8f1d14;
+      }
       #inventory-panel {
         background: rgba(255, 255, 255, 0.98);
         border-radius: 10px;
@@ -695,7 +699,7 @@
         harvestPinImageName,
         selectHarvestParts,
       } from "./harvest-marker.mjs?v=2";
-      import { mapModePresentation } from "./map-mode.mjs?v=2";
+      import { mapModePresentation } from "./map-mode.mjs?v=3";
       import {
         filterTreeFeatures,
         harvestScheduleEndpoint,
@@ -819,24 +823,17 @@
               },
             },
             {
-              id: "danger-rings",
-              type: "circle",
+              id: "danger-pins",
+              type: "symbol",
               source: "orchard",
               filter: ["==", ["get", "is_in_danger"], true],
-              layout: { visibility: "none" },
-              paint: {
-                "circle-radius": [
-                  "case",
-                  ["<", ["to-number", ["get", "adult_height"]], 1.4],
-                  7,
-                  ["<", ["to-number", ["get", "adult_height"]], 6],
-                  10,
-                  13,
-                ],
-                "circle-color": "rgba(0, 0, 0, 0)",
-                "circle-stroke-color": "#d40000",
-                "circle-stroke-opacity": 0.95,
-                "circle-stroke-width": 3,
+              layout: {
+                "icon-allow-overlap": true,
+                "icon-anchor": "bottom",
+                "icon-ignore-placement": true,
+                "icon-image": "danger-tree",
+                "icon-size": 0.95,
+                visibility: "none",
               },
             },
           ],
@@ -920,7 +917,7 @@
         ].map((input) => input.value);
       }
 
-      function createHarvestPinImage(symbol) {
+      function createMapPinImage(fillColor, drawCenter) {
         const pixelRatio = 2;
         const width = 44;
         const height = 54;
@@ -940,7 +937,7 @@
         context.bezierCurveTo(32, 3, 40, 10, 40, 20);
         context.bezierCurveTo(40, 32, 26, 43, 22, 51);
         context.closePath();
-        context.fillStyle = "#206a3b";
+        context.fillStyle = fillColor;
         context.fill();
         context.shadowColor = "transparent";
         context.lineWidth = 1.5;
@@ -949,14 +946,37 @@
 
         context.beginPath();
         context.arc(22, 20, 13, 0, Math.PI * 2);
-        context.fillStyle = "white";
+        context.fillStyle = "#fffaf7";
         context.fill();
-        context.font = '18px "Noto Color Emoji", "Apple Color Emoji", sans-serif';
-        context.textAlign = "center";
-        context.textBaseline = "middle";
-        context.fillText(symbol, 22, 21);
+        drawCenter(context);
 
         return context.getImageData(0, 0, canvas.width, canvas.height);
+      }
+
+      function createHarvestPinImage(symbol) {
+        return createMapPinImage("#206a3b", (context) => {
+          context.font =
+            '18px "Noto Color Emoji", "Apple Color Emoji", sans-serif';
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillText(symbol, 22, 21);
+        });
+      }
+
+      function createDangerPinImage() {
+        return createMapPinImage("#b42318", (context) => {
+          context.strokeStyle = "#8f1d14";
+          context.fillStyle = "#8f1d14";
+          context.lineCap = "round";
+          context.lineWidth = 3.5;
+          context.beginPath();
+          context.moveTo(22, 13);
+          context.lineTo(22, 22);
+          context.stroke();
+          context.beginPath();
+          context.arc(22, 27.5, 1.9, 0, Math.PI * 2);
+          context.fill();
+        });
       }
 
       function createDeadTreeCrossImage() {
@@ -1572,6 +1592,7 @@
             pixelRatio: 2,
           });
         });
+        map.addImage("danger-tree", createDangerPinImage(), { pixelRatio: 2 });
         map.addImage("dead-tree-cross", createDeadTreeCrossImage());
         map.addLayer({
           id: "dead-tree-crosses",
@@ -1677,11 +1698,11 @@
         normalMapFilters.hidden = !presentation.normalFiltersVisible;
         harvestMapFilters.hidden = !presentation.harvestFiltersVisible;
 
-        if (map.getLayer("danger-rings")) {
+        if (map.getLayer("danger-pins")) {
           map.setLayoutProperty(
-            "danger-rings",
+            "danger-pins",
             "visibility",
-            presentation.dangerRingsVisible ? "visible" : "none",
+            presentation.dangerPinsVisible ? "visible" : "none",
           );
         }
         if (map.getLayer("harvest-pins")) {

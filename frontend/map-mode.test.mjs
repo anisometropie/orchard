@@ -3,26 +3,26 @@ import test from "node:test";
 
 import { mapModePresentation } from "./map-mode.mjs";
 
-test("normal mode shows only planting-date controls and no rings", () => {
+test("normal mode shows only planting-date controls and no status pins", () => {
   assert.deepEqual(mapModePresentation("normal"), {
     mode: "normal",
     filterPanelVisible: true,
     normalFiltersVisible: true,
     harvestFiltersVisible: false,
     plantingDateFilterActive: true,
-    dangerRingsVisible: false,
+    dangerPinsVisible: false,
     harvestPinsVisible: false,
   });
 });
 
-test("danger mode hides filter controls and shows only danger rings", () => {
+test("danger mode hides filter controls and shows only danger pins", () => {
   assert.deepEqual(mapModePresentation("danger"), {
     mode: "danger",
     filterPanelVisible: false,
     normalFiltersVisible: false,
     harvestFiltersVisible: false,
     plantingDateFilterActive: false,
-    dangerRingsVisible: true,
+    dangerPinsVisible: true,
     harvestPinsVisible: false,
   });
 });
@@ -34,7 +34,7 @@ test("harvest mode shows only harvest controls and optional harvest pins", () =>
     normalFiltersVisible: false,
     harvestFiltersVisible: true,
     plantingDateFilterActive: false,
-    dangerRingsVisible: false,
+    dangerPinsVisible: false,
     harvestPinsVisible: true,
   });
   assert.equal(
