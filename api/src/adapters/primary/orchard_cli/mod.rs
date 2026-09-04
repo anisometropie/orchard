@@ -8,6 +8,7 @@ pub enum OrchardCommand {
     RevertMigrations { target_version: u32 },
     RunServer { address: SocketAddr },
     ImportLegacyOrchard { geojson_path: PathBuf },
+    SetUserPassword { username: String },
 }
 
 #[derive(Parser)]
@@ -31,6 +32,11 @@ enum OrchardCliCommand {
     },
     #[command(name = "import_legacy_orchard")]
     ImportLegacyOrchard { filename: PathBuf },
+    #[command(name = "set_user_password")]
+    SetUserPassword {
+        #[arg(long)]
+        username: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -57,6 +63,9 @@ where
             OrchardCommand::ImportLegacyOrchard {
                 geojson_path: filename,
             }
+        }
+        OrchardCliCommand::SetUserPassword { username } => {
+            OrchardCommand::SetUserPassword { username }
         }
     })
 }

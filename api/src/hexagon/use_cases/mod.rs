@@ -1,7 +1,14 @@
+pub mod authorize_orchard_owner;
+pub mod authorize_orchard_reader;
 pub mod change_tree_condition;
 pub mod create_tree;
 pub mod import_legacy_orchard;
 pub mod list_orchard_trees;
 pub mod load_aerial_overlay_image;
 pub mod load_map_configuration;
+pub mod log_in_user;
+pub mod log_out_user;
 pub mod replace_plant_harvest_windows;
+pub mod restore_user_session;
+pub mod set_user_password;
+pub mod share_orchard;

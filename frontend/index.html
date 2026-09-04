@@ -12,6 +12,15 @@
       body {
         margin: 0;
       }
+      .visually-hidden {
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        height: 1px;
+        overflow: hidden;
+        position: absolute;
+        white-space: nowrap;
+        width: 1px;
+      }
       #map {
         width: 100vw;
         height: 100vh;
@@ -88,6 +97,70 @@
         left: 20px;
         top: 20px;
         z-index: 10;
+      }
+      #access-panel {
+        align-items: center;
+        background: rgba(255, 255, 255, 0.97);
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        display: flex;
+        flex-wrap: wrap;
+        font: 600 13px sans-serif;
+        gap: 7px;
+        max-width: min(560px, calc(100vw - 40px));
+        padding: 8px;
+        position: absolute;
+        right: 20px;
+        top: 20px;
+        z-index: 30;
+      }
+      #access-panel button,
+      #access-panel input,
+      #access-panel select {
+        border: 1px solid #777;
+        border-radius: 5px;
+        box-sizing: border-box;
+        font: inherit;
+        padding: 6px 8px;
+      }
+      #access-panel button {
+        background: #245c2a;
+        border-color: #245c2a;
+        color: white;
+        cursor: pointer;
+      }
+      #access-panel button.secondary {
+        background: white;
+        border-color: #777;
+        color: #333;
+      }
+      #login-form {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      #login-form[hidden],
+      #share-result[hidden] {
+        display: none;
+      }
+      #login-error {
+        color: #b42318;
+        flex-basis: 100%;
+        font-size: 12px;
+      }
+      #share-result {
+        display: flex;
+        flex-basis: 100%;
+        gap: 6px;
+      }
+      #share-link {
+        flex: 1;
+        min-width: 220px;
+      }
+      #access-mode {
+        color: #555;
+        white-space: nowrap;
       }
       .inventory-button {
         background: #245c2a;
@@ -483,12 +556,24 @@
           pointer-events: auto;
         }
       }
+      @media (max-width: 760px) {
+        #access-panel {
+          left: 10px;
+          max-width: calc(100vw - 20px);
+          right: 10px;
+          top: 10px;
+        }
+        #map-toolbar {
+          left: 10px;
+          top: 74px;
+        }
+      }
     </style>
   </head>
   <body>
     <div id="map"></div>
     <div id="map-status">Loading orchard trees…</div>
-    <div id="map-toolbar">
+    <div id="map-toolbar" hidden>
       <button
         id="inventory-toggle"
         class="inventory-button"
@@ -525,6 +610,30 @@
         </button>
       </div>
     </div>
+    <section id="access-panel" aria-label="Orchard access">
+      <span id="access-mode">Public world map</span>
+      <button id="login-toggle" type="button">Log in</button>
+      <form id="login-form" hidden>
+        <label>
+          <span class="visually-hidden">Username</span>
+          <input id="login-username" name="username" autocomplete="username" placeholder="Username" required />
+        </label>
+        <label>
+          <span class="visually-hidden">Password</span>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Password" required />
+        </label>
+        <button type="submit">Log in</button>
+        <button id="login-cancel" class="secondary" type="button">Cancel</button>
+        <span id="login-error" role="alert" hidden></span>
+      </form>
+      <select id="orchard-select" aria-label="Open orchard" hidden></select>
+      <button id="share-orchard" type="button" hidden>Share read-only link</button>
+      <button id="logout" class="secondary" type="button" hidden>Log out</button>
+      <div id="share-result" hidden>
+        <input id="share-link" aria-label="Read-only orchard link" readonly />
+        <button id="copy-share-link" type="button">Copy</button>
+      </div>
+    </section>
     <aside id="inventory-panel" aria-labelledby="inventory-title" hidden>
       <header class="inventory-header">
         <h2 id="inventory-title">Orchard inventory</h2>
@@ -713,6 +822,12 @@
         harvestAvailabilitySummary,
         parseAnnualDate,
       } from "./harvest-window.mjs?v=2";
+      import {
+        accessHeaders,
+        orchardResourceUrl,
+        resolveOrchardAccess,
+        sharedOrchardUrl,
+      } from "./orchard-access.mjs?v=1";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -846,6 +961,9 @@
       let treeEditor;
       let orchardFeatures = [];
       let mapMode = "normal";
+      let session = null;
+      let currentAccess = { mode: "empty", orchardId: null };
+      let aerialOverlaySources = [];
       const inventoryToggle = document.getElementById("inventory-toggle");
       const inventoryPanel = document.getElementById("inventory-panel");
       const inventoryClose = document.getElementById("inventory-close");
@@ -885,6 +1003,20 @@
       const mapFilterPanel = document.getElementById("map-filter-panel");
       const normalMapFilters = document.getElementById("normal-map-filters");
       const harvestMapFilters = document.getElementById("harvest-map-filters");
+      const mapToolbar = document.getElementById("map-toolbar");
+      const accessMode = document.getElementById("access-mode");
+      const loginToggle = document.getElementById("login-toggle");
+      const loginForm = document.getElementById("login-form");
+      const loginUsername = document.getElementById("login-username");
+      const loginPassword = document.getElementById("login-password");
+      const loginCancel = document.getElementById("login-cancel");
+      const loginError = document.getElementById("login-error");
+      const orchardSelect = document.getElementById("orchard-select");
+      const shareOrchard = document.getElementById("share-orchard");
+      const logout = document.getElementById("logout");
+      const shareResult = document.getElementById("share-result");
+      const shareLink = document.getElementById("share-link");
+      const copyShareLink = document.getElementById("copy-share-link");
 
       function renderHarvestPartFilters() {
         Object.entries(HARVEST_PIN_ICONS)
@@ -1123,11 +1255,18 @@
       }
 
       async function updateTree(treeId, changes) {
+        if (!isEditable()) throw new Error("This shared orchard is read only.");
         if (treeId == null) throw new Error("This tree has no editable ID.");
 
-        const response = await fetch(`/api/trees/${encodeURIComponent(treeId)}`, {
+        const response = await fetch(orchardResourceUrl(
+          currentAccess,
+          `trees/${encodeURIComponent(treeId)}`,
+        ), {
           method: "PATCH",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            ...accessHeaders(currentAccess),
+          },
           body: JSON.stringify(changes),
         });
         if (response.ok) return;
@@ -1286,6 +1425,10 @@
         const windows = document.createElement("span");
         windows.className = "harvest-schedule-window";
         windows.textContent = formatHarvestWindows(schedule.harvestWindows);
+        if (!isEditable()) {
+          scheduleRow.replaceChildren(windows);
+          return;
+        }
         const editButton = document.createElement("button");
         editButton.type = "button";
         editButton.className = "harvest-edit-button";
@@ -1318,6 +1461,10 @@
         const windows = document.createElement("span");
         windows.className = "harvest-schedule-window";
         windows.textContent = formatHarvestWindows(schedule.harvestWindows);
+        if (!isEditable()) {
+          scheduleRow.replaceChildren(name, count, windows);
+          return;
+        }
         const editButton = document.createElement("button");
         editButton.type = "button";
         editButton.className = "harvest-edit-button";
@@ -1507,9 +1654,15 @@
       }
 
       async function updateHarvestWindows(schedule, referenceRegion, windows) {
-        const response = await fetch(harvestScheduleEndpoint(schedule), {
+        if (!isEditable()) throw new Error("This shared orchard is read only.");
+        const response = await fetch(
+          harvestScheduleEndpoint(schedule, currentAccess.orchardId),
+        {
           method: "PUT",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            ...accessHeaders(currentAccess),
+          },
           body: JSON.stringify({ reference_region: referenceRegion, windows }),
         });
         if (response.ok) return;
@@ -1578,14 +1731,20 @@
         treeTooltipTreeId = undefined;
         closeTreeEditor();
 
+        const editable = isEditable();
         const popup = new maplibregl.Popup({
-          closeButton: false,
+          closeButton: !editable,
           closeOnClick: false,
           offset: 12,
         })
           .setLngLat(feature.geometry.coordinates)
-          .setDOMContent(createTreeEditor(feature))
+          .setDOMContent(
+            editable
+              ? createTreeEditor(feature)
+              : createTreeTooltip(feature.properties),
+          )
           .addTo(map);
+        if (!editable) return;
         treeEditor = popup;
         popup.on("close", () => {
           if (treeEditor === popup) treeEditor = undefined;
@@ -1628,28 +1787,101 @@
       });
 
       async function initializeMap() {
+        await restoreSession();
+        await openOrchardFromLocation();
+      }
+
+      async function restoreSession() {
+        try {
+          const response = await fetch("/api/session", { cache: "no-store" });
+          session = response.ok ? await response.json() : null;
+        } catch (error) {
+          console.error("Could not restore the orchard session", error);
+          session = null;
+        }
+      }
+
+      async function openOrchardFromLocation() {
         const status = document.getElementById("map-status");
+        currentAccess = resolveOrchardAccess(window.location.hash, session);
+        renderAccessControls();
+        clearOrchardPresentation();
+
+        if (!["editable", "read-only"].includes(currentAccess.mode)) {
+          map.jumpTo({ center: [0, 20], zoom: 1.5 });
+          status.textContent =
+            currentAccess.mode === "login-required"
+              ? "Log in to open this orchard."
+              : "World map · log in or open a shared orchard link to see trees.";
+          status.hidden = false;
+          if (currentAccess.mode === "login-required") showLoginForm();
+          return;
+        }
+
+        status.textContent = "Loading orchard trees…";
+        status.hidden = false;
         try {
           await loadMapConfiguration();
           await fetchOrchardTrees();
           status.hidden = true;
         } catch (error) {
           console.error("Could not initialize the orchard map", error);
-          status.textContent = "Could not load the orchard map. Try reloading the page.";
+          status.textContent =
+            error.message === "access-denied"
+              ? "This orchard link is invalid, expired, or no longer shared."
+              : "Could not load this orchard. Try reloading the page.";
         }
       }
 
+      function isEditable() {
+        return currentAccess.mode === "editable";
+      }
+
+      function clearOrchardPresentation() {
+        closeTreeEditor();
+        setInventoryOpen(false);
+        orchardFeatures = [];
+        map.getSource("orchard")?.setData({
+          type: "FeatureCollection",
+          features: [],
+        });
+        aerialOverlaySources.forEach(({ sourceId, objectUrl }) => {
+          const layerId = `${sourceId}-layer`;
+          if (map.getLayer(layerId)) map.removeLayer(layerId);
+          if (map.getSource(sourceId)) map.removeSource(sourceId);
+          URL.revokeObjectURL(objectUrl);
+        });
+        aerialOverlaySources = [];
+        refreshTaxonomyFilters();
+        renderInventory();
+      }
+
       async function loadMapConfiguration() {
-        const response = await fetch("/api/map-config");
+        const response = await fetch(
+          orchardResourceUrl(currentAccess, "map-config"),
+          { headers: accessHeaders(currentAccess), cache: "no-store" },
+        );
+        if ([401, 403, 404].includes(response.status)) {
+          throw new Error("access-denied");
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const configuration = await response.json();
 
         map.jumpTo({ center: configuration.default_center, zoom: 20 });
-        configuration.aerial_overlays.forEach((overlay) => {
+        for (const overlay of configuration.aerial_overlays) {
           const sourceId = `aerial-overlay-${overlay.id}`;
+          const imageResponse = await fetch(
+            orchardResourceUrl(
+              currentAccess,
+              `aerial-overlays/${encodeURIComponent(overlay.id)}/image`,
+            ),
+            { headers: accessHeaders(currentAccess), cache: "no-store" },
+          );
+          if (!imageResponse.ok) throw new Error(`HTTP ${imageResponse.status}`);
+          const objectUrl = URL.createObjectURL(await imageResponse.blob());
           map.addSource(sourceId, {
             type: "image",
-            url: `/api/aerial-overlays/${encodeURIComponent(overlay.id)}/image`,
+            url: objectUrl,
             coordinates: overlay.coordinates,
           });
           map.addLayer(
@@ -1661,11 +1893,18 @@
             },
             "trees",
           );
-        });
+          aerialOverlaySources.push({ sourceId, objectUrl });
+        }
       }
 
       async function fetchOrchardTrees() {
-        const response = await fetch("/api/trees.geojson");
+        const response = await fetch(
+          orchardResourceUrl(currentAccess, "trees.geojson"),
+          { headers: accessHeaders(currentAccess), cache: "no-store" },
+        );
+        if ([401, 403, 404].includes(response.status)) {
+          throw new Error("access-denied");
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const orchard = await response.json();
         orchardFeatures = orchard.features || [];
@@ -1683,6 +1922,122 @@
           console.error("Could not load orchard trees", error);
           status.textContent = "Could not load orchard trees. Try reloading the page.";
           status.hidden = false;
+        }
+      }
+
+      function renderAccessControls() {
+        const orchardIsOpen = ["editable", "read-only"].includes(
+          currentAccess.mode,
+        );
+        const loggedIn = session != null;
+        mapToolbar.hidden = !orchardIsOpen;
+        mapFilterPanel.hidden = !orchardIsOpen;
+        loginToggle.hidden = loggedIn;
+        orchardSelect.hidden = !loggedIn;
+        logout.hidden = !loggedIn;
+        shareOrchard.hidden = !isEditable();
+        shareResult.hidden = true;
+
+        if (currentAccess.mode === "read-only") {
+          accessMode.textContent = "Shared orchard · read only";
+        } else if (isEditable()) {
+          accessMode.textContent = currentAccess.orchard.name;
+        } else if (currentAccess.mode === "login-required") {
+          accessMode.textContent = "Login required";
+        } else {
+          accessMode.textContent = "Public world map";
+        }
+
+        if (loggedIn) {
+          const options = [new Option("Open my orchard…", "")];
+          session.orchards.forEach((orchard) => {
+            options.push(new Option(orchard.name, String(orchard.id)));
+          });
+          orchardSelect.replaceChildren(...options);
+          orchardSelect.value = isEditable()
+            ? String(currentAccess.orchardId)
+            : "";
+        }
+      }
+
+      function showLoginForm() {
+        loginForm.hidden = false;
+        loginToggle.hidden = true;
+        loginError.hidden = true;
+        loginUsername.focus();
+      }
+
+      async function submitLogin(event) {
+        event.preventDefault();
+        loginError.hidden = true;
+        const response = await fetch("/api/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            username: loginUsername.value,
+            password: loginPassword.value,
+          }),
+        });
+        if (!response.ok) {
+          loginError.textContent =
+            response.status === 401
+              ? "Incorrect username or password."
+              : "Login is temporarily unavailable.";
+          loginError.hidden = false;
+          return;
+        }
+        session = await response.json();
+        loginPassword.value = "";
+        loginForm.hidden = true;
+        const requestedOrchardId = currentAccess.orchardId;
+        const orchard =
+          session.orchards.find(({ id }) => id === requestedOrchardId) ||
+          session.orchards[0];
+        if (orchard) {
+          const nextHash = `#/orchards/${encodeURIComponent(orchard.id)}`;
+          if (window.location.hash === nextHash) {
+            await openOrchardFromLocation();
+          } else {
+            window.location.hash = nextHash;
+          }
+        } else {
+          window.location.hash = "";
+          await openOrchardFromLocation();
+        }
+      }
+
+      async function logOut() {
+        await fetch("/api/session", { method: "DELETE" });
+        session = null;
+        if (currentAccess.mode !== "read-only") window.location.hash = "";
+        await openOrchardFromLocation();
+      }
+
+      async function createShareLink() {
+        if (!isEditable()) return;
+        const response = await fetch(
+          orchardResourceUrl(currentAccess, "share"),
+          { method: "POST" },
+        );
+        if (!response.ok) {
+          document.getElementById("map-status").textContent =
+            "Could not create the share link.";
+          document.getElementById("map-status").hidden = false;
+          return;
+        }
+        const { share_token: token } = await response.json();
+        shareLink.value = sharedOrchardUrl(
+          window.location.origin,
+          currentAccess.orchardId,
+          token,
+        );
+        shareResult.hidden = false;
+        shareLink.select();
+        try {
+          await navigator.clipboard.writeText(shareLink.value);
+          copyShareLink.textContent = "Copied";
+        } catch {
+          copyShareLink.textContent = "Copy";
         }
       }
 
@@ -1864,6 +2219,29 @@
         refreshSpeciesFilter();
         renderTreeInventory();
       });
+      loginToggle.addEventListener("click", showLoginForm);
+      loginCancel.addEventListener("click", () => {
+        loginForm.hidden = true;
+        loginError.hidden = true;
+        loginToggle.hidden = session != null;
+      });
+      loginForm.addEventListener("submit", submitLogin);
+      orchardSelect.addEventListener("change", () => {
+        if (!orchardSelect.value) return;
+        window.location.hash = `#/orchards/${encodeURIComponent(orchardSelect.value)}`;
+      });
+      shareOrchard.addEventListener("click", createShareLink);
+      copyShareLink.addEventListener("click", async () => {
+        shareLink.select();
+        try {
+          await navigator.clipboard.writeText(shareLink.value);
+          copyShareLink.textContent = "Copied";
+        } catch {
+          document.execCommand("copy");
+        }
+      });
+      logout.addEventListener("click", logOut);
+      window.addEventListener("hashchange", openOrchardFromLocation);
 
       // Init
       dateMinSlider.max = totalDays;

@@ -1,5 +1,5 @@
 use crate::hexagon::models::{
-    AnnualHarvestWindow, HarvestScheduleOwner, OrchardTree, PlantIdentification,
+    AnnualHarvestWindow, HarvestScheduleOwner, OrchardId, OrchardTree, PlantIdentification,
     PlantIdentityReference, Tree, TreeId,
 };
 
@@ -38,6 +38,12 @@ pub trait OrchardStorage {
         owner: HarvestScheduleOwner,
         harvest_windows: Vec<AnnualHarvestWindow>,
     ) -> Result<bool, OrchardStorageError>;
+    fn replace_orchard_harvest_windows(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+        harvest_windows: Vec<AnnualHarvestWindow>,
+    ) -> Result<bool, OrchardStorageError>;
     fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardStorageError>;
     fn tree_is_alive(&mut self, tree_id: TreeId) -> Result<Option<bool>, OrchardStorageError>;
     fn change_tree_danger(
@@ -51,4 +57,13 @@ pub trait OrchardStorage {
         is_alive: bool,
     ) -> Result<(), OrchardStorageError>;
     fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardStorageError>;
+    fn trees_in_orchard(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<OrchardTree>, OrchardStorageError>;
+    fn tree_belongs_to_orchard(
+        &mut self,
+        tree_id: TreeId,
+        orchard_id: OrchardId,
+    ) -> Result<bool, OrchardStorageError>;
 }

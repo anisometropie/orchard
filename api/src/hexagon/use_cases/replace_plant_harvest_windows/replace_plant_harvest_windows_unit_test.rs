@@ -1,13 +1,43 @@
 use crate::adapters::secondary::InMemoryOrchardStorage;
 use crate::hexagon::models::{
     AnnualDate, AnnualHarvestWindow, BotanicalTaxon, HarvestDataOrigin, HarvestScheduleOwner,
-    HarvestedPart, NamedTaxon, PlantIdentity, PlantIdentityId,
+    HarvestedPart, NamedTaxon, OrchardId, PlantIdentity, PlantIdentityId,
 };
 
 use super::{
-    AnnualHarvestWindowChanged, PlantHarvestWindowsReplaced, PlantHarvestWindowsReplacementError,
+    AnnualHarvestWindowChanged, OrchardHarvestWindowsReplaced, PlantHarvestWindowsReplaced,
+    PlantHarvestWindowsReplacementError, replace_orchard_harvest_windows,
     replace_plant_harvest_windows,
 };
+
+#[test]
+fn replace_windows_for_only_the_current_orchard() {
+    let (mut orchard, observer) =
+        InMemoryOrchardStorage::with_existing_orchard(vec![apple()], vec![]);
+    let owner = HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1));
+
+    assert_eq!(
+        replace_orchard_harvest_windows(
+            OrchardHarvestWindowsReplaced {
+                orchard_id: OrchardId(7),
+                owner,
+                reference_region: "Sapporo, Japan".into(),
+                windows: vec![window(8, 10, 10, 20)],
+            },
+            &mut orchard,
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        observer.orchard_harvest_windows(OrchardId(7), owner).len(),
+        1
+    );
+    assert!(
+        observer
+            .orchard_harvest_windows(OrchardId(8), owner)
+            .is_empty()
+    );
+}
 
 #[test]
 fn replace_multiple_windows_and_clear_them() {

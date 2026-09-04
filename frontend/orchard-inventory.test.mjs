@@ -139,12 +139,12 @@ test("count planted trees by species and detail their cultivars", () => {
 
 test("choose exactly one harvest endpoint from the schedule owner", () => {
   assert.equal(
-    harvestScheduleEndpoint({ plantIdentityId: 10, cultivarId: 101 }),
-    "/api/plant-cultivars/101/harvest-windows",
+    harvestScheduleEndpoint({ plantIdentityId: 10, cultivarId: 101 }, 7),
+    "/api/orchards/7/plant-cultivars/101/harvest-windows",
   );
   assert.equal(
-    harvestScheduleEndpoint({ plantIdentityId: 10, cultivarId: null }),
-    "/api/plant-identities/10/harvest-windows",
+    harvestScheduleEndpoint({ plantIdentityId: 10, cultivarId: null }, 7),
+    "/api/orchards/7/plant-identities/10/harvest-windows",
   );
 });
 

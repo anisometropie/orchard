@@ -2,11 +2,13 @@ use std::sync::{Arc, Mutex};
 
 use crate::hexagon::models::{
     AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, HarvestScheduleOwner,
-    MapConfiguration, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
-    PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId,
+    MapConfiguration, Orchard, OrchardId, OrchardTree, PlantCultivar, PlantCultivarId,
+    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId,
+    User, UserId,
 };
 use crate::hexagon::ports::{
-    MapConfigurationStorage, MapConfigurationStorageError, OrchardStorage, OrchardStorageError,
+    AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
+    OrchardStorage, OrchardStorageError,
 };
 
 /// In-memory transactional orchard storage for use-case and adapter tests.
@@ -20,16 +22,30 @@ pub struct InMemoryOrchardStorage {
     fail_on_commit: bool,
     fail_when_reading_trees: bool,
     map_configuration: Option<MapConfiguration>,
+    map_configuration_orchard_id: Option<OrchardId>,
     aerial_overlay_images: Vec<(AerialOverlayId, AerialOverlayImage)>,
     transaction: Option<InMemoryOrchardTransaction>,
 }
 
 #[derive(Default)]
 struct InMemoryOrchard {
+    users: Vec<InMemoryUser>,
+    sessions: Vec<(String, UserId)>,
+    share_tokens: Vec<(OrchardId, String)>,
+    share_token_sequence: u64,
+    orchards: Vec<(Orchard, UserId)>,
     plant_identities: Vec<PlantIdentity>,
     plant_cultivars: Vec<StoredCultivar>,
     harvest_schedules: Vec<(HarvestScheduleOwner, Vec<AnnualHarvestWindow>)>,
+    orchard_harvest_schedules: Vec<(OrchardId, HarvestScheduleOwner, Vec<AnnualHarvestWindow>)>,
     trees: Vec<Tree>,
+    tree_orchard_ids: Vec<Option<OrchardId>>,
+}
+
+struct InMemoryUser {
+    id: u64,
+    username: String,
+    password: String,
 }
 
 #[derive(Clone)]
@@ -45,14 +61,19 @@ struct InMemoryOrchardTransaction {
     staged_plant_cultivars: Vec<StoredCultivar>,
     staged_trees: Vec<Tree>,
     staged_harvest_schedule_replacements: Vec<(HarvestScheduleOwner, Vec<AnnualHarvestWindow>)>,
+    staged_orchard_harvest_schedule_replacements:
+        Vec<(OrchardId, HarvestScheduleOwner, Vec<AnnualHarvestWindow>)>,
     staged_tree_danger_changes: Vec<(TreeId, bool)>,
     staged_tree_life_status_changes: Vec<(TreeId, bool)>,
 }
 
 #[derive(Default)]
 struct InMemoryOrchardConfiguration {
+    users: Vec<InMemoryUser>,
+    orchards: Vec<(Orchard, UserId)>,
     plant_identities: Vec<PlantIdentity>,
     trees: Vec<Tree>,
+    tree_orchard_ids: Vec<Option<OrchardId>>,
     failing_legacy_feature_id: Option<u32>,
     fail_when_saving_any_tree: bool,
     failing_plant_identity_genus: Option<String>,
@@ -61,12 +82,51 @@ struct InMemoryOrchardConfiguration {
     fail_on_commit: bool,
     fail_when_reading_trees: bool,
     map_configuration: Option<MapConfiguration>,
+    map_configuration_orchard_id: Option<OrchardId>,
     aerial_overlay_images: Vec<(AerialOverlayId, AerialOverlayImage)>,
 }
 
 impl InMemoryOrchardStorage {
     pub fn new() -> (Self, InMemoryOrchardObserver) {
         Self::with_configuration(InMemoryOrchardConfiguration::default())
+    }
+
+    pub fn with_user_credentials(
+        username: &str,
+        password: &str,
+    ) -> (Self, InMemoryOrchardObserver) {
+        Self::with_configuration(InMemoryOrchardConfiguration {
+            users: vec![InMemoryUser {
+                id: 1,
+                username: username.into(),
+                password: password.into(),
+            }],
+            ..Default::default()
+        })
+    }
+
+    pub fn with_user_owned_orchard(
+        username: &str,
+        password: &str,
+        orchard: Orchard,
+        plant_identities: Vec<PlantIdentity>,
+        trees: Vec<Tree>,
+    ) -> (Self, InMemoryOrchardObserver) {
+        let orchard_id = orchard.id;
+        let tree_count = trees.len();
+        Self::with_configuration(InMemoryOrchardConfiguration {
+            users: vec![InMemoryUser {
+                id: 1,
+                username: username.into(),
+                password: password.into(),
+            }],
+            orchards: vec![(orchard, UserId(1))],
+            plant_identities,
+            trees,
+            tree_orchard_ids: vec![Some(orchard_id); tree_count],
+            map_configuration_orchard_id: Some(orchard_id),
+            ..Default::default()
+        })
     }
 
     pub fn failing_when_saving_tree_with_legacy_feature_id(
@@ -159,14 +219,50 @@ impl InMemoryOrchardStorage {
         .0
     }
 
+    pub fn with_user_owned_orchard_and_map(
+        username: &str,
+        password: &str,
+        orchard: Orchard,
+        plant_identities: Vec<PlantIdentity>,
+        trees: Vec<Tree>,
+        map_configuration: MapConfiguration,
+        aerial_overlay_images: Vec<(AerialOverlayId, AerialOverlayImage)>,
+    ) -> Self {
+        let orchard_id = orchard.id;
+        let tree_count = trees.len();
+        Self::with_configuration(InMemoryOrchardConfiguration {
+            users: vec![InMemoryUser {
+                id: 1,
+                username: username.into(),
+                password: password.into(),
+            }],
+            orchards: vec![(orchard, UserId(1))],
+            plant_identities,
+            trees,
+            tree_orchard_ids: vec![Some(orchard_id); tree_count],
+            map_configuration: Some(map_configuration),
+            map_configuration_orchard_id: Some(orchard_id),
+            aerial_overlay_images,
+            ..Default::default()
+        })
+        .0
+    }
+
     fn with_configuration(
         configuration: InMemoryOrchardConfiguration,
     ) -> (Self, InMemoryOrchardObserver) {
         let orchard = Arc::new(Mutex::new(InMemoryOrchard {
+            users: configuration.users,
+            sessions: Vec::new(),
+            share_tokens: Vec::new(),
+            share_token_sequence: 0,
+            orchards: configuration.orchards,
             plant_identities: configuration.plant_identities,
             plant_cultivars: Vec::new(),
             harvest_schedules: Vec::new(),
+            orchard_harvest_schedules: Vec::new(),
             trees: configuration.trees,
+            tree_orchard_ids: configuration.tree_orchard_ids,
         }));
         (
             Self {
@@ -180,11 +276,155 @@ impl InMemoryOrchardStorage {
                 fail_on_commit: configuration.fail_on_commit,
                 fail_when_reading_trees: configuration.fail_when_reading_trees,
                 map_configuration: configuration.map_configuration,
+                map_configuration_orchard_id: configuration.map_configuration_orchard_id,
                 aerial_overlay_images: configuration.aerial_overlay_images,
                 transaction: None,
             },
             InMemoryOrchardObserver { orchard },
         )
+    }
+}
+
+impl AccessControl for InMemoryOrchardStorage {
+    fn verify_credentials(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<Option<User>, AccessControlError> {
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .find(|user| user.username == username && user.password == password)
+            .map(|user| User {
+                id: UserId(user.id),
+                username: user.username.clone(),
+            }))
+    }
+
+    fn create_session(&mut self, user_id: UserId) -> Result<String, AccessControlError> {
+        let mut orchard = self.orchard.lock().unwrap();
+        let token = format!(
+            "in-memory-session-{}-{}",
+            user_id.0,
+            orchard.sessions.len() + 1
+        );
+        orchard.sessions.push((token.clone(), user_id));
+        Ok(token)
+    }
+
+    fn orchards_owned_by(&mut self, user_id: UserId) -> Result<Vec<Orchard>, AccessControlError> {
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .orchards
+            .iter()
+            .filter(|(_, owner_user_id)| *owner_user_id == user_id)
+            .map(|(orchard, _)| orchard.clone())
+            .collect())
+    }
+
+    fn user_for_session(&mut self, token: &str) -> Result<Option<User>, AccessControlError> {
+        let orchard = self.orchard.lock().unwrap();
+        let user_id = orchard
+            .sessions
+            .iter()
+            .find(|(session_token, _)| session_token == token)
+            .map(|(_, user_id)| *user_id);
+        Ok(user_id.and_then(|user_id| {
+            orchard
+                .users
+                .iter()
+                .find(|user| user.id == user_id.0)
+                .map(|user| User {
+                    id: user_id,
+                    username: user.username.clone(),
+                })
+        }))
+    }
+
+    fn user_owns_orchard(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+    ) -> Result<bool, AccessControlError> {
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .orchards
+            .iter()
+            .any(|(orchard, owner_user_id)| orchard.id == orchard_id && *owner_user_id == user_id))
+    }
+
+    fn replace_share_token(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+    ) -> Result<String, AccessControlError> {
+        let mut orchard = self.orchard.lock().unwrap();
+        if !orchard.orchards.iter().any(|(candidate, owner_user_id)| {
+            candidate.id == orchard_id && *owner_user_id == user_id
+        }) {
+            return Err(AccessControlError::OrchardOwnershipCouldNotBeRead);
+        }
+        orchard.share_token_sequence += 1;
+        let token = format!(
+            "in-memory-share-{}-{}",
+            orchard_id.0, orchard.share_token_sequence
+        );
+        orchard
+            .share_tokens
+            .retain(|(shared_orchard_id, _)| *shared_orchard_id != orchard_id);
+        orchard.share_tokens.push((orchard_id, token.clone()));
+        Ok(token)
+    }
+
+    fn orchard_for_share_token(
+        &mut self,
+        token: &str,
+    ) -> Result<Option<OrchardId>, AccessControlError> {
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .share_tokens
+            .iter()
+            .find(|(_, share_token)| share_token == token)
+            .map(|(orchard_id, _)| *orchard_id))
+    }
+
+    fn delete_session(&mut self, token: &str) -> Result<(), AccessControlError> {
+        self.orchard
+            .lock()
+            .unwrap()
+            .sessions
+            .retain(|(session_token, _)| session_token != token);
+        Ok(())
+    }
+
+    fn set_user_password(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<bool, AccessControlError> {
+        let mut orchard = self.orchard.lock().unwrap();
+        let Some(user_index) = orchard
+            .users
+            .iter()
+            .position(|user| user.username == username)
+        else {
+            return Ok(false);
+        };
+        let user_id = UserId(orchard.users[user_index].id);
+        orchard.users[user_index].password = password.into();
+        orchard
+            .sessions
+            .retain(|(_, session_user_id)| *session_user_id != user_id);
+        Ok(true)
     }
 }
 
@@ -204,6 +444,43 @@ impl MapConfigurationStorage for InMemoryOrchardStorage {
             .iter()
             .find(|(id, _)| *id == overlay_id)
             .map(|(_, image)| image.clone()))
+    }
+
+    fn map_configuration_for_orchard(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Option<MapConfiguration>, MapConfigurationStorageError> {
+        let orchard = self
+            .orchard
+            .lock()
+            .unwrap()
+            .orchards
+            .iter()
+            .find(|(orchard, _)| orchard.id == orchard_id)
+            .map(|(orchard, _)| orchard.clone());
+        Ok(orchard.map(|orchard| MapConfiguration {
+            default_center: crate::hexagon::models::GeoPoint {
+                longitude: orchard.longitude,
+                latitude: orchard.latitude,
+            },
+            aerial_overlays: self
+                .map_configuration
+                .as_ref()
+                .filter(|_| self.map_configuration_orchard_id == Some(orchard_id))
+                .map(|configuration| configuration.aerial_overlays.clone())
+                .unwrap_or_default(),
+        }))
+    }
+
+    fn aerial_overlay_image_for_orchard(
+        &mut self,
+        orchard_id: OrchardId,
+        overlay_id: AerialOverlayId,
+    ) -> Result<Option<AerialOverlayImage>, MapConfigurationStorageError> {
+        if self.map_configuration_orchard_id != Some(orchard_id) {
+            return Ok(None);
+        }
+        self.aerial_overlay_image(overlay_id)
     }
 }
 
@@ -247,6 +524,22 @@ impl OrchardStorage for InMemoryOrchardStorage {
                         committed_orchard
                             .harvest_schedules
                             .push((owner, harvest_windows));
+                    }
+                }
+                for (orchard_id, owner, harvest_windows) in
+                    transaction.staged_orchard_harvest_schedule_replacements
+                {
+                    committed_orchard.orchard_harvest_schedules.retain(
+                        |(stored_orchard_id, stored_owner, _)| {
+                            *stored_orchard_id != orchard_id || *stored_owner != owner
+                        },
+                    );
+                    if !harvest_windows.is_empty() {
+                        committed_orchard.orchard_harvest_schedules.push((
+                            orchard_id,
+                            owner,
+                            harvest_windows,
+                        ));
                     }
                 }
                 for (tree_id, is_in_danger) in transaction.staged_tree_danger_changes {
@@ -433,6 +726,33 @@ impl OrchardStorage for InMemoryOrchardStorage {
         Ok(true)
     }
 
+    fn replace_orchard_harvest_windows(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+        harvest_windows: Vec<AnnualHarvestWindow>,
+    ) -> Result<bool, OrchardStorageError> {
+        let orchard = self.orchard.lock().unwrap();
+        let owner_exists = match owner {
+            HarvestScheduleOwner::PlantIdentity(id) => {
+                id.0 > 0 && id.0 <= orchard.plant_identities.len() as u64
+            }
+            HarvestScheduleOwner::PlantCultivar(id) => {
+                id.0 > 0 && id.0 <= orchard.plant_cultivars.len() as u64
+            }
+        };
+        drop(orchard);
+        if !owner_exists {
+            return Ok(false);
+        }
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_orchard_harvest_schedule_replacements
+            .push((orchard_id, owner, harvest_windows));
+        Ok(true)
+    }
+
     fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardStorageError> {
         if self.fail_when_saving_any_tree
             || tree
@@ -591,6 +911,57 @@ impl OrchardStorage for InMemoryOrchardStorage {
             })
             .collect()
     }
+
+    fn trees_in_orchard(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<OrchardTree>, OrchardStorageError> {
+        let trees = self.trees()?;
+        let orchard = self.orchard.lock().unwrap();
+        let mut trees = trees
+            .into_iter()
+            .filter(|tree| {
+                tree_index(tree.id)
+                    .and_then(|index| orchard.tree_orchard_ids.get(index))
+                    .is_some_and(|stored_orchard_id| *stored_orchard_id == Some(orchard_id))
+            })
+            .collect::<Vec<_>>();
+        for tree in &mut trees {
+            let owner = tree.tree.cultivar_id.map_or(
+                HarvestScheduleOwner::PlantIdentity(tree.tree.plant_identity_id),
+                HarvestScheduleOwner::PlantCultivar,
+            );
+            if let Some(windows) = orchard
+                .orchard_harvest_schedules
+                .iter()
+                .find(|(stored_orchard_id, stored_owner, _)| {
+                    *stored_orchard_id == orchard_id && *stored_owner == owner
+                })
+                .map(|(_, _, windows)| windows.clone())
+            {
+                tree.harvest_windows = windows;
+            }
+        }
+        Ok(trees)
+    }
+
+    fn tree_belongs_to_orchard(
+        &mut self,
+        tree_id: TreeId,
+        orchard_id: OrchardId,
+    ) -> Result<bool, OrchardStorageError> {
+        Ok(tree_index(tree_id)
+            .and_then(|index| {
+                self.orchard
+                    .lock()
+                    .unwrap()
+                    .tree_orchard_ids
+                    .get(index)
+                    .copied()
+                    .flatten()
+            })
+            .is_some_and(|stored_orchard_id| stored_orchard_id == orchard_id))
+    }
 }
 
 fn has_legacy_feature_id(orchard: &InMemoryOrchard, legacy_feature_id: u32) -> bool {
@@ -652,6 +1023,23 @@ impl InMemoryOrchardObserver {
             .iter()
             .find(|(existing_owner, _)| *existing_owner == owner)
             .map(|(_, windows)| windows.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn orchard_harvest_windows(
+        &self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+    ) -> Vec<AnnualHarvestWindow> {
+        self.orchard
+            .lock()
+            .unwrap()
+            .orchard_harvest_schedules
+            .iter()
+            .find(|(stored_orchard_id, stored_owner, _)| {
+                *stored_orchard_id == orchard_id && *stored_owner == owner
+            })
+            .map(|(_, _, windows)| windows.clone())
             .unwrap_or_default()
     }
 }

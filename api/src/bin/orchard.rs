@@ -10,6 +10,9 @@ use orchard_api::adapters::primary::import_legacy_geojson_file;
 use orchard_api::adapters::primary::orchard_cli::{OrchardCommand, parse_command};
 use orchard_api::adapters::secondary::{PostgresMigrator, PostgresOrchardStorage};
 use orchard_api::hexagon::use_cases::import_legacy_orchard::LegacyOrchardImportError;
+use orchard_api::hexagon::use_cases::set_user_password::{
+    UserPasswordChangeError, UserPasswordChangeRequested, set_user_password,
+};
 
 fn main() -> ExitCode {
     let command = match parse_command(env::args_os()) {
@@ -37,6 +40,50 @@ fn main() -> ExitCode {
             import_orchard(&database_url, &geojson_path)
         }
         OrchardCommand::RunServer { address } => runserver(database_url, address),
+        OrchardCommand::SetUserPassword { username } => {
+            set_password_from_environment(&database_url, username)
+        }
+    }
+}
+
+fn set_password_from_environment(database_url: &str, username: String) -> ExitCode {
+    let password = match env::var("ORCHARD_USER_PASSWORD") {
+        Ok(password) => password,
+        Err(_) => {
+            eprintln!("Password change failed: ORCHARD_USER_PASSWORD is not configured.");
+            return ExitCode::from(2);
+        }
+    };
+    let mut access_control = match PostgresOrchardStorage::connect(database_url) {
+        Ok(storage) => storage,
+        Err(_) => {
+            eprintln!("Password change failed: could not connect to the orchard database.");
+            return ExitCode::from(1);
+        }
+    };
+    match set_user_password(
+        UserPasswordChangeRequested {
+            username: username.clone(),
+            new_password: password,
+        },
+        &mut access_control,
+    ) {
+        Ok(()) => {
+            println!("Password changed for {username}.");
+            ExitCode::SUCCESS
+        }
+        Err(UserPasswordChangeError::PasswordTooShort) => {
+            eprintln!("Password change failed: password must contain at least 12 characters.");
+            ExitCode::from(2)
+        }
+        Err(UserPasswordChangeError::UserNotFound) => {
+            eprintln!("Password change failed: user {username} was not found.");
+            ExitCode::from(1)
+        }
+        Err(UserPasswordChangeError::PasswordCouldNotBeChanged) => {
+            eprintln!("Password change failed: the database could not be updated.");
+            ExitCode::from(1)
+        }
     }
 }
 

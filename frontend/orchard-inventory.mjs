@@ -102,12 +102,17 @@ export function summarizeSpecies(features) {
     .sort((left, right) => compareText(left.taxonName, right.taxonName));
 }
 
-export function harvestScheduleEndpoint({ plantIdentityId, cultivarId }) {
+export function harvestScheduleEndpoint(
+  { plantIdentityId, cultivarId },
+  orchardId,
+) {
+  if (orchardId == null) throw new Error("No orchard is open.");
+  const orchardPrefix = `/api/orchards/${encodeURIComponent(orchardId)}`;
   if (cultivarId != null) {
-    return `/api/plant-cultivars/${encodeURIComponent(cultivarId)}/harvest-windows`;
+    return `${orchardPrefix}/plant-cultivars/${encodeURIComponent(cultivarId)}/harvest-windows`;
   }
   if (plantIdentityId != null) {
-    return `/api/plant-identities/${encodeURIComponent(plantIdentityId)}/harvest-windows`;
+    return `${orchardPrefix}/plant-identities/${encodeURIComponent(plantIdentityId)}/harvest-windows`;
   }
   throw new Error("This harvest schedule has no editable ID.");
 }

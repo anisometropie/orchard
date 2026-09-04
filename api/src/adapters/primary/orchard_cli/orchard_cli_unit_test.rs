@@ -64,3 +64,13 @@ fn require_filename() {
         ErrorKind::MissingRequiredArgument
     );
 }
+
+#[test]
+fn set_user_password_without_putting_the_password_in_process_arguments() {
+    assert_eq!(
+        parse_command(["orchard", "set_user_password", "--username", "alice"]).unwrap(),
+        OrchardCommand::SetUserPassword {
+            username: "alice".into(),
+        }
+    );
+}

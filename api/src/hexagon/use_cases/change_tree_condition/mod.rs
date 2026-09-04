@@ -1,7 +1,14 @@
-use crate::hexagon::models::TreeId;
+use crate::hexagon::models::{OrchardId, TreeId};
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
 pub struct TreeConditionChanged {
+    pub tree_id: TreeId,
+    pub is_alive: Option<bool>,
+    pub is_in_danger: Option<bool>,
+}
+
+pub struct OrchardTreeConditionChanged {
+    pub orchard_id: OrchardId,
     pub tree_id: TreeId,
     pub is_alive: Option<bool>,
     pub is_in_danger: Option<bool>,
@@ -62,6 +69,26 @@ pub fn change_tree_condition(
 
         Ok(())
     })
+}
+
+pub fn change_orchard_tree_condition(
+    event: OrchardTreeConditionChanged,
+    orchard_storage: &mut impl OrchardStorage,
+) -> Result<(), TreeConditionChangeError> {
+    let belongs_to_orchard = orchard_storage
+        .tree_belongs_to_orchard(event.tree_id, event.orchard_id)
+        .map_err(|_| TreeConditionChangeError::TreeCouldNotBeChanged)?;
+    if !belongs_to_orchard {
+        return Err(TreeConditionChangeError::TreeNotFound);
+    }
+    change_tree_condition(
+        TreeConditionChanged {
+            tree_id: event.tree_id,
+            is_alive: event.is_alive,
+            is_in_danger: event.is_in_danger,
+        },
+        orchard_storage,
+    )
 }
 
 impl From<OrchardStorageError> for TreeConditionChangeError {

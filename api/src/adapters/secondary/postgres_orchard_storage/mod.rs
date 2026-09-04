@@ -1,19 +1,239 @@
-use postgres::{Client, NoTls};
+use argon2::{
+    Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
+    password_hash::{SaltString, rand_core::OsRng as PasswordOsRng},
+};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use postgres::{Client, NoTls, Row};
+use rand::{RngCore, rngs::OsRng};
+use sha2::{Digest, Sha256};
 
 use crate::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow, GeoPoint,
     HarvestDataOrigin, HarvestScheduleOwner, HarvestedPart, IdentificationStatus,
-    LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, OrchardTree, PlantCultivar,
-    PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
-    ReproductiveRole, Tree, TreeId,
+    LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, Orchard, OrchardId, OrchardTree,
+    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
+    PlantIdentityReference, ReproductiveRole, Tree, TreeId, User, UserId,
 };
 use crate::hexagon::ports::{
-    MapConfigurationStorage, MapConfigurationStorageError, OrchardStorage, OrchardStorageError,
+    AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
+    OrchardStorage, OrchardStorageError,
 };
 
 /// PostgreSQL/PostGIS implementation of orchard storage.
 pub struct PostgresOrchardStorage {
     client: Client,
+}
+
+impl AccessControl for PostgresOrchardStorage {
+    fn verify_credentials(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<Option<User>, AccessControlError> {
+        let user = self
+            .client
+            .query_opt(
+                "SELECT id, username, password_hash FROM users WHERE username = $1",
+                &[&username],
+            )
+            .map_err(|_| AccessControlError::CredentialsCouldNotBeChecked)?;
+        let Some(user) = user else {
+            return Ok(None);
+        };
+        let Some(password_hash) = user.get::<_, Option<String>>(2) else {
+            return Ok(None);
+        };
+        let parsed_hash = PasswordHash::new(&password_hash)
+            .map_err(|_| AccessControlError::CredentialsCouldNotBeChecked)?;
+        if Argon2::default()
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .is_err()
+        {
+            return Ok(None);
+        }
+        Ok(Some(User {
+            id: UserId(
+                u64::try_from(user.get::<_, i64>(0))
+                    .map_err(|_| AccessControlError::CredentialsCouldNotBeChecked)?,
+            ),
+            username: user.get(1),
+        }))
+    }
+
+    fn create_session(&mut self, user_id: UserId) -> Result<String, AccessControlError> {
+        let user_id =
+            i64::try_from(user_id.0).map_err(|_| AccessControlError::SessionCouldNotBeCreated)?;
+        let token = random_access_token();
+        let token_hash = access_token_hash(&token);
+        self.client
+            .execute(
+                "INSERT INTO user_sessions (token_hash, user_id, expires_at)
+                 VALUES ($1, $2, now() + interval '30 days')",
+                &[&token_hash, &user_id],
+            )
+            .map_err(|_| AccessControlError::SessionCouldNotBeCreated)?;
+        Ok(token)
+    }
+
+    fn orchards_owned_by(&mut self, user_id: UserId) -> Result<Vec<Orchard>, AccessControlError> {
+        let user_id =
+            i64::try_from(user_id.0).map_err(|_| AccessControlError::OrchardsCouldNotBeRead)?;
+        self.client
+            .query(
+                "SELECT id, name, ST_X(center), ST_Y(center), reference_region
+                 FROM orchards
+                 WHERE owner_user_id = $1
+                 ORDER BY id",
+                &[&user_id],
+            )
+            .map_err(|_| AccessControlError::OrchardsCouldNotBeRead)?
+            .into_iter()
+            .map(|row| {
+                orchard_from_row(&row).map_err(|_| AccessControlError::OrchardsCouldNotBeRead)
+            })
+            .collect()
+    }
+
+    fn user_for_session(&mut self, token: &str) -> Result<Option<User>, AccessControlError> {
+        let token_hash = access_token_hash(token);
+        self.client
+            .query_opt(
+                "SELECT users.id, users.username
+                 FROM user_sessions
+                 JOIN users ON users.id = user_sessions.user_id
+                 WHERE user_sessions.token_hash = $1
+                   AND user_sessions.expires_at > now()",
+                &[&token_hash],
+            )
+            .map_err(|_| AccessControlError::SessionCouldNotBeRead)?
+            .map(|row| {
+                Ok(User {
+                    id: UserId(
+                        u64::try_from(row.get::<_, i64>(0))
+                            .map_err(|_| AccessControlError::SessionCouldNotBeRead)?,
+                    ),
+                    username: row.get(1),
+                })
+            })
+            .transpose()
+    }
+
+    fn user_owns_orchard(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+    ) -> Result<bool, AccessControlError> {
+        let user_id = i64::try_from(user_id.0)
+            .map_err(|_| AccessControlError::OrchardOwnershipCouldNotBeRead)?;
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| AccessControlError::OrchardOwnershipCouldNotBeRead)?;
+        self.client
+            .query_one(
+                "SELECT EXISTS (
+                    SELECT 1 FROM orchards WHERE id = $1 AND owner_user_id = $2
+                 )",
+                &[&orchard_id, &user_id],
+            )
+            .map(|row| row.get(0))
+            .map_err(|_| AccessControlError::OrchardOwnershipCouldNotBeRead)
+    }
+
+    fn replace_share_token(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+    ) -> Result<String, AccessControlError> {
+        let user_id = i64::try_from(user_id.0)
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeCreated)?;
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeCreated)?;
+        let token = random_access_token();
+        let token_hash = access_token_hash(&token);
+        let changed = self
+            .client
+            .execute(
+                "UPDATE orchards
+                 SET share_token_hash = $3
+                 WHERE id = $1 AND owner_user_id = $2",
+                &[&orchard_id, &user_id, &token_hash],
+            )
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeCreated)?;
+        if changed != 1 {
+            return Err(AccessControlError::ShareTokenCouldNotBeCreated);
+        }
+        Ok(token)
+    }
+
+    fn orchard_for_share_token(
+        &mut self,
+        token: &str,
+    ) -> Result<Option<OrchardId>, AccessControlError> {
+        let token_hash = access_token_hash(token);
+        self.client
+            .query_opt(
+                "SELECT id FROM orchards WHERE share_token_hash = $1",
+                &[&token_hash],
+            )
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeRead)?
+            .map(|row| {
+                u64::try_from(row.get::<_, i64>(0))
+                    .map(OrchardId)
+                    .map_err(|_| AccessControlError::ShareTokenCouldNotBeRead)
+            })
+            .transpose()
+    }
+
+    fn delete_session(&mut self, token: &str) -> Result<(), AccessControlError> {
+        let token_hash = access_token_hash(token);
+        self.client
+            .execute(
+                "DELETE FROM user_sessions WHERE token_hash = $1",
+                &[&token_hash],
+            )
+            .map(|_| ())
+            .map_err(|_| AccessControlError::SessionCouldNotBeDeleted)
+    }
+
+    fn set_user_password(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<bool, AccessControlError> {
+        let password_hash = Argon2::default()
+            .hash_password(
+                password.as_bytes(),
+                &SaltString::generate(&mut PasswordOsRng),
+            )
+            .map_err(|_| AccessControlError::PasswordCouldNotBeChanged)?
+            .to_string();
+        self.client
+            .query_one(
+                "WITH changed_user AS (
+                    UPDATE users
+                    SET password_hash = $2
+                    WHERE username = $1
+                    RETURNING id
+                 ), revoked_sessions AS (
+                    DELETE FROM user_sessions
+                    USING changed_user
+                    WHERE user_sessions.user_id = changed_user.id
+                 )
+                 SELECT EXISTS (SELECT 1 FROM changed_user)",
+                &[&username, &password_hash],
+            )
+            .map(|row| row.get(0))
+            .map_err(|_| AccessControlError::PasswordCouldNotBeChanged)
+    }
+}
+
+fn random_access_token() -> String {
+    let mut bytes = [0_u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn access_token_hash(token: &str) -> Vec<u8> {
+    Sha256::digest(token.as_bytes()).to_vec()
 }
 
 impl PostgresOrchardStorage {
@@ -138,6 +358,83 @@ impl OrchardStorage for PostgresOrchardStorage {
         Ok(true)
     }
 
+    fn replace_orchard_harvest_windows(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+        harvest_windows: Vec<AnnualHarvestWindow>,
+    ) -> Result<bool, OrchardStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+        let (plant_identity_id, cultivar_id) = match owner {
+            HarvestScheduleOwner::PlantIdentity(id) => {
+                let id = i64::try_from(id.0)
+                    .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+                let exists = self
+                    .client
+                    .query_opt("SELECT id FROM plant_identities WHERE id = $1", &[&id])
+                    .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?
+                    .is_some();
+                if !exists {
+                    return Ok(false);
+                }
+                (id, None)
+            }
+            HarvestScheduleOwner::PlantCultivar(id) => {
+                let id = i64::try_from(id.0)
+                    .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+                let identity = self
+                    .client
+                    .query_opt(
+                        "SELECT plant_identity_id FROM plant_cultivars WHERE id = $1",
+                        &[&id],
+                    )
+                    .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+                let Some(identity) = identity else {
+                    return Ok(false);
+                };
+                (identity.get::<_, i64>(0), Some(id))
+            }
+        };
+
+        self.client
+            .execute(
+                "DELETE FROM plant_harvest_windows
+                 WHERE orchard_id = $1
+                   AND plant_identity_id = $2
+                   AND cultivar_id IS NOT DISTINCT FROM $3",
+                &[&orchard_id, &plant_identity_id, &cultivar_id],
+            )
+            .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+        for window in harvest_windows {
+            self.client
+                .execute(
+                    "INSERT INTO plant_harvest_windows (
+                        orchard_id, plant_identity_id, cultivar_id,
+                        start_month, start_day, end_month, end_day,
+                        reference_region, harvested_part, data_origin, source_url
+                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                               $9::text::harvested_part,
+                               $10::text::harvest_data_origin, $11)",
+                    &[
+                        &orchard_id,
+                        &plant_identity_id,
+                        &cultivar_id,
+                        &i16::from(window.start.month),
+                        &i16::from(window.start.day),
+                        &i16::from(window.end.month),
+                        &i16::from(window.end.day),
+                        &window.reference_region,
+                        &window.harvested_part.as_str(),
+                        &window.data_origin.as_str(),
+                        &window.source_url,
+                    ],
+                )
+                .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
+        }
+        Ok(true)
+    }
+
     fn save_tree(&mut self, tree: Tree) -> Result<(), OrchardStorageError> {
         save_tree(&mut self.client, tree).map_err(|_| OrchardStorageError::TreeCouldNotBeSaved)
     }
@@ -223,6 +520,73 @@ impl OrchardStorage for PostgresOrchardStorage {
             .into_iter()
             .map(|row| orchard_tree_from_row(&row))
             .collect()
+    }
+
+    fn trees_in_orchard(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<OrchardTree>, OrchardStorageError> {
+        let orchard_id =
+            i64::try_from(orchard_id.0).map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?;
+        self.client
+            .query(
+                "SELECT
+                    t.legacy_feature_id, t.plant_identity_id,
+                    ST_X(t.location), ST_Y(t.location),
+                    t.legacy_name, t.legacy_latin_name, t.legacy_source_url,
+                    t.legacy_identification_name, t.legacy_identification_latin_name,
+                    t.planted_on::text, t.row_name, t.roles, t.is_alive,
+                    t.reproductive_role, t.adult_height_meters, t.adult_width_meters,
+                    t.is_in_danger, t.cultivar_id, t.identification_status,
+                    p.common_name, p.botanical_taxon::text, c.cultivar, c.trade_name,
+                    t.id, COALESCE(harvest.windows, '[]')
+                 FROM trees t
+                 JOIN plant_identities p ON p.id = t.plant_identity_id
+                 LEFT JOIN plant_cultivars c ON c.id = t.cultivar_id
+                 LEFT JOIN LATERAL (
+                    SELECT json_agg(
+                        json_build_object(
+                            'start_month', w.start_month,
+                            'start_day', w.start_day,
+                            'end_month', w.end_month,
+                            'end_day', w.end_day,
+                            'reference_region', w.reference_region,
+                            'harvested_part', w.harvested_part,
+                            'data_origin', w.data_origin,
+                            'source_url', w.source_url
+                        ) ORDER BY w.start_month, w.start_day, w.end_month, w.end_day, w.id
+                    )::text AS windows
+                    FROM plant_harvest_windows w
+                    WHERE w.plant_identity_id = t.plant_identity_id
+                      AND w.cultivar_id IS NOT DISTINCT FROM t.cultivar_id
+                      AND w.orchard_id IS NOT DISTINCT FROM t.orchard_id
+                 ) harvest ON TRUE
+                 WHERE t.orchard_id = $1
+                 ORDER BY t.id",
+                &[&orchard_id],
+            )
+            .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?
+            .into_iter()
+            .map(|row| orchard_tree_from_row(&row))
+            .collect()
+    }
+
+    fn tree_belongs_to_orchard(
+        &mut self,
+        tree_id: TreeId,
+        orchard_id: OrchardId,
+    ) -> Result<bool, OrchardStorageError> {
+        let tree_id =
+            i64::try_from(tree_id.0).map_err(|_| OrchardStorageError::TreeCouldNotBeRead)?;
+        let orchard_id =
+            i64::try_from(orchard_id.0).map_err(|_| OrchardStorageError::TreeCouldNotBeRead)?;
+        self.client
+            .query_opt(
+                "SELECT 1 FROM trees WHERE id = $1 AND orchard_id = $2",
+                &[&tree_id, &orchard_id],
+            )
+            .map(|row| row.is_some())
+            .map_err(|_| OrchardStorageError::TreeCouldNotBeRead)
     }
 }
 
@@ -317,6 +681,112 @@ impl MapConfigurationStorage for PostgresOrchardStorage {
             })
             .map_err(|_| MapConfigurationStorageError::AerialOverlayImageCouldNotBeRead)
     }
+
+    fn map_configuration_for_orchard(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Option<MapConfiguration>, MapConfigurationStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| MapConfigurationStorageError::ConfigurationCouldNotBeRead)?;
+        let orchard = self
+            .client
+            .query_opt(
+                "SELECT ST_X(center), ST_Y(center) FROM orchards WHERE id = $1",
+                &[&orchard_id],
+            )
+            .map_err(|_| MapConfigurationStorageError::ConfigurationCouldNotBeRead)?;
+        let Some(orchard) = orchard else {
+            return Ok(None);
+        };
+        let aerial_overlays =
+            self.client
+                .query(
+                    "SELECT
+                    id, name,
+                    ST_X(top_left), ST_Y(top_left),
+                    ST_X(top_right), ST_Y(top_right),
+                    ST_X(bottom_right), ST_Y(bottom_right),
+                    ST_X(bottom_left), ST_Y(bottom_left)
+                 FROM aerial_overlays
+                 WHERE orchard_id = $1
+                 ORDER BY sort_order, id",
+                    &[&orchard_id],
+                )
+                .map_err(|_| MapConfigurationStorageError::ConfigurationCouldNotBeRead)?
+                .into_iter()
+                .map(|row| {
+                    Ok(AerialOverlay {
+                        id: AerialOverlayId(u64::try_from(row.get::<_, i64>(0)).map_err(|_| {
+                            MapConfigurationStorageError::ConfigurationCouldNotBeRead
+                        })?),
+                        name: row.get(1),
+                        corners: [
+                            GeoPoint {
+                                longitude: row.get(2),
+                                latitude: row.get(3),
+                            },
+                            GeoPoint {
+                                longitude: row.get(4),
+                                latitude: row.get(5),
+                            },
+                            GeoPoint {
+                                longitude: row.get(6),
+                                latitude: row.get(7),
+                            },
+                            GeoPoint {
+                                longitude: row.get(8),
+                                latitude: row.get(9),
+                            },
+                        ],
+                    })
+                })
+                .collect::<Result<Vec<_>, MapConfigurationStorageError>>()?;
+        Ok(Some(MapConfiguration {
+            default_center: GeoPoint {
+                longitude: orchard.get(0),
+                latitude: orchard.get(1),
+            },
+            aerial_overlays,
+        }))
+    }
+
+    fn aerial_overlay_image_for_orchard(
+        &mut self,
+        orchard_id: OrchardId,
+        overlay_id: AerialOverlayId,
+    ) -> Result<Option<AerialOverlayImage>, MapConfigurationStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| MapConfigurationStorageError::AerialOverlayImageCouldNotBeRead)?;
+        let overlay_id = i64::try_from(overlay_id.0)
+            .map_err(|_| MapConfigurationStorageError::AerialOverlayImageCouldNotBeRead)?;
+        self.client
+            .query_opt(
+                "SELECT media_type, image_bytes
+                 FROM aerial_overlays
+                 WHERE id = $1 AND orchard_id = $2",
+                &[&overlay_id, &orchard_id],
+            )
+            .map(|row| {
+                row.map(|row| AerialOverlayImage {
+                    media_type: row.get(0),
+                    bytes: row.get(1),
+                })
+            })
+            .map_err(|_| MapConfigurationStorageError::AerialOverlayImageCouldNotBeRead)
+    }
+}
+
+fn orchard_from_row(row: &Row) -> Result<Orchard, OrchardStorageError> {
+    Ok(Orchard {
+        id: OrchardId(
+            u64::try_from(row.get::<_, i64>(0))
+                .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?,
+        ),
+        name: row.get(1),
+        longitude: row.get(2),
+        latitude: row.get(3),
+        reference_region: row.get(4),
+    })
 }
 
 fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStorageError> {
