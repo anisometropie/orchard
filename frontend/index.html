@@ -842,6 +842,7 @@
       });
 
       let treeTooltip;
+      let treeTooltipTreeId;
       let treeEditor;
       let orchardFeatures = [];
       let mapMode = "normal";
@@ -1544,11 +1545,13 @@
         return "Healthy";
       }
 
-      map.on("mouseenter", "trees", (event) => {
+      map.on("mousemove", "trees", (event) => {
         map.getCanvas().style.cursor = "pointer";
         if (treeEditor) return;
 
         const feature = event.features[0];
+        if (treeTooltip && treeTooltipTreeId === feature.id) return;
+
         treeTooltip?.remove();
         treeTooltip = new maplibregl.Popup({
           closeButton: false,
@@ -1558,18 +1561,21 @@
           .setLngLat(feature.geometry.coordinates)
           .setDOMContent(createTreeTooltip(feature.properties))
           .addTo(map);
+        treeTooltipTreeId = feature.id;
       });
 
       map.on("mouseleave", "trees", () => {
         map.getCanvas().style.cursor = "";
         treeTooltip?.remove();
         treeTooltip = undefined;
+        treeTooltipTreeId = undefined;
       });
 
       map.on("click", "trees", (event) => {
         const feature = event.features[0];
         treeTooltip?.remove();
         treeTooltip = undefined;
+        treeTooltipTreeId = undefined;
         closeTreeEditor();
 
         const popup = new maplibregl.Popup({
