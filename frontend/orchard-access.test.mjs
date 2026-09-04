@@ -3,10 +3,18 @@ import test from "node:test";
 
 import {
   accessHeaders,
+  hasOpenOrchard,
   orchardResourceUrl,
   resolveOrchardAccess,
   sharedOrchardUrl,
 } from "./orchard-access.mjs";
+
+test("show orchard controls only while an owned or shared orchard is open", () => {
+  assert.equal(hasOpenOrchard({ mode: "empty" }), false);
+  assert.equal(hasOpenOrchard({ mode: "login-required" }), false);
+  assert.equal(hasOpenOrchard({ mode: "editable" }), true);
+  assert.equal(hasOpenOrchard({ mode: "read-only" }), true);
+});
 
 test("an unlinked visit has no orchard and loads no private tree URL", () => {
   const access = resolveOrchardAccess("", null);
