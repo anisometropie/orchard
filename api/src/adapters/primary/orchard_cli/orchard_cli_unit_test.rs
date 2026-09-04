@@ -48,6 +48,14 @@ fn migrate_database() {
 }
 
 #[test]
+fn revert_migrations_to_version() {
+    assert_eq!(
+        parse_command(["orchard", "migrate", "revert", "--to", "10"]).unwrap(),
+        OrchardCommand::RevertMigrations { target_version: 10 },
+    );
+}
+
+#[test]
 fn require_filename() {
     assert_eq!(
         parse_command(["orchard", "import_legacy_orchard"])

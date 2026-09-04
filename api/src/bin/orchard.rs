@@ -30,10 +30,43 @@ fn main() -> ExitCode {
 
     match command {
         OrchardCommand::Migrate => migrate_database(&database_url),
+        OrchardCommand::RevertMigrations { target_version } => {
+            revert_migrations(&database_url, target_version)
+        }
         OrchardCommand::ImportLegacyOrchard { geojson_path } => {
             import_orchard(&database_url, &geojson_path)
         }
         OrchardCommand::RunServer { address } => runserver(database_url, address),
+    }
+}
+
+fn revert_migrations(database_url: &str, target_version: u32) -> ExitCode {
+    let mut migrator = match PostgresMigrator::connect(database_url) {
+        Ok(migrator) => migrator,
+        Err(error) => {
+            eprintln!("Migration revert failed: {error}.");
+            return ExitCode::from(1);
+        }
+    };
+    match migrator.revert_to(target_version) {
+        Ok(report) if report.reverted_versions.is_empty() => {
+            println!("Database schema is already at or below migration {target_version}.");
+            ExitCode::SUCCESS
+        }
+        Ok(report) => {
+            let versions = report
+                .reverted_versions
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("Reverted migrations: {versions}.");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Migration revert failed: {error}.");
+            ExitCode::from(1)
+        }
     }
 }
 

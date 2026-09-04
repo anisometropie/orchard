@@ -22,7 +22,7 @@ services:
     restart: "no"
     environment:
       ORCHARD_DATABASE_URL: "postgres://orchard:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/orchard"
-    command: ["migrate"]
+    entrypoint: ["orchard", "migrate"]
     depends_on:
       db:
         condition: service_healthy

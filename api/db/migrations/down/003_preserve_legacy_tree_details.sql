@@ -1,0 +1,3 @@
+-- Migration 001 is the immutable baseline used by the explicit migration runner
+-- and already contains this schema. Migration 003 is therefore idempotent and
+-- has no schema change to undo when the embedded chain is run from scratch.

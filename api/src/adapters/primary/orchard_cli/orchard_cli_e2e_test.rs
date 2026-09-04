@@ -56,6 +56,16 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
         String::from_utf8(repeated.stdout).unwrap(),
         "Database schema is up to date.\n"
     );
+    let revert = Command::new(orchard_command)
+        .args(["migrate", "revert", "--to", "10"])
+        .env("ORCHARD_DATABASE_URL", &migration_database_url)
+        .output()
+        .expect("the migration revert command should start");
+    assert!(revert.status.success());
+    assert_eq!(
+        String::from_utf8(revert.stdout).unwrap(),
+        "Database schema is already at or below migration 10.\n"
+    );
     verification_connection
         .batch_execute(
             "SET search_path TO public;
