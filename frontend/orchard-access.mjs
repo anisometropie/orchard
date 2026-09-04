@@ -20,6 +20,10 @@ export function resolveOrchardAccess(hash, session) {
     : { ...EMPTY_ACCESS };
 }
 
+export function hasOpenOrchard(access) {
+  return ["editable", "read-only"].includes(access.mode);
+}
+
 export function orchardResourceUrl(access, resource) {
   if (access.orchardId == null) throw new Error("No orchard is open.");
   return `/api/orchards/${encodeURIComponent(access.orchardId)}/${resource}`;
