@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, PartialEq)]
 pub enum OrchardCommand {
     Migrate,
+    RevertMigrations { target_version: u32 },
     RunServer { address: SocketAddr },
     ImportLegacyOrchard { geojson_path: PathBuf },
 }
@@ -19,7 +20,10 @@ struct OrchardCli {
 #[derive(Subcommand)]
 enum OrchardCliCommand {
     #[command(name = "migrate")]
-    Migrate,
+    Migrate {
+        #[command(subcommand)]
+        command: Option<MigrationCliCommand>,
+    },
     #[command(name = "runserver")]
     RunServer {
         #[arg(long, default_value = "127.0.0.1:3000")]
@@ -29,6 +33,14 @@ enum OrchardCliCommand {
     ImportLegacyOrchard { filename: PathBuf },
 }
 
+#[derive(Subcommand)]
+enum MigrationCliCommand {
+    Revert {
+        #[arg(long = "to")]
+        target_version: u32,
+    },
+}
+
 pub fn parse_command<I, T>(arguments: I) -> Result<OrchardCommand, clap::Error>
 where
     I: IntoIterator<Item = T>,
@@ -36,7 +48,10 @@ where
 {
     let cli = OrchardCli::try_parse_from(arguments)?;
     Ok(match cli.command {
-        OrchardCliCommand::Migrate => OrchardCommand::Migrate,
+        OrchardCliCommand::Migrate { command: None } => OrchardCommand::Migrate,
+        OrchardCliCommand::Migrate {
+            command: Some(MigrationCliCommand::Revert { target_version }),
+        } => OrchardCommand::RevertMigrations { target_version },
         OrchardCliCommand::RunServer { address } => OrchardCommand::RunServer { address },
         OrchardCliCommand::ImportLegacyOrchard { filename } => {
             OrchardCommand::ImportLegacyOrchard {

@@ -11,6 +11,7 @@ struct Migration {
     version: u32,
     name: &'static str,
     sql: &'static str,
+    down_sql: Option<&'static str>,
 }
 
 include!(concat!(env!("OUT_DIR"), "/embedded_migrations.rs"));
@@ -19,6 +20,11 @@ include!(concat!(env!("OUT_DIR"), "/embedded_migrations.rs"));
 pub struct MigrationReport {
     pub applied_versions: Vec<u32>,
     pub adopted_legacy_schema: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct MigrationRevertReport {
+    pub reverted_versions: Vec<u32>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -32,8 +38,11 @@ pub enum MigrationError {
     AppliedMigrationNameChanged { version: u32 },
     AppliedMigrationChecksumChanged { version: u32 },
     AppliedMigrationHistoryHasGap { version: u32 },
+    UnknownTargetMigration { version: u32 },
+    IrreversibleMigration { version: u32 },
     InvalidMigrationTransactionWrapper { version: u32 },
     MigrationCouldNotBeApplied { version: u32, reason: String },
+    MigrationCouldNotBeReverted { version: u32, reason: String },
 }
 
 impl fmt::Display for MigrationError {
@@ -65,6 +74,15 @@ impl fmt::Display for MigrationError {
                 formatter,
                 "migration {version} is applied after a missing earlier migration"
             ),
+            Self::UnknownTargetMigration { version } => {
+                write!(
+                    formatter,
+                    "target migration {version} is unknown to this binary"
+                )
+            }
+            Self::IrreversibleMigration { version } => {
+                write!(formatter, "migration {version} has no down migration")
+            }
             Self::InvalidMigrationTransactionWrapper { version } => write!(
                 formatter,
                 "migration {version} has an invalid BEGIN/COMMIT wrapper"
@@ -73,6 +91,12 @@ impl fmt::Display for MigrationError {
                 write!(
                     formatter,
                     "migration {version} could not be applied: {reason}"
+                )
+            }
+            Self::MigrationCouldNotBeReverted { version, reason } => {
+                write!(
+                    formatter,
+                    "migration {version} could not be reverted: {reason}"
                 )
             }
         }
@@ -101,6 +125,22 @@ impl PostgresMigrator {
     }
 
     pub fn migrate(&mut self) -> Result<MigrationReport, MigrationError> {
+        self.with_migration_lock(|migrator| migrator.migrate_while_locked(MIGRATIONS))
+    }
+
+    pub fn revert_to(
+        &mut self,
+        target_version: u32,
+    ) -> Result<MigrationRevertReport, MigrationError> {
+        self.with_migration_lock(|migrator| {
+            migrator.revert_to_while_locked(MIGRATIONS, target_version)
+        })
+    }
+
+    fn with_migration_lock<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, MigrationError>,
+    ) -> Result<T, MigrationError> {
         self.client
             .query_one(
                 "SELECT pg_advisory_lock($1)",
@@ -108,7 +148,7 @@ impl PostgresMigrator {
             )
             .map_err(|_| MigrationError::CouldNotAcquireLock)?;
 
-        let migration_result = self.migrate_while_locked(MIGRATIONS);
+        let migration_result = operation(self);
         let unlock_result = self
             .client
             .query_one(
@@ -161,6 +201,80 @@ impl PostgresMigrator {
             applied_versions,
             adopted_legacy_schema,
         })
+    }
+
+    fn revert_to_while_locked(
+        &mut self,
+        migrations: &[Migration],
+        target_version: u32,
+    ) -> Result<MigrationRevertReport, MigrationError> {
+        if target_version != 0
+            && !migrations
+                .iter()
+                .any(|migration| migration.version == target_version)
+        {
+            return Err(MigrationError::UnknownTargetMigration {
+                version: target_version,
+            });
+        }
+
+        self.create_ledger()?;
+        let applied = self.applied_migrations()?;
+        validate_history(migrations, &applied)?;
+        let migrations_to_revert = migrations
+            .iter()
+            .rev()
+            .filter(|migration| {
+                migration.version > target_version && applied.contains_key(&migration.version)
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        for migration in &migrations_to_revert {
+            if migration.down_sql.is_none() {
+                return Err(MigrationError::IrreversibleMigration {
+                    version: migration.version,
+                });
+            }
+        }
+
+        if migrations_to_revert.is_empty() {
+            return Ok(MigrationRevertReport {
+                reverted_versions: Vec::new(),
+            });
+        }
+
+        let commit_failure_version = migrations_to_revert
+            .last()
+            .expect("an empty revert returns before opening a transaction")
+            .version;
+        let mut transaction = self
+            .client
+            .transaction()
+            .map_err(|error| revert_failure(commit_failure_version, error))?;
+        let mut reverted_versions = Vec::new();
+        for migration in migrations_to_revert {
+            let down_sql = migration_body(
+                migration.version,
+                migration
+                    .down_sql
+                    .expect("reversible migrations were checked before the transaction"),
+            )?;
+            transaction
+                .batch_execute(down_sql)
+                .map_err(|error| revert_failure(migration.version, error))?;
+            transaction
+                .execute(
+                    "DELETE FROM orchard_schema_migrations WHERE version = $1",
+                    &[&(migration.version as i32)],
+                )
+                .map_err(|error| revert_failure(migration.version, error))?;
+            reverted_versions.push(migration.version);
+        }
+        transaction
+            .commit()
+            .map_err(|error| revert_failure(commit_failure_version, error))?;
+
+        Ok(MigrationRevertReport { reverted_versions })
     }
 
     fn create_ledger(&mut self) -> Result<(), MigrationError> {
@@ -305,7 +419,7 @@ impl PostgresMigrator {
     }
 
     fn apply_migration(&mut self, migration: Migration) -> Result<(), MigrationError> {
-        let sql = migration_body(migration)?;
+        let sql = migration_body(migration.version, migration.sql)?;
         let mut transaction = self
             .client
             .transaction()
@@ -375,8 +489,11 @@ fn validate_history(
     Ok(())
 }
 
-fn migration_body(migration: Migration) -> Result<&'static str, MigrationError> {
-    let sql = migration.sql.trim();
+fn migration_body(
+    version: u32,
+    migration_sql: &'static str,
+) -> Result<&'static str, MigrationError> {
+    let sql = migration_sql.trim();
     let begins_transaction = sql.starts_with("BEGIN;");
     let commits_transaction = sql.ends_with("COMMIT;");
     match (begins_transaction, commits_transaction) {
@@ -386,9 +503,7 @@ fn migration_body(migration: Migration) -> Result<&'static str, MigrationError> 
             .expect("a checked transaction wrapper should be removable")
             .trim()),
         (false, false) => Ok(sql),
-        _ => Err(MigrationError::InvalidMigrationTransactionWrapper {
-            version: migration.version,
-        }),
+        _ => Err(MigrationError::InvalidMigrationTransactionWrapper { version }),
     }
 }
 
@@ -401,6 +516,13 @@ fn checksum(sql: &str) -> String {
 
 fn migration_failure(version: u32, error: postgres::Error) -> MigrationError {
     MigrationError::MigrationCouldNotBeApplied {
+        version,
+        reason: error.to_string(),
+    }
+}
+
+fn revert_failure(version: u32, error: postgres::Error) -> MigrationError {
+    MigrationError::MigrationCouldNotBeReverted {
         version,
         reason: error.to_string(),
     }
