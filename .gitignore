@@ -5,3 +5,6 @@ data/qgis
 ssh*
 
 target/
+
+node_modules
+frontend/dist
