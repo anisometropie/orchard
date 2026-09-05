@@ -1,7 +1,7 @@
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
     BotanicalTaxon, IdentificationStatus, NamedTaxon, Orchard, OrchardId, PlantIdentity,
-    PlantIdentityId, Tree, TreeId, WateringRunId,
+    PlantIdentityId, Tree, TreeId, WateringRunId, WateringRunTarget,
 };
 use orchard_api::hexagon::use_cases::load_active_watering_run::load_active_watering_run;
 use orchard_api::hexagon::use_cases::order_orchard_row::{
@@ -46,7 +46,7 @@ fn start_with_the_first_living_tree_in_the_rows_saved_order() {
     .unwrap();
 
     assert_eq!(progress.run_id, WateringRunId(1));
-    assert_eq!(progress.row_name, "North");
+    assert_eq!(progress.target, WateringRunTarget::Row("North".into()));
     assert_eq!(progress.watered_tree_count, 0);
     assert_eq!(progress.total_tree_count, 2);
     let next_tree = progress.next_tree.unwrap();

@@ -18,7 +18,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use crate::hexagon::models::{
     AerialOverlayId, AnnualDate, BotanicalTaxon, HarvestScheduleOwner, HarvestedPart,
     InfraspecificRank, MapConfiguration, NamedTaxon, OrchardId, OrchardTree, PlantCultivarId,
-    PlantIdentity, PlantIdentityId, Tree, TreeId, WateringRunId,
+    PlantIdentity, PlantIdentityId, Tree, TreeId, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{AccessControl, MapConfigurationStorage, OrchardStorage};
 use crate::hexagon::use_cases::authorize_orchard_owner::{
@@ -58,6 +58,9 @@ use crate::hexagon::use_cases::restore_user_session::{
 };
 use crate::hexagon::use_cases::share_orchard::{
     OrchardShareError, OrchardShareLinkRequested, share_orchard,
+};
+use crate::hexagon::use_cases::start_danger_watering_run::{
+    DangerWateringRunStartError, DangerWateringRunStartRequested, start_danger_watering_run,
 };
 use crate::hexagon::use_cases::start_watering_run::{
     WateringProgress, WateringRunStartError, WateringRunStartRequested, start_watering_run,
@@ -353,7 +356,14 @@ where
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartWateringRunRequest {
-    row_name: String,
+    row_name: Option<String>,
+    target: Option<RequestedWateringTarget>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RequestedWateringTarget {
+    Danger,
 }
 
 async fn start_watering_run_handler<U>(
@@ -371,22 +381,36 @@ where
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
         authorize_owner_access(&mut *storage, orchard_id, session_token)?;
-        start_watering_run(
-            WateringRunStartRequested {
-                orchard_id,
-                row_name: request.row_name,
-            },
-            &mut *storage,
-        )
-        .map(|progress| Json(watering_progress_json(progress)))
-        .map_err(|error| match error {
-            WateringRunStartError::RowNotFound => StatusCode::NOT_FOUND,
-            WateringRunStartError::RowNotOrdered
-            | WateringRunStartError::AnotherWateringRunIsActive => StatusCode::CONFLICT,
-            WateringRunStartError::WateringRunCouldNotBeStarted => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        })
+        let progress = match (request.row_name, request.target) {
+            (Some(row_name), None) => start_watering_run(
+                WateringRunStartRequested {
+                    orchard_id,
+                    row_name,
+                },
+                &mut *storage,
+            )
+            .map_err(|error| match error {
+                WateringRunStartError::RowNotFound => StatusCode::NOT_FOUND,
+                WateringRunStartError::RowNotOrdered
+                | WateringRunStartError::AnotherWateringRunIsActive => StatusCode::CONFLICT,
+                WateringRunStartError::WateringRunCouldNotBeStarted => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            })?,
+            (None, Some(RequestedWateringTarget::Danger)) => start_danger_watering_run(
+                DangerWateringRunStartRequested { orchard_id },
+                &mut *storage,
+            )
+            .map_err(|error| match error {
+                DangerWateringRunStartError::NoDangerTrees => StatusCode::NOT_FOUND,
+                DangerWateringRunStartError::AnotherWateringRunIsActive => StatusCode::CONFLICT,
+                DangerWateringRunStartError::WateringRunCouldNotBeStarted => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            })?,
+            _ => return Err(StatusCode::BAD_REQUEST),
+        };
+        Ok(Json(watering_progress_json(progress)))
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -463,9 +487,15 @@ where
 }
 
 fn watering_progress_json(progress: WateringProgress) -> Value {
+    let (target, row_name) = match &progress.target {
+        WateringRunTarget::Row(row_name) => ("row", Some(row_name.as_str())),
+        WateringRunTarget::DangerTrees => ("danger", None),
+    };
     json!({
         "run_id": progress.run_id.0,
-        "row_name": progress.row_name,
+        "target": target,
+        "target_label": progress.target.label(),
+        "row_name": row_name,
         "watered_tree_count": progress.watered_tree_count,
         "total_tree_count": progress.total_tree_count,
         "next_tree": progress.next_tree.map(|tree| json!({

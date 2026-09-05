@@ -15,4 +15,5 @@ pub mod replace_plant_harvest_windows;
 pub mod restore_user_session;
 pub mod set_user_password;
 pub mod share_orchard;
+pub mod start_danger_watering_run;
 pub mod start_watering_run;
