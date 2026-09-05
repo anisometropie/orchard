@@ -27,10 +27,10 @@ fn allow_the_owner_or_current_share_token_to_water_only_its_orchard() {
         .unwrap();
     let session_token = storage.create_session(owner.id).unwrap();
     let view_token = storage
-        .replace_share_token(owner.id, OrchardId(7), OrchardSharePermission::View)
+        .create_share_token(owner.id, OrchardId(7), OrchardSharePermission::View)
         .unwrap();
     let watering_token = storage
-        .replace_share_token(owner.id, OrchardId(7), OrchardSharePermission::Watering)
+        .create_share_token(owner.id, OrchardId(7), OrchardSharePermission::Watering)
         .unwrap();
 
     assert_eq!(

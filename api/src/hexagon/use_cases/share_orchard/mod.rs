@@ -36,6 +36,6 @@ pub fn share_orchard(
         }
     })?;
     access_control
-        .replace_share_token(user.id, event.orchard_id, event.permission)
+        .create_share_token(user.id, event.orchard_id, event.permission)
         .map_err(|_| OrchardShareError::ShareLinkCouldNotBeCreated)
 }

@@ -375,7 +375,7 @@ impl AccessControl for InMemoryOrchardStorage {
             .any(|(orchard, owner_user_id)| orchard.id == orchard_id && *owner_user_id == user_id))
     }
 
-    fn replace_share_token(
+    fn create_share_token(
         &mut self,
         user_id: UserId,
         orchard_id: OrchardId,
@@ -392,9 +392,6 @@ impl AccessControl for InMemoryOrchardStorage {
             "in-memory-share-{}-{}",
             orchard_id.0, orchard.share_token_sequence
         );
-        orchard.share_tokens.retain(|(access, _)| {
-            access.orchard_id != orchard_id || access.permission != permission
-        });
         orchard.share_tokens.push((
             OrchardShareAccess {
                 orchard_id,

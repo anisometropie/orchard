@@ -139,7 +139,7 @@ impl AccessControl for PostgresOrchardStorage {
             .map_err(|_| AccessControlError::OrchardOwnershipCouldNotBeRead)
     }
 
-    fn replace_share_token(
+    fn create_share_token(
         &mut self,
         user_id: UserId,
         orchard_id: OrchardId,
@@ -161,9 +161,7 @@ impl AccessControl for PostgresOrchardStorage {
                 "INSERT INTO orchard_share_tokens (orchard_id, permission, token_hash)
                  SELECT id, $3, $4
                  FROM orchards
-                 WHERE id = $1 AND owner_user_id = $2
-                 ON CONFLICT (orchard_id, permission) DO UPDATE
-                 SET token_hash = EXCLUDED.token_hash",
+                 WHERE id = $1 AND owner_user_id = $2",
                 &[&orchard_id, &user_id, &permission, &token_hash],
             )
             .map_err(|_| AccessControlError::ShareTokenCouldNotBeCreated)?;
