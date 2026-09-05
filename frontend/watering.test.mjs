@@ -12,6 +12,7 @@ import {
   orchardRows,
   treeIdsInRow,
   wateringRouteWindow,
+  wateringCancellationNeedsConfirmation,
   wateringStartRequest,
   waterSourceGeoJson,
   wateringTargetGeoJson,
@@ -102,6 +103,17 @@ test("start danger watering without depending on saved row order", () => {
   assert.deepEqual(wateringStartRequest("row", "North"), {
     row_name: "North",
   });
+});
+
+test("only warn before cancelling a run that contains recorded progress", () => {
+  assert.equal(
+    wateringCancellationNeedsConfirmation({ watered_tree_count: 0 }),
+    false,
+  );
+  assert.equal(
+    wateringCancellationNeedsConfirmation({ watered_tree_count: 1 }),
+    true,
+  );
 });
 
 test("default the water source a few metres north of Ronde de Bordeaux", () => {

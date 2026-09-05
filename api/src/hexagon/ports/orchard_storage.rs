@@ -18,6 +18,7 @@ pub enum OrchardStorageError {
     WateringRunCouldNotBeRead,
     WateringRunCouldNotBeCreated,
     WateringRunCouldNotBeChanged,
+    WateringRunCouldNotBeDeleted,
     AtomicOperationCouldNotCommit,
     TreesCouldNotBeRead,
 }
@@ -98,6 +99,10 @@ pub trait OrchardStorage {
         tree_id: TreeId,
     ) -> Result<(), OrchardStorageError>;
     fn complete_watering_run(
+        &mut self,
+        watering_run_id: WateringRunId,
+    ) -> Result<(), OrchardStorageError>;
+    fn delete_watering_run(
         &mut self,
         watering_run_id: WateringRunId,
     ) -> Result<(), OrchardStorageError>;

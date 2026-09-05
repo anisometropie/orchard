@@ -774,6 +774,21 @@ impl OrchardStorage for PostgresOrchardStorage {
             _ => Err(OrchardStorageError::WateringRunCouldNotBeChanged),
         }
     }
+
+    fn delete_watering_run(
+        &mut self,
+        watering_run_id: WateringRunId,
+    ) -> Result<(), OrchardStorageError> {
+        let watering_run_id = i64::try_from(watering_run_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeDeleted)?;
+        match self.client.execute(
+            "DELETE FROM watering_runs WHERE id = $1",
+            &[&watering_run_id],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::WateringRunCouldNotBeDeleted),
+        }
+    }
 }
 
 impl MapConfigurationStorage for PostgresOrchardStorage {

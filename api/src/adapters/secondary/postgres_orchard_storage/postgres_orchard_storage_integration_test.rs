@@ -215,6 +215,19 @@ fn persist_row_ranks_and_resumable_watering_progress() {
             latitude: 45.03,
         })
     );
+    storage
+        .transaction(|orchard| orchard.delete_watering_run(danger_run_id))
+        .unwrap();
+    assert_eq!(storage.watering_run(danger_run_id).unwrap(), None);
+    let stored_run_id = i64::try_from(danger_run_id.0).unwrap();
+    let remaining_run_trees: i64 = verification_connection
+        .query_one(
+            "SELECT count(*) FROM watering_run_trees WHERE watering_run_id = $1",
+            &[&stored_run_id],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(remaining_run_trees, 0);
 }
 
 #[test]
