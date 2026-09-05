@@ -879,10 +879,11 @@
         <span id="login-error" role="alert" hidden></span>
       </form>
       <select id="orchard-select" aria-label="Open orchard" hidden></select>
-      <button id="share-orchard" type="button" hidden>Share read-only link</button>
+      <button id="share-view-orchard" type="button" hidden>Share view-only link</button>
+      <button id="share-watering-orchard" type="button" hidden>Share watering link</button>
       <button id="logout" class="secondary" type="button" hidden>Log out</button>
       <div id="share-result" hidden>
-        <input id="share-link" aria-label="Read-only orchard link" readonly />
+        <input id="share-link" aria-label="Shared orchard link" readonly />
         <button id="copy-share-link" type="button">Copy</button>
       </div>
     </section>
@@ -1078,11 +1079,12 @@
       } from "./harvest-window.mjs?v=4";
       import {
         accessHeaders,
+        canWaterOrchard,
         hasOpenOrchard,
         orchardResourceUrl,
         resolveOrchardAccess,
         sharedOrchardUrl,
-      } from "./orchard-access.mjs?v=2";
+      } from "./orchard-access.mjs?v=4";
       import {
         appendManualTree,
         dangerWateringNumberGeoJson,
@@ -1287,7 +1289,10 @@
       const loginCancel = document.getElementById("login-cancel");
       const loginError = document.getElementById("login-error");
       const orchardSelect = document.getElementById("orchard-select");
-      const shareOrchard = document.getElementById("share-orchard");
+      const shareViewOrchard = document.getElementById("share-view-orchard");
+      const shareWateringOrchard = document.getElementById(
+        "share-watering-orchard",
+      );
       const logout = document.getElementById("logout");
       const shareResult = document.getElementById("share-result");
       const shareLink = document.getElementById("share-link");
@@ -2107,7 +2112,7 @@
           .getSource("watering-route-numbers")
           ?.setData(dangerWateringNumberGeoJson([]));
         wateringTreeBanner.hidden = true;
-        if (!isEditable()) return;
+        if (!canWaterOrchard(currentAccess)) return;
         const response = await fetch(
           orchardResourceUrl(currentAccess, "watering-run"),
           { headers: accessHeaders(currentAccess), cache: "no-store" },
@@ -2804,7 +2809,7 @@
         renderAccessControls();
         clearOrchardPresentation();
 
-        if (!["editable", "read-only"].includes(currentAccess.mode)) {
+        if (!hasOpenOrchard(currentAccess)) {
           map.jumpTo({ center: [0, 20], zoom: 1.5 });
           status.textContent =
             currentAccess.mode === "login-required"
@@ -2953,9 +2958,9 @@
         const loggedIn = session != null;
         mapToolbar.hidden = !orchardIsOpen;
         mapFilterPanel.hidden = !orchardIsOpen;
-        wateringToggle.hidden = !isEditable();
+        wateringToggle.hidden = !canWaterOrchard(currentAccess);
         rowOrderToggle.hidden = !isEditable();
-        if (!isEditable()) {
+        if (!canWaterOrchard(currentAccess)) {
           cancelManualRowOrder();
           setWorkflowPanel(null);
           wateringTreeBanner.hidden = true;
@@ -2963,11 +2968,14 @@
         loginToggle.hidden = loggedIn;
         orchardSelect.hidden = !loggedIn;
         logout.hidden = !loggedIn;
-        shareOrchard.hidden = !isEditable();
+        shareViewOrchard.hidden = !isEditable();
+        shareWateringOrchard.hidden = !isEditable();
         shareResult.hidden = true;
 
         if (currentAccess.mode === "read-only") {
-          accessMode.textContent = "Shared orchard · read only";
+          accessMode.textContent = "Shared orchard · view only";
+        } else if (currentAccess.mode === "watering") {
+          accessMode.textContent = "Shared orchard · view and water";
         } else if (isEditable()) {
           accessMode.textContent = currentAccess.orchard.name;
         } else if (currentAccess.mode === "login-required") {
@@ -3038,14 +3046,19 @@
       async function logOut() {
         await fetch("/api/session", { method: "DELETE" });
         session = null;
-        if (currentAccess.mode !== "read-only") window.location.hash = "";
+        if (!["read-only", "watering"].includes(currentAccess.mode)) {
+          window.location.hash = "";
+        }
         await openOrchardFromLocation();
       }
 
-      async function createShareLink() {
+      async function createShareLink(permission) {
         if (!isEditable()) return;
         const response = await fetch(
-          orchardResourceUrl(currentAccess, "share"),
+          orchardResourceUrl(
+            currentAccess,
+            permission === "watering" ? "share/watering" : "share",
+          ),
           { method: "POST" },
         );
         if (!response.ok) {
@@ -3059,6 +3072,13 @@
           window.location.origin,
           currentAccess.orchardId,
           token,
+          permission,
+        );
+        shareLink.setAttribute(
+          "aria-label",
+          permission === "watering"
+            ? "Orchard watering link"
+            : "View-only orchard link",
         );
         shareResult.hidden = false;
         shareLink.select();
@@ -3285,7 +3305,10 @@
         if (!orchardSelect.value) return;
         window.location.hash = `#/orchards/${encodeURIComponent(orchardSelect.value)}`;
       });
-      shareOrchard.addEventListener("click", createShareLink);
+      shareViewOrchard.addEventListener("click", () => createShareLink("view"));
+      shareWateringOrchard.addEventListener("click", () =>
+        createShareLink("watering"),
+      );
       copyShareLink.addEventListener("click", async () => {
         shareLink.select();
         try {

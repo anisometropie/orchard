@@ -12,6 +12,18 @@ pub struct Orchard {
     pub reference_region: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OrchardSharePermission {
+    View,
+    Watering,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OrchardShareAccess {
+    pub orchard_id: OrchardId,
+    pub permission: OrchardSharePermission,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct UserId(pub u64);
 

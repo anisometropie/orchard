@@ -48,9 +48,9 @@ pub fn authorize_orchard_reader(
             }
         }),
         OrchardReadCredential::ShareToken(share_token) => access_control
-            .orchard_for_share_token(&share_token)
+            .orchard_share_for_token(&share_token)
             .map_err(|_| OrchardReadAccessError::AccessCouldNotBeChecked)?
-            .filter(|orchard_id| *orchard_id == event.orchard_id)
+            .filter(|access| access.orchard_id == event.orchard_id)
             .map(|_| OrchardReadAccess::ReadOnly)
             .ok_or(OrchardReadAccessError::AccessNotFound),
     }

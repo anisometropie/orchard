@@ -17,8 +17,9 @@ use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::hexagon::models::{
     AerialOverlayId, AnnualDate, BotanicalTaxon, GeoPoint, HarvestScheduleOwner, HarvestedPart,
-    InfraspecificRank, MapConfiguration, NamedTaxon, OrchardId, OrchardTree, PlantCultivarId,
-    PlantIdentity, PlantIdentityId, Tree, TreeId, WateringRunId, WateringRunTarget,
+    InfraspecificRank, MapConfiguration, NamedTaxon, OrchardId, OrchardSharePermission,
+    OrchardTree, PlantCultivarId, PlantIdentity, PlantIdentityId, Tree, TreeId, WateringRunId,
+    WateringRunTarget,
 };
 use crate::hexagon::ports::{AccessControl, MapConfigurationStorage, OrchardStorage};
 use crate::hexagon::use_cases::authorize_orchard_owner::{
@@ -27,6 +28,10 @@ use crate::hexagon::use_cases::authorize_orchard_owner::{
 use crate::hexagon::use_cases::authorize_orchard_reader::{
     OrchardReadAccessError, OrchardReadAccessRequested, OrchardReadCredential,
     authorize_orchard_reader,
+};
+use crate::hexagon::use_cases::authorize_orchard_waterer::{
+    OrchardWateringAccessError, OrchardWateringAccessRequested, OrchardWateringCredential,
+    authorize_orchard_waterer,
 };
 use crate::hexagon::use_cases::change_tree_condition::{
     OrchardTreeConditionChanged, TreeConditionChangeError, change_orchard_tree_condition,
@@ -117,6 +122,10 @@ where
         .route(
             "/orchards/{orchard_id}/share",
             post(share_orchard_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/share/watering",
+            post(share_orchard_for_watering_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/row-order",
@@ -269,12 +278,48 @@ async fn share_orchard_handler<U>(
 where
     U: AccessControl + Send + 'static,
 {
+    create_share_link(
+        access_control,
+        OrchardId(orchard_id),
+        headers,
+        OrchardSharePermission::View,
+    )
+    .await
+}
+
+async fn share_orchard_for_watering_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    create_share_link(
+        access_control,
+        OrchardId(orchard_id),
+        headers,
+        OrchardSharePermission::Watering,
+    )
+    .await
+}
+
+async fn create_share_link<U>(
+    access_control: Arc<Mutex<U>>,
+    orchard_id: OrchardId,
+    headers: HeaderMap,
+    permission: OrchardSharePermission,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
     let session_token = owner_session_token(&headers)?;
     tokio::task::spawn_blocking(move || {
         share_orchard(
             OrchardShareLinkRequested {
-                orchard_id: OrchardId(orchard_id),
+                orchard_id,
                 session_token,
+                permission,
             },
             &mut *access_control.lock().unwrap(),
         )
@@ -383,12 +428,12 @@ async fn start_watering_run_handler<U>(
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_watering_credential(&headers)?;
     let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
     tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        authorize_watering_access(&mut *storage, orchard_id, credential)?;
         let progress = match (request.row_name, request.target, request.water_source) {
             (Some(row_name), None, None) => start_watering_run(
                 WateringRunStartRequested {
@@ -441,11 +486,11 @@ async fn active_watering_run_handler<U>(
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_watering_credential(&headers)?;
     tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        authorize_watering_access(&mut *storage, orchard_id, credential)?;
         load_active_watering_run(orchard_id, &mut *storage)
             .map(|progress| match progress {
                 Some(progress) => Json(watering_progress_json(progress)).into_response(),
@@ -476,12 +521,12 @@ async fn record_tree_watered_handler<U>(
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_watering_credential(&headers)?;
     let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
     tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        authorize_watering_access(&mut *storage, orchard_id, credential)?;
         record_tree_watered(
             TreeWatered {
                 orchard_id,
@@ -557,6 +602,22 @@ fn orchard_read_credential(headers: &HeaderMap) -> Result<OrchardReadCredential,
         .ok_or(StatusCode::UNAUTHORIZED)
 }
 
+fn orchard_watering_credential(
+    headers: &HeaderMap,
+) -> Result<OrchardWateringCredential, StatusCode> {
+    if let Some(share_token) = headers
+        .get("x-orchard-share-token")
+        .and_then(|value| value.to_str().ok())
+    {
+        return Ok(OrchardWateringCredential::ShareToken(
+            share_token.to_owned(),
+        ));
+    }
+    cookie_value(headers, "orchard_session")
+        .map(OrchardWateringCredential::OwnerSession)
+        .ok_or(StatusCode::UNAUTHORIZED)
+}
+
 fn owner_session_token(headers: &HeaderMap) -> Result<String, StatusCode> {
     if headers.contains_key("x-orchard-share-token") {
         return Err(StatusCode::FORBIDDEN);
@@ -581,6 +642,25 @@ fn authorize_owner_access(
         OrchardOwnerAccessError::SessionNotFound => StatusCode::UNAUTHORIZED,
         OrchardOwnerAccessError::OrchardNotOwned => StatusCode::NOT_FOUND,
         OrchardOwnerAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+fn authorize_watering_access(
+    access_control: &mut impl AccessControl,
+    orchard_id: OrchardId,
+    credential: OrchardWateringCredential,
+) -> Result<(), StatusCode> {
+    authorize_orchard_waterer(
+        OrchardWateringAccessRequested {
+            orchard_id,
+            credential,
+        },
+        access_control,
+    )
+    .map_err(|error| match error {
+        OrchardWateringAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+        OrchardWateringAccessError::PermissionDenied => StatusCode::FORBIDDEN,
+        OrchardWateringAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
     })
 }
 
