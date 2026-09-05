@@ -3,9 +3,9 @@ use orchard_api::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
     BotanicalTaxon, GeoPoint, HarvestDataOrigin, HarvestScheduleOwner, HarvestedPart,
     IdentificationStatus, InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification,
-    LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardId, OrchardTree, PlantCultivar,
-    PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
-    ReproductiveRole, Tree, TreeId, UserId, WateringRunTarget,
+    LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardId, OrchardSharePermission, OrchardTree,
+    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
+    PlantIdentityReference, ReproductiveRole, Tree, TreeId, UserId, WateringRunTarget,
 };
 use orchard_api::hexagon::ports::{
     AccessControl, MapConfigurationStorage, OrchardStorage, OrchardStorageError,
@@ -64,21 +64,52 @@ fn persist_password_sessions_ownership_and_rotating_share_tokens() {
         storage.user_for_session(&session).unwrap(),
         Some(user.clone())
     );
-    let first_share_token = storage.replace_share_token(user.id, OrchardId(1)).unwrap();
+    let first_share_token = storage
+        .replace_share_token(user.id, OrchardId(1), OrchardSharePermission::View)
+        .unwrap();
     assert_eq!(
-        storage.orchard_for_share_token(&first_share_token).unwrap(),
-        Some(OrchardId(1))
+        storage.orchard_share_for_token(&first_share_token).unwrap(),
+        Some(orchard_api::hexagon::models::OrchardShareAccess {
+            orchard_id: OrchardId(1),
+            permission: OrchardSharePermission::View,
+        })
     );
-    let second_share_token = storage.replace_share_token(user.id, OrchardId(1)).unwrap();
+    let watering_share_token = storage
+        .replace_share_token(user.id, OrchardId(1), OrchardSharePermission::Watering)
+        .unwrap();
     assert_eq!(
-        storage.orchard_for_share_token(&first_share_token).unwrap(),
+        storage
+            .orchard_share_for_token(&watering_share_token)
+            .unwrap(),
+        Some(orchard_api::hexagon::models::OrchardShareAccess {
+            orchard_id: OrchardId(1),
+            permission: OrchardSharePermission::Watering,
+        })
+    );
+    let second_share_token = storage
+        .replace_share_token(user.id, OrchardId(1), OrchardSharePermission::View)
+        .unwrap();
+    assert_eq!(
+        storage.orchard_share_for_token(&first_share_token).unwrap(),
         None
     );
     assert_eq!(
         storage
-            .orchard_for_share_token(&second_share_token)
+            .orchard_share_for_token(&second_share_token)
             .unwrap(),
-        Some(OrchardId(1))
+        Some(orchard_api::hexagon::models::OrchardShareAccess {
+            orchard_id: OrchardId(1),
+            permission: OrchardSharePermission::View,
+        })
+    );
+    assert_eq!(
+        storage
+            .orchard_share_for_token(&watering_share_token)
+            .unwrap(),
+        Some(orchard_api::hexagon::models::OrchardShareAccess {
+            orchard_id: OrchardId(1),
+            permission: OrchardSharePermission::Watering,
+        })
     );
 
     assert!(
@@ -1273,6 +1304,20 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/015_add_watering_source.sql"
+            ))
+            .unwrap();
+    }
+    let share_permissions_were_applied: bool = verification_connection
+        .query_one(
+            "SELECT to_regclass('orchard_share_tokens') IS NOT NULL",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !share_permissions_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/016_add_share_permissions.sql"
             ))
             .unwrap();
     }

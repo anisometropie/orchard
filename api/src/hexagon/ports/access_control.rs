@@ -1,4 +1,6 @@
-use crate::hexagon::models::{Orchard, OrchardId, User, UserId};
+use crate::hexagon::models::{
+    Orchard, OrchardId, OrchardShareAccess, OrchardSharePermission, User, UserId,
+};
 
 #[derive(Debug, PartialEq)]
 pub enum AccessControlError {
@@ -36,12 +38,13 @@ pub trait AccessControl {
         &mut self,
         user_id: UserId,
         orchard_id: OrchardId,
+        permission: OrchardSharePermission,
     ) -> Result<String, AccessControlError>;
 
-    fn orchard_for_share_token(
+    fn orchard_share_for_token(
         &mut self,
         token: &str,
-    ) -> Result<Option<OrchardId>, AccessControlError>;
+    ) -> Result<Option<OrchardShareAccess>, AccessControlError>;
 
     fn delete_session(&mut self, token: &str) -> Result<(), AccessControlError>;
 

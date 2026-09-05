@@ -10,10 +10,10 @@ use sha2::{Digest, Sha256};
 use crate::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow, GeoPoint,
     HarvestDataOrigin, HarvestScheduleOwner, HarvestedPart, IdentificationStatus,
-    LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, Orchard, OrchardId, OrchardTree,
-    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
-    PlantIdentityReference, ReproductiveRole, Tree, TreeId, User, UserId, WateringRun,
-    WateringRunId, WateringRunTarget,
+    LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, Orchard, OrchardId,
+    OrchardShareAccess, OrchardSharePermission, OrchardTree, PlantCultivar, PlantCultivarId,
+    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole,
+    Tree, TreeId, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -143,6 +143,7 @@ impl AccessControl for PostgresOrchardStorage {
         &mut self,
         user_id: UserId,
         orchard_id: OrchardId,
+        permission: OrchardSharePermission,
     ) -> Result<String, AccessControlError> {
         let user_id = i64::try_from(user_id.0)
             .map_err(|_| AccessControlError::ShareTokenCouldNotBeCreated)?;
@@ -150,13 +151,20 @@ impl AccessControl for PostgresOrchardStorage {
             .map_err(|_| AccessControlError::ShareTokenCouldNotBeCreated)?;
         let token = random_access_token();
         let token_hash = access_token_hash(&token);
+        let permission = match permission {
+            OrchardSharePermission::View => "view",
+            OrchardSharePermission::Watering => "watering",
+        };
         let changed = self
             .client
             .execute(
-                "UPDATE orchards
-                 SET share_token_hash = $3
-                 WHERE id = $1 AND owner_user_id = $2",
-                &[&orchard_id, &user_id, &token_hash],
+                "INSERT INTO orchard_share_tokens (orchard_id, permission, token_hash)
+                 SELECT id, $3, $4
+                 FROM orchards
+                 WHERE id = $1 AND owner_user_id = $2
+                 ON CONFLICT (orchard_id, permission) DO UPDATE
+                 SET token_hash = EXCLUDED.token_hash",
+                &[&orchard_id, &user_id, &permission, &token_hash],
             )
             .map_err(|_| AccessControlError::ShareTokenCouldNotBeCreated)?;
         if changed != 1 {
@@ -165,21 +173,34 @@ impl AccessControl for PostgresOrchardStorage {
         Ok(token)
     }
 
-    fn orchard_for_share_token(
+    fn orchard_share_for_token(
         &mut self,
         token: &str,
-    ) -> Result<Option<OrchardId>, AccessControlError> {
+    ) -> Result<Option<OrchardShareAccess>, AccessControlError> {
         let token_hash = access_token_hash(token);
-        self.client
+        let access = self
+            .client
             .query_opt(
-                "SELECT id FROM orchards WHERE share_token_hash = $1",
+                "SELECT orchard_id, permission
+                 FROM orchard_share_tokens
+                 WHERE token_hash = $1",
                 &[&token_hash],
             )
-            .map_err(|_| AccessControlError::ShareTokenCouldNotBeRead)?
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeRead)?;
+        access
             .map(|row| {
-                u64::try_from(row.get::<_, i64>(0))
+                let orchard_id = u64::try_from(row.get::<_, i64>(0))
                     .map(OrchardId)
-                    .map_err(|_| AccessControlError::ShareTokenCouldNotBeRead)
+                    .map_err(|_| AccessControlError::ShareTokenCouldNotBeRead)?;
+                let permission = match row.get::<_, String>(1).as_str() {
+                    "view" => OrchardSharePermission::View,
+                    "watering" => OrchardSharePermission::Watering,
+                    _ => return Err(AccessControlError::ShareTokenCouldNotBeRead),
+                };
+                Ok(OrchardShareAccess {
+                    orchard_id,
+                    permission,
+                })
             })
             .transpose()
     }

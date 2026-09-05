@@ -17,7 +17,7 @@ fn migrate_fresh_adopt_legacy_and_reject_checksum_drift() {
     let first_run = migrator.migrate().unwrap();
     assert_eq!(
         first_run.applied_versions,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16]
     );
     assert!(!first_run.adopted_legacy_schema);
     assert_eq!(
@@ -27,7 +27,7 @@ fn migrate_fresh_adopt_legacy_and_reject_checksum_drift() {
 
     assert_eq!(
         migrator.revert_to(10).unwrap().reverted_versions,
-        vec![15, 14, 13, 12, 11]
+        vec![16, 15, 14, 13, 12, 11]
     );
     migrator
         .client()
@@ -35,7 +35,7 @@ fn migrate_fresh_adopt_legacy_and_reject_checksum_drift() {
         .unwrap();
     let adoption = migrator.migrate().unwrap();
     assert!(adoption.adopted_legacy_schema);
-    assert_eq!(adoption.applied_versions, vec![11, 12, 13, 14, 15]);
+    assert_eq!(adoption.applied_versions, vec![11, 12, 13, 14, 15, 16]);
 
     migrator
         .client()
@@ -119,7 +119,7 @@ fn assign_existing_orchard_data_to_the_default_users_orchard_before_adding_authe
 
     assert_eq!(
         migrator.migrate().unwrap().applied_versions,
-        vec![11, 12, 13, 14, 15]
+        vec![11, 12, 13, 14, 15, 16]
     );
 
     let migrated = migrator
@@ -134,7 +134,11 @@ fn assign_existing_orchard_data_to_the_default_users_orchard_before_adding_authe
                 harvest.orchard_id = orchard.id,
                 overlay.orchard_id = orchard.id,
                 owner.password_hash IS NULL,
-                orchard.share_token_hash IS NULL
+                NOT EXISTS (
+                    SELECT 1
+                    FROM orchard_share_tokens share
+                    WHERE share.orchard_id = orchard.id
+                )
              FROM orchards orchard
              JOIN users owner ON owner.id = orchard.owner_user_id
              JOIN trees tree ON TRUE
@@ -150,6 +154,65 @@ fn assign_existing_orchard_data_to_the_default_users_orchard_before_adding_authe
     for column in 4..=8 {
         assert!(migrated.get::<_, bool>(column));
     }
+
+    migrator
+        .client()
+        .batch_execute(
+            "SET search_path TO public;
+             DROP SCHEMA migration_runner_test CASCADE",
+        )
+        .unwrap();
+}
+
+#[test]
+fn preserve_the_existing_view_link_when_adding_separate_share_permissions() {
+    let database_url = std::env::var("ORCHARD_TEST_DATABASE_URL")
+        .expect("ORCHARD_TEST_DATABASE_URL must point to the dedicated test database");
+    let mut database_lock = Client::connect(&database_url, NoTls).unwrap();
+    database_lock
+        .query_one("SELECT pg_advisory_lock($1)", &[&TEST_DATABASE_LOCK])
+        .unwrap();
+    let mut migrator = empty_test_schema(&database_url);
+    let version_15_migrations = MIGRATIONS
+        .iter()
+        .copied()
+        .filter(|migration| migration.version <= 15)
+        .collect::<Vec<_>>();
+    migrator
+        .migrate_while_locked(&version_15_migrations)
+        .unwrap();
+    migrator
+        .client()
+        .batch_execute(
+            "INSERT INTO users (username, default_center, is_default)
+             VALUES (
+                'owner',
+                ST_SetSRID(ST_MakePoint(5.0, 45.0), 4326),
+                TRUE
+             );
+             INSERT INTO orchards (
+                owner_user_id, name, center, reference_region, share_token_hash
+             ) VALUES (
+                1,
+                'My orchard',
+                ST_SetSRID(ST_MakePoint(5.0, 45.0), 4326),
+                'Drôme',
+                decode(repeat('ab', 32), 'hex')
+             );",
+        )
+        .unwrap();
+
+    assert_eq!(migrator.migrate().unwrap().applied_versions, vec![16]);
+    let migrated = migrator
+        .client()
+        .query_one(
+            "SELECT permission, encode(token_hash, 'hex')
+             FROM orchard_share_tokens",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(migrated.get::<_, String>(0), "view");
+    assert_eq!(migrated.get::<_, String>(1), "ab".repeat(32));
 
     migrator
         .client()
@@ -216,7 +279,7 @@ fn revert_and_reapply_the_embedded_migration_chain() {
     migrator.migrate().unwrap();
     assert_eq!(
         migrator.revert_to(0).unwrap().reverted_versions,
-        vec![15, 14, 13, 12, 11, 10, 8, 7, 6, 5, 4, 3, 2, 1]
+        vec![16, 15, 14, 13, 12, 11, 10, 8, 7, 6, 5, 4, 3, 2, 1]
     );
     let reverted = migrator
         .client()
@@ -235,7 +298,7 @@ fn revert_and_reapply_the_embedded_migration_chain() {
     assert_eq!(reverted.get::<_, i64>(3), 0);
     assert_eq!(
         migrator.migrate().unwrap().applied_versions,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16]
     );
 
     migrator
@@ -292,7 +355,7 @@ fn preserve_representable_orchard_data_while_reverting_to_version_6_and_reapplyi
 
     assert_eq!(
         migrator.revert_to(6).unwrap().reverted_versions,
-        vec![15, 14, 13, 12, 11, 10, 8, 7]
+        vec![16, 15, 14, 13, 12, 11, 10, 8, 7]
     );
     let version_6_tree = migrator
         .client()
@@ -316,7 +379,7 @@ fn preserve_representable_orchard_data_while_reverting_to_version_6_and_reapplyi
 
     assert_eq!(
         migrator.migrate().unwrap().applied_versions,
-        vec![7, 8, 10, 11, 12, 13, 14, 15]
+        vec![7, 8, 10, 11, 12, 13, 14, 15, 16]
     );
     let version_10_tree = migrator
         .client()

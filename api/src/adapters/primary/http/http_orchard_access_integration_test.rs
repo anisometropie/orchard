@@ -123,13 +123,14 @@ async fn owner_reads_and_modifies_only_the_orchard_in_the_route() {
 }
 
 #[tokio::test]
-async fn rotating_share_links_are_read_only_and_revoke_the_previous_link() {
+async fn view_and_watering_links_rotate_independently_and_cannot_edit_trees() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
     let client = Client::new();
     let cookie = login_cookie(&client, server.url()).await;
     let first_token = create_share_token(&client, server.url(), &cookie).await;
+    let watering_token = create_watering_share_token(&client, server.url(), &cookie).await;
 
     assert_eq!(
         client
@@ -152,6 +153,17 @@ async fn rotating_share_links_are_read_only_and_revoke_the_previous_link() {
             .status(),
         StatusCode::FORBIDDEN
     );
+    assert_eq!(
+        client
+            .patch(format!("{}/orchards/7/trees/1", server.url()))
+            .header("x-orchard-share-token", &watering_token)
+            .json(&serde_json::json!({ "is_in_danger": true }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
 
     let second_token = create_share_token(&client, server.url(), &cookie).await;
     assert_ne!(first_token, second_token);
@@ -165,10 +177,20 @@ async fn rotating_share_links_are_read_only_and_revoke_the_previous_link() {
             .status(),
         StatusCode::NOT_FOUND
     );
+    assert_eq!(
+        client
+            .get(format!("{}/orchards/7/trees.geojson", server.url()))
+            .header("x-orchard-share-token", watering_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
 }
 
 #[tokio::test]
-async fn shared_access_includes_only_the_orchards_map_and_aerial_image() {
+async fn shared_access_includes_the_orchards_map_and_aerial_image() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
@@ -201,17 +223,18 @@ async fn shared_access_includes_only_the_orchards_map_and_aerial_image() {
 }
 
 #[tokio::test]
-async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
+async fn only_a_watering_link_can_water_and_only_the_owner_can_order_a_row() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
     let client = Client::new();
     let cookie = login_cookie(&client, server.url()).await;
-    let token = create_share_token(&client, server.url(), &cookie).await;
+    let view_token = create_share_token(&client, server.url(), &cookie).await;
+    let watering_token = create_watering_share_token(&client, server.url(), &cookie).await;
 
     let shared_order = client
         .put(format!("{}/orchards/7/row-order", server.url()))
-        .header("x-orchard-share-token", &token)
+        .header("x-orchard-share-token", &watering_token)
         .json(&serde_json::json!({
             "row_name": "North",
             "order": { "method": "east_to_west" }
@@ -223,7 +246,7 @@ async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
     assert_eq!(
         client
             .post(format!("{}/orchards/7/watering-runs", server.url()))
-            .header("x-orchard-share-token", &token)
+            .header("x-orchard-share-token", &view_token)
             .json(&serde_json::json!({ "row_name": "North" }))
             .send()
             .await
@@ -233,13 +256,24 @@ async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
     );
     assert_eq!(
         client
-            .get(format!("{}/orchards/7/watering-run", server.url()))
-            .header("x-orchard-share-token", &token)
+            .post(format!("{}/orchards/7/watering-runs", server.url()))
+            .json(&serde_json::json!({ "row_name": "North" }))
             .send()
             .await
             .unwrap()
             .status(),
-        StatusCode::FORBIDDEN
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .post(format!("{}/orchards/8/watering-runs", server.url()))
+            .header("x-orchard-share-token", &watering_token)
+            .json(&serde_json::json!({ "row_name": "North" }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
     );
 
     let ordered = client
@@ -260,7 +294,7 @@ async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
 
     let started = client
         .post(format!("{}/orchards/7/watering-runs", server.url()))
-        .header(header::COOKIE, &cookie)
+        .header("x-orchard-share-token", &watering_token)
         .json(&serde_json::json!({ "row_name": "North" }))
         .send()
         .await
@@ -271,7 +305,7 @@ async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
 
     let restored = client
         .get(format!("{}/orchards/7/watering-run", server.url()))
-        .header(header::COOKIE, &cookie)
+        .header("x-orchard-share-token", &watering_token)
         .send()
         .await
         .unwrap();
@@ -286,7 +320,7 @@ async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
             "{}/orchards/7/watering-runs/1/watered",
             server.url()
         ))
-        .header(header::COOKIE, &cookie)
+        .header("x-orchard-share-token", &watering_token)
         .json(&serde_json::json!({ "tree_id": 1 }))
         .send()
         .await
@@ -299,7 +333,7 @@ async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
     assert_eq!(
         client
             .get(format!("{}/orchards/7/watering-run", server.url()))
-            .header(header::COOKIE, &cookie)
+            .header("x-orchard-share-token", &watering_token)
             .send()
             .await
             .unwrap()
@@ -320,7 +354,7 @@ async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
     );
     let danger_run = client
         .post(format!("{}/orchards/7/watering-runs", server.url()))
-        .header(header::COOKIE, cookie)
+        .header("x-orchard-share-token", watering_token)
         .json(&serde_json::json!({
             "target": "danger",
             "water_source": { "longitude": 5.01, "latitude": 45.03 }
@@ -360,6 +394,21 @@ async fn login_cookie(client: &Client, server_url: &str) -> String {
 async fn create_share_token(client: &Client, server_url: &str, cookie: &str) -> String {
     client
         .post(format!("{server_url}/orchards/7/share"))
+        .header(header::COOKIE, cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["share_token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn create_watering_share_token(client: &Client, server_url: &str, cookie: &str) -> String {
+    client
+        .post(format!("{server_url}/orchards/7/share/watering"))
         .header(header::COOKIE, cookie)
         .send()
         .await

@@ -1,6 +1,17 @@
 const EMPTY_ACCESS = Object.freeze({ mode: "empty", orchardId: null });
 
 export function resolveOrchardAccess(hash, session) {
+  const watering = /^#\/orchards\/(\d+)\/share\/watering\/([^/]+)$/.exec(
+    hash || "",
+  );
+  if (watering) {
+    return {
+      mode: "watering",
+      orchardId: Number(watering[1]),
+      shareToken: decodeFragmentPart(watering[2]),
+    };
+  }
+
   const shared = /^#\/orchards\/(\d+)\/share\/([^/]+)$/.exec(hash || "");
   if (shared) {
     return {
@@ -21,7 +32,11 @@ export function resolveOrchardAccess(hash, session) {
 }
 
 export function hasOpenOrchard(access) {
-  return ["editable", "read-only"].includes(access.mode);
+  return ["editable", "read-only", "watering"].includes(access.mode);
+}
+
+export function canWaterOrchard(access) {
+  return ["editable", "watering"].includes(access.mode);
 }
 
 export function orchardResourceUrl(access, resource) {
@@ -30,15 +45,21 @@ export function orchardResourceUrl(access, resource) {
 }
 
 export function accessHeaders(access) {
-  return access.mode === "read-only"
+  return ["read-only", "watering"].includes(access.mode)
     ? { "x-orchard-share-token": access.shareToken }
     : {};
 }
 
-export function sharedOrchardUrl(origin, orchardId, shareToken) {
+export function sharedOrchardUrl(
+  origin,
+  orchardId,
+  shareToken,
+  permission = "view",
+) {
+  const permissionPath = permission === "watering" ? "/watering" : "";
   return `${origin.replace(/\/$/, "")}/#/orchards/${encodeURIComponent(
     orchardId,
-  )}/share/${encodeURIComponent(shareToken)}`;
+  )}/share${permissionPath}/${encodeURIComponent(shareToken)}`;
 }
 
 function decodeFragmentPart(value) {
