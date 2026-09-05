@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  adaptiveWateringWideZoom,
   appendManualTree,
   defaultWaterSource,
   dangerWateringNumberGeoJson,
@@ -10,9 +11,11 @@ import {
   dangerTreeCount,
   orchardRows,
   treeIdsInRow,
+  wateringRouteWindow,
   wateringStartRequest,
   waterSourceGeoJson,
   wateringTargetGeoJson,
+  wateringWideCenter,
 } from "./watering.mjs";
 
 const feature = (id, rowName, rowRank, isAlive = true) => ({
@@ -121,6 +124,32 @@ test("default the water source a few metres north of Ronde de Bordeaux", () => {
   ]);
 });
 
+test("center the wide watering view closer to the selected source", () => {
+  const source = { longitude: -73.5, latitude: 12.25 };
+  const tree = { longitude: -73.4727, latitude: 12.3178 };
+
+  assert.deepEqual(wateringWideCenter(source, tree), [-73.4909, 12.2726]);
+  assert.deepEqual(wateringWideCenter(null, tree), [-73.4727, 12.3178]);
+});
+
+test("keep the fixed wide zoom nearby and scale it with distance beyond the threshold", () => {
+  const source = { longitude: -73.5, latitude: 12.25 };
+  const zoomFor = (longitude) => adaptiveWateringWideZoom({
+    baseZoom: 20,
+    minimumZoom: 10,
+    source,
+    tree: { longitude, latitude: 12.25 },
+    usableWidth: 400,
+    usableHeight: 800,
+  });
+
+  assert.equal(zoomFor(-73.499909), 20);
+  const firstFarZoom = zoomFor(-73.499636);
+  const twiceAsFarZoom = zoomFor(-73.499272);
+  assert.ok(firstFarZoom < 20);
+  assert.ok(Math.abs(twiceAsFarZoom - (firstFarZoom - 1)) < 1e-6);
+});
+
 test("draw every two-can danger trip from the source and back", () => {
   const source = { longitude: -73.5, latitude: 12.25 };
   const route = [
@@ -159,6 +188,81 @@ test("draw every two-can danger trip from the source and back", () => {
       },
     ],
   });
+});
+
+test("show four upcoming mobile route steps without losing trip boundaries or numbers", () => {
+  const source = { longitude: -73.5, latitude: 12.25 };
+  const route = [1, 2, 3, 4, 5, 6].map((id) => ({
+    id,
+    longitude: -73.5 + 0.91 * id / 100,
+    latitude: 12.25 + 1.13 * id / 100,
+  }));
+  const window = wateringRouteWindow(route, 2, 4);
+
+  assert.equal(window.startIndex, 1);
+  assert.deepEqual(window.trees.map(({ id }) => id), [2, 3, 4, 5]);
+  assert.deepEqual(
+    dangerWateringNumberGeoJson(window.trees, 2, window.startIndex).features.map(
+      ({ properties }) => ({
+        number: properties.route_number,
+        current: properties.is_current,
+      }),
+    ),
+    [
+      { number: 2, current: true },
+      { number: 3, current: false },
+      { number: 4, current: false },
+      { number: 5, current: false },
+    ],
+  );
+  assert.deepEqual(
+    dangerWateringPathGeoJson(
+      source,
+      window.trees,
+      window.startIndex,
+      route.length,
+    ),
+    {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { trip_parity: "even" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [-73.4818, 12.2726],
+              [-73.5, 12.25],
+            ],
+          },
+        },
+        {
+          type: "Feature",
+          properties: { trip_parity: "odd" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [-73.5, 12.25],
+              [-73.4727, 12.2839],
+              [-73.4636, 12.2952],
+              [-73.5, 12.25],
+            ],
+          },
+        },
+        {
+          type: "Feature",
+          properties: { trip_parity: "even" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [-73.5, 12.25],
+              [-73.4545, 12.3065],
+            ],
+          },
+        },
+      ],
+    },
+  );
 });
 
 test("number every danger tree in route order and mark the current tree", () => {
