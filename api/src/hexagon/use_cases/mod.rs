@@ -1,6 +1,7 @@
 pub mod authorize_orchard_owner;
 pub mod authorize_orchard_reader;
 pub mod authorize_orchard_waterer;
+pub mod cancel_watering_run;
 pub mod change_tree_condition;
 pub mod create_tree;
 pub mod import_legacy_orchard;

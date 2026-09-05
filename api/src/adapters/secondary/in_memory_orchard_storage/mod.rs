@@ -72,6 +72,7 @@ struct InMemoryOrchardTransaction {
     staged_watering_runs: Vec<WateringRun>,
     staged_watered_trees: Vec<(WateringRunId, TreeId)>,
     staged_completed_watering_runs: Vec<WateringRunId>,
+    staged_deleted_watering_runs: Vec<WateringRunId>,
 }
 
 #[derive(Default)]
@@ -615,6 +616,9 @@ impl OrchardStorage for InMemoryOrchardStorage {
                         run.completed = true;
                     }
                 }
+                committed_orchard
+                    .watering_runs
+                    .retain(|run| !transaction.staged_deleted_watering_runs.contains(&run.id));
                 Ok(value)
             }
         }
@@ -1113,6 +1117,28 @@ impl OrchardStorage for InMemoryOrchardStorage {
             .push(watering_run_id);
         Ok(())
     }
+
+    fn delete_watering_run(
+        &mut self,
+        watering_run_id: WateringRunId,
+    ) -> Result<(), OrchardStorageError> {
+        if !self
+            .orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .any(|run| run.id == watering_run_id)
+        {
+            return Err(OrchardStorageError::WateringRunCouldNotBeDeleted);
+        }
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_deleted_watering_runs
+            .push(watering_run_id);
+        Ok(())
+    }
 }
 
 fn has_legacy_feature_id(orchard: &InMemoryOrchard, legacy_feature_id: u32) -> bool {
@@ -1193,6 +1219,15 @@ impl InMemoryOrchardObserver {
             .find(|run| run.orchard_id == orchard_id && !run.completed)
             .map(|run| run.ordered_tree_ids.clone())
             .unwrap_or_default()
+    }
+
+    pub fn watering_run_exists(&self, watering_run_id: WateringRunId) -> bool {
+        self.orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .any(|run| run.id == watering_run_id)
     }
 
     pub fn harvest_windows(&self, owner: HarvestScheduleOwner) -> Vec<AnnualHarvestWindow> {

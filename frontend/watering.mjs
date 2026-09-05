@@ -82,6 +82,10 @@ export function wateringStartRequest(target, rowName, waterSource) {
     : { row_name: rowName };
 }
 
+export function wateringCancellationNeedsConfirmation(progress) {
+  return Number(progress?.watered_tree_count) > 0;
+}
+
 export function waterSourceGeoJson(source) {
   return {
     type: "FeatureCollection",

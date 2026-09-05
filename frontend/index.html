@@ -222,6 +222,7 @@
       #watering-tree-banner[hidden],
       #watering-row-field[hidden],
       #watering-source-controls[hidden],
+      #watering-cancel[hidden],
       .manual-order-actions[hidden] {
         display: none;
       }
@@ -277,6 +278,10 @@
         background: white;
         border-color: #777;
         color: #333;
+      }
+      .workflow-panel button.danger {
+        background: #b42318;
+        border-color: #8f1d14;
       }
       .workflow-panel button:disabled {
         cursor: not-allowed;
@@ -1202,6 +1207,7 @@
         </label>
       </div>
       <button id="watering-start" type="button">Start</button>
+      <button id="watering-cancel" class="danger" type="button" hidden>Cancel run</button>
       <p id="watering-menu-status" class="workflow-status" hidden></p>
       <p id="watering-error" class="workflow-error" role="alert" hidden></p>
     </section>
@@ -1512,12 +1518,13 @@
         defaultWaterSource,
         orchardRows,
         treeIdsInRow,
+        wateringCancellationNeedsConfirmation,
         wateringRouteWindow,
         wateringStartRequest,
         wateringTargetGeoJson,
         wateringWideCenter,
         waterSourceGeoJson,
-      } from "./watering.mjs?v=9";
+      } from "./watering.mjs?v=10";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -1747,6 +1754,7 @@
       const wateringPlaceSource = document.getElementById("watering-place-source");
       const wateringShowRoute = document.getElementById("watering-show-route");
       const wateringStart = document.getElementById("watering-start");
+      const wateringCancel = document.getElementById("watering-cancel");
       const wateringMenuStatus = document.getElementById("watering-menu-status");
       const wateringError = document.getElementById("watering-error");
       const rowOrderToggle = document.getElementById("row-order-toggle");
@@ -2512,6 +2520,8 @@
           (watersDangerTrees
             ? currentDangerTreeCount === 0 || !wateringSource
             : !wateringRow.value);
+        wateringStart.hidden = wateringProgress != null;
+        wateringCancel.hidden = wateringProgress == null;
         rowOrderAutomatic.disabled = rows.length === 0;
         rowOrderManual.disabled = rows.length === 0;
       }
@@ -2803,6 +2813,8 @@
         }
         wateringTreeBanner.hidden = true;
         wateringZoomControls.hidden = true;
+        wateringStart.hidden = false;
+        wateringCancel.hidden = true;
         wateringTreeName.textContent = "";
         wateringTreeProgress.textContent = "";
         wateringSourceStatus.textContent = "";
@@ -2989,6 +3001,50 @@
           setWorkflowPanel(wateringPanel);
         } finally {
           wateringDone.disabled = false;
+        }
+      }
+
+      async function cancelWateringRun() {
+        const activeRun = wateringProgress;
+        if (!activeRun) return;
+        if (
+          wateringCancellationNeedsConfirmation(activeRun) &&
+          !window.confirm(
+            "Cancel this watering run? This permanently deletes the entire run and all recorded watering progress. This cannot be undone.",
+          )
+        ) return;
+        wateringCancel.disabled = true;
+        wateringError.hidden = true;
+        try {
+          const response = await fetch(
+            orchardResourceUrl(
+              currentAccess,
+              `watering-runs/${encodeURIComponent(activeRun.run_id)}`,
+            ),
+            {
+              method: "DELETE",
+              headers: accessHeaders(currentAccess),
+            },
+          );
+          if (response.status === 404) {
+            throw new Error("This watering run no longer exists. Reload the page.");
+          }
+          if (response.status === 409) {
+            throw new Error("This watering run has already finished.");
+          }
+          if (!response.ok) {
+            throw new Error("Could not cancel this watering run. Please try again.");
+          }
+          resetCompletedWateringPresentation();
+          refreshWorkflowRows();
+          wateringMenuStatus.textContent = "Watering run cancelled.";
+          wateringMenuStatus.hidden = false;
+        } catch (error) {
+          wateringError.textContent = error.message;
+          wateringError.hidden = false;
+          setWorkflowPanel(wateringPanel);
+        } finally {
+          wateringCancel.disabled = false;
         }
       }
 
@@ -4131,6 +4187,7 @@
       wateringPlaceSource.addEventListener("click", beginWaterSourcePlacement);
       wateringShowRoute.addEventListener("change", updateWaterSourcePin);
       wateringStart.addEventListener("click", startWatering);
+      wateringCancel.addEventListener("click", cancelWateringRun);
       wateringDone.addEventListener("click", markCurrentTreeWatered);
       wateringZoomClose.addEventListener("click", () => {
         applyWateringCameraMode("close");

@@ -373,6 +373,70 @@ async fn only_a_watering_link_can_water_and_only_the_owner_can_order_a_row() {
     assert_eq!(danger_progress["next_tree"]["id"], 1);
 }
 
+#[tokio::test]
+async fn a_watering_link_can_cancel_an_active_run_but_a_view_link_cannot() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let view_token = create_share_token(&client, server.url(), &cookie).await;
+    let watering_token = create_watering_share_token(&client, server.url(), &cookie).await;
+    client
+        .put(format!("{}/orchards/7/row-order", server.url()))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "row_name": "North",
+            "order": { "method": "east_to_west" }
+        }))
+        .send()
+        .await
+        .unwrap();
+    let started = client
+        .post(format!("{}/orchards/7/watering-runs", server.url()))
+        .header("x-orchard-share-token", &watering_token)
+        .json(&serde_json::json!({ "row_name": "North" }))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    let run_id = started["run_id"].as_u64().unwrap();
+    let cancel_url = format!("{}/orchards/7/watering-runs/{run_id}", server.url());
+
+    assert_eq!(
+        client
+            .delete(&cancel_url)
+            .header("x-orchard-share-token", view_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .delete(&cancel_url)
+            .header("x-orchard-share-token", &watering_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        client
+            .get(format!("{}/orchards/7/watering-run", server.url()))
+            .header("x-orchard-share-token", watering_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
 async fn login_cookie(client: &Client, server_url: &str) -> String {
     client
         .post(format!("{server_url}/session"))

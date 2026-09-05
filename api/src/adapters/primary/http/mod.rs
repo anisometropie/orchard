@@ -9,7 +9,7 @@ use axum::{
     extract::{Path, State, rejection::JsonRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, patch, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -32,6 +32,9 @@ use crate::hexagon::use_cases::authorize_orchard_reader::{
 use crate::hexagon::use_cases::authorize_orchard_waterer::{
     OrchardWateringAccessError, OrchardWateringAccessRequested, OrchardWateringCredential,
     authorize_orchard_waterer,
+};
+use crate::hexagon::use_cases::cancel_watering_run::{
+    WateringRunCancellationError, WateringRunCancellationRequested, cancel_watering_run,
 };
 use crate::hexagon::use_cases::change_tree_condition::{
     OrchardTreeConditionChanged, TreeConditionChangeError, change_orchard_tree_condition,
@@ -138,6 +141,10 @@ where
         .route(
             "/orchards/{orchard_id}/watering-runs",
             post(start_watering_run_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/watering-runs/{watering_run_id}",
+            delete(cancel_watering_run_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/watering-runs/{watering_run_id}/watered",
@@ -542,6 +549,39 @@ where
                 StatusCode::CONFLICT
             }
             TreeWateredError::TreeCouldNotBeRecorded => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn cancel_watering_run_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, watering_run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_watering_credential(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_watering_access(&mut *storage, orchard_id, credential)?;
+        cancel_watering_run(
+            WateringRunCancellationRequested {
+                orchard_id,
+                watering_run_id: WateringRunId(watering_run_id),
+            },
+            &mut *storage,
+        )
+        .map(|()| StatusCode::NO_CONTENT)
+        .map_err(|error| match error {
+            WateringRunCancellationError::WateringRunNotFound => StatusCode::NOT_FOUND,
+            WateringRunCancellationError::WateringRunAlreadyCompleted => StatusCode::CONFLICT,
+            WateringRunCancellationError::WateringRunCouldNotBeCancelled => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         })
     })
     .await
