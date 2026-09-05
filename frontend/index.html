@@ -198,6 +198,7 @@
       .workflow-panel[hidden],
       #watering-tree-banner[hidden],
       #watering-row-field[hidden],
+      #watering-source-controls[hidden],
       .manual-order-actions[hidden] {
         display: none;
       }
@@ -222,6 +223,12 @@
         display: block;
         font-weight: 600;
         margin-top: 10px;
+      }
+      .workflow-panel label.workflow-checkbox {
+        align-items: center;
+        display: flex;
+        font-weight: 500;
+        gap: 7px;
       }
       .workflow-panel select,
       .workflow-panel button:not(.workflow-panel-close) {
@@ -808,6 +815,14 @@
         <select id="watering-row"></select>
       </label>
       <p id="watering-help" class="workflow-help">Trees are visited in their saved order. Dead trees are skipped.</p>
+      <div id="watering-source-controls" hidden>
+        <p id="watering-source-status" class="workflow-status"></p>
+        <button id="watering-place-source" class="secondary" type="button">Place source on map</button>
+        <label class="workflow-checkbox">
+          <input id="watering-show-route" type="checkbox" checked />
+          Show complete route and numbers
+        </label>
+      </div>
       <button id="watering-start" type="button">Start</button>
       <p id="watering-menu-status" class="workflow-status" hidden></p>
       <p id="watering-error" class="workflow-error" role="alert" hidden></p>
@@ -1070,12 +1085,17 @@
       } from "./orchard-access.mjs?v=2";
       import {
         appendManualTree,
+        dangerWateringNumberGeoJson,
+        dangerWateringNumberMarker,
+        dangerWateringPathGeoJson,
         dangerTreeCount,
+        defaultWaterSource,
         orchardRows,
         treeIdsInRow,
         wateringStartRequest,
         wateringTargetGeoJson,
-      } from "./watering.mjs?v=3";
+        waterSourceGeoJson,
+      } from "./watering.mjs?v=6";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -1215,6 +1235,9 @@
       let manualOrder = null;
       let manualOrderMarkers = [];
       let wateringProgress = null;
+      let wateringSource = null;
+      let wateringRoute = [];
+      let placingWaterSource = false;
       const inventoryToggle = document.getElementById("inventory-toggle");
       const inventoryPanel = document.getElementById("inventory-panel");
       const inventoryClose = document.getElementById("inventory-close");
@@ -1276,6 +1299,10 @@
       const wateringRowField = document.getElementById("watering-row-field");
       const wateringRow = document.getElementById("watering-row");
       const wateringHelp = document.getElementById("watering-help");
+      const wateringSourceControls = document.getElementById("watering-source-controls");
+      const wateringSourceStatus = document.getElementById("watering-source-status");
+      const wateringPlaceSource = document.getElementById("watering-place-source");
+      const wateringShowRoute = document.getElementById("watering-show-route");
       const wateringStart = document.getElementById("watering-start");
       const wateringMenuStatus = document.getElementById("watering-menu-status");
       const wateringError = document.getElementById("watering-error");
@@ -1520,6 +1547,50 @@
         });
       }
 
+      function createWaterSourcePinImage() {
+        return createMapPinImage("#255f9c", (context) => {
+          context.fillStyle = "#164979";
+          context.strokeStyle = "#164979";
+          context.lineWidth = 1.8;
+          context.beginPath();
+          context.ellipse(22, 15, 8, 2.5, 0, 0, Math.PI * 2);
+          context.fill();
+          context.fillRect(14, 15, 16, 11);
+          context.beginPath();
+          context.ellipse(22, 26, 8, 2.5, 0, 0, Math.PI * 2);
+          context.fill();
+          context.fillStyle = "#62c5e8";
+          context.beginPath();
+          context.moveTo(22, 17);
+          context.bezierCurveTo(18.5, 21, 19.5, 24, 22, 24);
+          context.bezierCurveTo(24.5, 24, 25.5, 21, 22, 17);
+          context.fill();
+        });
+      }
+
+      function createRouteNumberImage(number, fillColor) {
+        const pixelRatio = 2;
+        const size = 26;
+        const canvas = document.createElement("canvas");
+        canvas.width = size * pixelRatio;
+        canvas.height = size * pixelRatio;
+        const context = canvas.getContext("2d");
+        context.scale(pixelRatio, pixelRatio);
+        context.beginPath();
+        context.arc(size / 2, size / 2, size / 2 - 1.5, 0, Math.PI * 2);
+        context.fillStyle = fillColor;
+        context.fill();
+        context.lineWidth = 2;
+        context.strokeStyle = "rgba(255, 255, 255, 0.96)";
+        context.stroke();
+        context.fillStyle = "white";
+        context.font = `700 ${number >= 100 ? 10 : 12}px sans-serif`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(String(number), size / 2, size / 2 + 0.5);
+        return context.getImageData(0, 0, canvas.width, canvas.height);
+      }
+
       function createDeadTreeCrossImage() {
         const size = 18;
         const pixels = new Uint8Array(size * size * 4);
@@ -1689,6 +1760,10 @@
       }
 
       function setWorkflowPanel(openPanel) {
+        if (openPanel !== wateringPanel && placingWaterSource) {
+          placingWaterSource = false;
+          map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
+        }
         wateringPanel.hidden = openPanel !== wateringPanel;
         rowOrderPanel.hidden = openPanel !== rowOrderPanel;
         mapFilterPanel.hidden = openPanel != null || !hasOpenOrchard(currentAccess);
@@ -1719,6 +1794,66 @@
         if (rows.some((row) => row.name === previous)) select.value = previous;
       }
 
+      function updateWaterSourcePin() {
+        const visibleRoute = wateringShowRoute.checked ? wateringRoute : [];
+        const currentTreeId = wateringProgress?.next_tree?.id;
+        visibleRoute.forEach((tree, index) => {
+          const marker = dangerWateringNumberMarker(index);
+          if (!map.hasImage(marker.imageName)) {
+            map.addImage(
+              marker.imageName,
+              createRouteNumberImage(index + 1, marker.fillColor),
+              { pixelRatio: 2 },
+            );
+          }
+          if (
+            currentTreeId != null &&
+            String(tree.id) === String(currentTreeId)
+          ) {
+            const currentMarker = dangerWateringNumberMarker(index, true);
+            if (!map.hasImage(currentMarker.imageName)) {
+              map.addImage(
+                currentMarker.imageName,
+                createRouteNumberImage(index + 1, currentMarker.fillColor),
+                { pixelRatio: 2 },
+              );
+            }
+          }
+        });
+        map
+          .getSource("watering-source")
+          ?.setData(waterSourceGeoJson(wateringSource));
+        map
+          .getSource("watering-route")
+          ?.setData(dangerWateringPathGeoJson(wateringSource, visibleRoute));
+        map
+          .getSource("watering-route-numbers")
+          ?.setData(dangerWateringNumberGeoJson(visibleRoute, currentTreeId));
+        if (map.getLayer("watering-target-pin")) {
+          map.setLayoutProperty(
+            "watering-target-pin",
+            "visibility",
+            visibleRoute.length > 0 ? "none" : "visible",
+          );
+        }
+      }
+
+      function beginWaterSourcePlacement() {
+        if (wateringProgress) return;
+        placingWaterSource = true;
+        wateringSourceStatus.textContent = "Click the map to place the water source.";
+        map.getCanvas().style.cursor = "crosshair";
+      }
+
+      function placeWaterSource(longitude, latitude) {
+        wateringSource = { longitude, latitude };
+        placingWaterSource = false;
+        wateringSourceStatus.textContent = "Water source placed on the map.";
+        map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
+        updateWaterSourcePin();
+        refreshWorkflowRows();
+      }
+
       function refreshWorkflowRows() {
         const rows = orchardRows(orchardFeatures);
         replaceRowOptions(wateringRow, rows.filter((row) => row.livingTreeCount > 0));
@@ -1728,13 +1863,29 @@
           `Danger trees · ${currentDangerTreeCount}`;
         const watersDangerTrees = wateringTargetScope.value === "danger";
         wateringRowField.hidden = watersDangerTrees;
+        wateringSourceControls.hidden = !watersDangerTrees;
+        wateringTargetScope.disabled = wateringProgress != null;
+        wateringPlaceSource.disabled = wateringProgress != null;
+        if (watersDangerTrees && !wateringSource) {
+          wateringSource = defaultWaterSource(orchardFeatures);
+          wateringSourceStatus.textContent = wateringSource
+            ? "Default source: north of Figuier ‘Ronde de Bordeaux’."
+            : "Place the water source before starting.";
+        }
+        if (!watersDangerTrees && !wateringProgress) {
+          placingWaterSource = false;
+          wateringSource = null;
+          wateringRoute = [];
+          map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
+        }
+        updateWaterSourcePin();
         wateringHelp.textContent = watersDangerTrees
-          ? "Starts at the northernmost living danger tree, then follows the shortest route through the current danger trees."
+          ? "Blue and purple loops show every source → two trees → source trip. Done always advances to the next tree."
           : "Trees are visited in their saved order. Dead trees are skipped.";
         wateringStart.disabled =
           wateringProgress != null ||
           (watersDangerTrees
-            ? currentDangerTreeCount === 0
+            ? currentDangerTreeCount === 0 || !wateringSource
             : !wateringRow.value);
         rowOrderAutomatic.disabled = rows.length === 0;
         rowOrderManual.disabled = rows.length === 0;
@@ -1882,6 +2033,22 @@
       }
 
       function showWateringProgress(progress) {
+        wateringRoute = progress?.target === "danger" ? progress.route || [] : [];
+        if (progress?.target === "danger") {
+          wateringTargetScope.value = "danger";
+          wateringSource =
+            progress.water_source ||
+            wateringSource ||
+            defaultWaterSource(orchardFeatures);
+          wateringSourceStatus.textContent = progress.next_tree
+            ? "Water source for this run."
+            : "Water source from the completed run.";
+        } else if (progress?.target === "row") {
+          wateringTargetScope.value = "row";
+          wateringSource = null;
+        }
+        placingWaterSource = false;
+        map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
         wateringProgress = progress?.next_tree ? progress : null;
         refreshWorkflowRows();
         const targetLabel = progress?.target_label || progress?.row_name || "Watering";
@@ -1929,9 +2096,16 @@
 
       async function restoreActiveWateringRun() {
         wateringProgress = null;
+        wateringRoute = [];
         map
           .getSource("watering-target")
           ?.setData(wateringTargetGeoJson(null));
+        map
+          .getSource("watering-route")
+          ?.setData(dangerWateringPathGeoJson(null, []));
+        map
+          .getSource("watering-route-numbers")
+          ?.setData(dangerWateringNumberGeoJson([]));
         wateringTreeBanner.hidden = true;
         if (!isEditable()) return;
         const response = await fetch(
@@ -1949,7 +2123,11 @@
 
       async function startWatering() {
         const target = wateringTargetScope.value;
-        if ((target === "row" && !wateringRow.value) || wateringProgress) return;
+        if (
+          (target === "row" && !wateringRow.value) ||
+          (target === "danger" && !wateringSource) ||
+          wateringProgress
+        ) return;
         wateringError.hidden = true;
         wateringStart.disabled = true;
         try {
@@ -1961,7 +2139,9 @@
                 "content-type": "application/json",
                 ...accessHeaders(currentAccess),
               },
-              body: JSON.stringify(wateringStartRequest(target, wateringRow.value)),
+              body: JSON.stringify(
+                wateringStartRequest(target, wateringRow.value, wateringSource),
+              ),
             },
           );
           if (response.status === 409) {
@@ -2428,8 +2608,9 @@
       }
 
       map.on("mousemove", "trees", (event) => {
-        map.getCanvas().style.cursor = manualOrder ? "crosshair" : "pointer";
-        if (manualOrder) {
+        map.getCanvas().style.cursor =
+          manualOrder || placingWaterSource ? "crosshair" : "pointer";
+        if (manualOrder || placingWaterSource) {
           treeTooltip?.remove();
           treeTooltip = undefined;
           treeTooltipTreeId = undefined;
@@ -2453,13 +2634,15 @@
       });
 
       map.on("mouseleave", "trees", () => {
-        map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
+        map.getCanvas().style.cursor =
+          manualOrder || placingWaterSource ? "crosshair" : "";
         treeTooltip?.remove();
         treeTooltip = undefined;
         treeTooltipTreeId = undefined;
       });
 
       map.on("click", "trees", (event) => {
+        if (placingWaterSource) return;
         const feature = event.features[0];
         if (selectManualOrderTree(feature)) return;
         treeTooltip?.remove();
@@ -2487,6 +2670,11 @@
         });
       });
 
+      map.on("click", (event) => {
+        if (!placingWaterSource) return;
+        placeWaterSource(event.lngLat.lng, event.lngLat.lat);
+      });
+
       map.on("load", () => {
         Object.entries(HARVEST_PIN_ICONS).forEach(([part, symbol]) => {
           map.addImage(`harvest-${part}`, createHarvestPinImage(symbol), {
@@ -2495,6 +2683,9 @@
         });
         map.addImage("danger-tree", createDangerPinImage(), { pixelRatio: 2 });
         map.addImage("watering-tree", createWateringPinImage(), {
+          pixelRatio: 2,
+        });
+        map.addImage("watering-source", createWaterSourcePinImage(), {
           pixelRatio: 2,
         });
         map.addImage("dead-tree-cross", createDeadTreeCrossImage());
@@ -2524,6 +2715,46 @@
           type: "geojson",
           data: wateringTargetGeoJson(null),
         });
+        map.addSource("watering-source", {
+          type: "geojson",
+          data: waterSourceGeoJson(null),
+        });
+        map.addSource("watering-route", {
+          type: "geojson",
+          data: dangerWateringPathGeoJson(null, []),
+        });
+        map.addSource("watering-route-numbers", {
+          type: "geojson",
+          data: dangerWateringNumberGeoJson([]),
+        });
+        map.addLayer({
+          id: "watering-route-line",
+          type: "line",
+          source: "watering-route",
+          paint: {
+            "line-color": [
+              "match",
+              ["get", "trip_parity"],
+              "even",
+              "#1677b8",
+              "#8b3fb0",
+            ],
+            "line-opacity": 0.82,
+            "line-width": 2.5,
+          },
+        });
+        map.addLayer({
+          id: "watering-source-pin",
+          type: "symbol",
+          source: "watering-source",
+          layout: {
+            "icon-allow-overlap": true,
+            "icon-anchor": "bottom",
+            "icon-ignore-placement": true,
+            "icon-image": "watering-source",
+            "icon-size": 1.15,
+          },
+        });
         map.addLayer({
           id: "watering-target-pin",
           type: "symbol",
@@ -2534,6 +2765,17 @@
             "icon-ignore-placement": true,
             "icon-image": "watering-tree",
             "icon-size": 1.55,
+          },
+        });
+        map.addLayer({
+          id: "watering-route-number-labels",
+          type: "symbol",
+          source: "watering-route-numbers",
+          layout: {
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
+            "icon-image": ["get", "route_number_image"],
+            "icon-size": ["get", "route_number_scale"],
           },
         });
 
@@ -2598,9 +2840,22 @@
         cancelManualRowOrder();
         setWorkflowPanel(null);
         wateringProgress = null;
+        wateringSource = null;
+        wateringRoute = [];
+        placingWaterSource = false;
+        map.getCanvas().style.cursor = "";
         map
           .getSource("watering-target")
           ?.setData(wateringTargetGeoJson(null));
+        map
+          .getSource("watering-source")
+          ?.setData(waterSourceGeoJson(null));
+        map
+          .getSource("watering-route")
+          ?.setData(dangerWateringPathGeoJson(null, []));
+        map
+          .getSource("watering-route-numbers")
+          ?.setData(dangerWateringNumberGeoJson([]));
         wateringTreeBanner.hidden = true;
         wateringMenuStatus.hidden = true;
         wateringError.hidden = true;
@@ -2999,6 +3254,8 @@
       });
       wateringClose.addEventListener("click", () => setWorkflowPanel(null));
       wateringTargetScope.addEventListener("change", refreshWorkflowRows);
+      wateringPlaceSource.addEventListener("click", beginWaterSourcePlacement);
+      wateringShowRoute.addEventListener("change", updateWaterSourcePin);
       wateringStart.addEventListener("click", startWatering);
       wateringDone.addEventListener("click", markCurrentTreeWatered);
       rowOrderToggle.addEventListener("click", () => {

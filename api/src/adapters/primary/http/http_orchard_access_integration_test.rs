@@ -321,7 +321,10 @@ async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
     let danger_run = client
         .post(format!("{}/orchards/7/watering-runs", server.url()))
         .header(header::COOKIE, cookie)
-        .json(&serde_json::json!({ "target": "danger" }))
+        .json(&serde_json::json!({
+            "target": "danger",
+            "water_source": { "longitude": -73.4909, "latitude": 12.2839 }
+        }))
         .send()
         .await
         .unwrap();
@@ -330,6 +333,9 @@ async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
     assert_eq!(danger_progress["target"], "danger");
     assert_eq!(danger_progress["target_label"], "Danger trees");
     assert!(danger_progress["row_name"].is_null());
+    assert_eq!(danger_progress["water_source"]["longitude"], -73.4909);
+    assert_eq!(danger_progress["water_source"]["latitude"], 12.2839);
+    assert_eq!(danger_progress["route"][0]["id"], 1);
     assert_eq!(danger_progress["next_tree"]["id"], 1);
 }
 

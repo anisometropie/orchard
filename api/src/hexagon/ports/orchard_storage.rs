@@ -1,6 +1,7 @@
 use crate::hexagon::models::{
-    AnnualHarvestWindow, HarvestScheduleOwner, OrchardId, OrchardTree, PlantIdentification,
-    PlantIdentityReference, Tree, TreeId, WateringRun, WateringRunId, WateringRunTarget,
+    AnnualHarvestWindow, GeoPoint, HarvestScheduleOwner, OrchardId, OrchardTree,
+    PlantIdentification, PlantIdentityReference, Tree, TreeId, WateringRun, WateringRunId,
+    WateringRunTarget,
 };
 
 #[derive(Debug, PartialEq)]
@@ -88,6 +89,7 @@ pub trait OrchardStorage {
         &mut self,
         orchard_id: OrchardId,
         target: &WateringRunTarget,
+        water_source: Option<GeoPoint>,
         ordered_tree_ids: &[TreeId],
     ) -> Result<WateringRunId, OrchardStorageError>;
     fn mark_watering_tree_watered(

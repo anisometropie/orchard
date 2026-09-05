@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::hexagon::models::{
-    AerialOverlayId, AnnualDate, BotanicalTaxon, HarvestScheduleOwner, HarvestedPart,
+    AerialOverlayId, AnnualDate, BotanicalTaxon, GeoPoint, HarvestScheduleOwner, HarvestedPart,
     InfraspecificRank, MapConfiguration, NamedTaxon, OrchardId, OrchardTree, PlantCultivarId,
     PlantIdentity, PlantIdentityId, Tree, TreeId, WateringRunId, WateringRunTarget,
 };
@@ -358,12 +358,20 @@ where
 struct StartWateringRunRequest {
     row_name: Option<String>,
     target: Option<RequestedWateringTarget>,
+    water_source: Option<RequestedWaterSource>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum RequestedWateringTarget {
     Danger,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestedWaterSource {
+    longitude: f64,
+    latitude: f64,
 }
 
 async fn start_watering_run_handler<U>(
@@ -381,8 +389,8 @@ where
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
         authorize_owner_access(&mut *storage, orchard_id, session_token)?;
-        let progress = match (request.row_name, request.target) {
-            (Some(row_name), None) => start_watering_run(
+        let progress = match (request.row_name, request.target, request.water_source) {
+            (Some(row_name), None, None) => start_watering_run(
                 WateringRunStartRequested {
                     orchard_id,
                     row_name,
@@ -397,17 +405,26 @@ where
                     StatusCode::INTERNAL_SERVER_ERROR
                 }
             })?,
-            (None, Some(RequestedWateringTarget::Danger)) => start_danger_watering_run(
-                DangerWateringRunStartRequested { orchard_id },
-                &mut *storage,
-            )
-            .map_err(|error| match error {
-                DangerWateringRunStartError::NoDangerTrees => StatusCode::NOT_FOUND,
-                DangerWateringRunStartError::AnotherWateringRunIsActive => StatusCode::CONFLICT,
-                DangerWateringRunStartError::WateringRunCouldNotBeStarted => {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            })?,
+            (None, Some(RequestedWateringTarget::Danger), Some(water_source)) => {
+                start_danger_watering_run(
+                    DangerWateringRunStartRequested {
+                        orchard_id,
+                        water_source: GeoPoint {
+                            longitude: water_source.longitude,
+                            latitude: water_source.latitude,
+                        },
+                    },
+                    &mut *storage,
+                )
+                .map_err(|error| match error {
+                    DangerWateringRunStartError::InvalidWaterSource => StatusCode::BAD_REQUEST,
+                    DangerWateringRunStartError::NoDangerTrees => StatusCode::NOT_FOUND,
+                    DangerWateringRunStartError::AnotherWateringRunIsActive => StatusCode::CONFLICT,
+                    DangerWateringRunStartError::WateringRunCouldNotBeStarted => {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                })?
+            }
             _ => return Err(StatusCode::BAD_REQUEST),
         };
         Ok(Json(watering_progress_json(progress)))
@@ -496,15 +513,24 @@ fn watering_progress_json(progress: WateringProgress) -> Value {
         "target": target,
         "target_label": progress.target.label(),
         "row_name": row_name,
+        "water_source": progress.water_source.map(|source| json!({
+            "longitude": source.longitude,
+            "latitude": source.latitude,
+        })),
+        "route": progress.route.into_iter().map(watering_tree_json).collect::<Vec<_>>(),
         "watered_tree_count": progress.watered_tree_count,
         "total_tree_count": progress.total_tree_count,
-        "next_tree": progress.next_tree.map(|tree| json!({
-            "id": tree.id.0,
-            "name": tree.name,
-            "longitude": tree.longitude,
-            "latitude": tree.latitude,
-            "row_rank": tree.row_rank,
-        })),
+        "next_tree": progress.next_tree.map(watering_tree_json),
+    })
+}
+
+fn watering_tree_json(tree: crate::hexagon::use_cases::start_watering_run::WateringTree) -> Value {
+    json!({
+        "id": tree.id.0,
+        "name": tree.name,
+        "longitude": tree.longitude,
+        "latitude": tree.latitude,
+        "row_rank": tree.row_rank,
     })
 }
 
