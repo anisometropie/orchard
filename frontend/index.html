@@ -822,12 +822,14 @@
         harvestWindowSpan,
         summarizeSpecies,
         taxonomyOptions,
-      } from "./orchard-inventory.mjs?v=3";
+        treeTooltipFields,
+      } from "./orchard-inventory.mjs?v=5";
       import {
+        formatHarvestWindows,
         harvestAvailability,
         harvestAvailabilitySummary,
         parseAnnualDate,
-      } from "./harvest-window.mjs?v=2";
+      } from "./harvest-window.mjs?v=4";
       import {
         accessHeaders,
         hasOpenOrchard,
@@ -1155,13 +1157,7 @@
       function createTreeTooltip(properties) {
         const tooltip = document.createElement("div");
 
-        [
-          ["Name", properties.name],
-          ["Latin name", properties.latin_name],
-          ["Date", properties.planted_on],
-        ].forEach(([label, value]) => {
-          if (value == null || value === "") return;
-
+        treeTooltipFields(properties).forEach(([label, value]) => {
           const field = document.createElement("div");
           const labelElement = document.createElement("strong");
           labelElement.textContent = `${label}: `;
@@ -1500,12 +1496,6 @@
           showHarvestEditor(scheduleRow, schedule);
         });
         scheduleRow.replaceChildren(name, count, windows, editButton);
-      }
-
-      function formatHarvestWindows(windows) {
-        return windows.length > 0
-          ? windows.map(({ start, end }) => `${start} → ${end}`).join(" · ")
-          : "Not set";
       }
 
       function showHarvestEditor(

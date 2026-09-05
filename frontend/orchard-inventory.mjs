@@ -1,3 +1,14 @@
+import { formatHarvestWindows } from "./harvest-window.mjs?v=4";
+
+export function treeTooltipFields(properties = {}) {
+  return [
+    ["Name", properties.name],
+    ["Latin name", properties.latin_name],
+    ["Date", properties.planted_on],
+    ["Harvest", formatHarvestWindows(properties.harvest_windows)],
+  ].filter(([, value]) => value != null && value !== "");
+}
+
 export function filterTreeFeatures(
   features,
   { role = "", genus = "", species = "" } = {},

@@ -2,11 +2,30 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  formatHarvestWindows,
   harvestAvailability,
   harvestAvailabilitySummary,
   harvestLayerFilter,
   parseAnnualDate,
 } from "./harvest-window.mjs";
+
+test("format every configured harvest window for display", () => {
+  assert.equal(
+    formatHarvestWindows([
+      { start: "06-10", end: "06-20" },
+      { start: "08-01", end: "09-20" },
+    ]),
+    "06-10 → 06-20 · 08-01 → 09-20",
+  );
+  assert.equal(
+    formatHarvestWindows(
+      '[{"start":"08-01","end":"08-20"}]',
+    ),
+    "08-01 → 08-20",
+  );
+  assert.equal(formatHarvestWindows([]), "Not set");
+  assert.equal(formatHarvestWindows("not-json"), "Not set");
+});
 
 test("parse a valid recurring month and day", () => {
   assert.deepEqual(parseAnnualDate("08-30"), { month: 8, day: 30 });
