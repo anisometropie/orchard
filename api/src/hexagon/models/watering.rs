@@ -24,6 +24,7 @@ pub struct WateringRun {
     pub orchard_id: OrchardId,
     pub target: WateringRunTarget,
     pub water_source: Option<GeoPoint>,
+    pub carry_capacity: Option<u32>,
     pub ordered_tree_ids: Vec<TreeId>,
     pub watered_tree_ids: Vec<TreeId>,
     pub completed: bool,

@@ -255,6 +255,7 @@
         gap: 7px;
       }
       .workflow-panel select,
+      .workflow-panel input[type="number"],
       .workflow-panel button:not(.workflow-panel-close) {
         border: 1px solid #777;
         border-radius: 5px;
@@ -262,7 +263,8 @@
         font: inherit;
         padding: 7px 9px;
       }
-      .workflow-panel select {
+      .workflow-panel select,
+      .workflow-panel input[type="number"] {
         display: block;
         margin-top: 5px;
         width: 100%;
@@ -1010,6 +1012,7 @@
           padding: 0;
         }
         .workflow-panel select,
+        .workflow-panel input[type="number"],
         .workflow-panel button:not(.workflow-panel-close),
         .inventory-filters select,
         .inventory-tab {
@@ -1201,6 +1204,10 @@
       <div id="watering-source-controls" hidden>
         <p id="watering-source-status" class="workflow-status"></p>
         <button id="watering-place-source" class="secondary" type="button">Place source on map</button>
+        <label>
+          Watering cans carried at once
+          <input id="watering-carry-capacity" type="number" min="1" max="2147483647" step="1" inputmode="numeric" value="2" />
+        </label>
         <label class="workflow-checkbox">
           <input id="watering-show-route" type="checkbox" checked />
           Show complete route and numbers
@@ -1518,13 +1525,14 @@
         defaultWaterSource,
         orchardRows,
         treeIdsInRow,
+        wateringCarryCapacity,
         wateringCancellationNeedsConfirmation,
         wateringRouteWindow,
         wateringStartRequest,
         wateringTargetGeoJson,
         wateringWideCenter,
         waterSourceGeoJson,
-      } from "./watering.mjs?v=10";
+      } from "./watering.mjs?v=12";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -1752,6 +1760,9 @@
       const wateringSourceControls = document.getElementById("watering-source-controls");
       const wateringSourceStatus = document.getElementById("watering-source-status");
       const wateringPlaceSource = document.getElementById("watering-place-source");
+      const wateringCarryCapacityInput = document.getElementById(
+        "watering-carry-capacity",
+      );
       const wateringShowRoute = document.getElementById("watering-show-route");
       const wateringStart = document.getElementById("watering-start");
       const wateringCancel = document.getElementById("watering-cancel");
@@ -2396,6 +2407,10 @@
 
       function updateWaterSourcePin() {
         const currentTreeId = wateringProgress?.next_tree?.id;
+        const carryCapacity =
+          wateringCarryCapacity(
+            wateringProgress?.carry_capacity ?? wateringCarryCapacityInput.value,
+          ) || 2;
         const routeWindow = !wateringShowRoute.checked
           ? { trees: [], startIndex: 0 }
           : compactMobileLayout.matches
@@ -2404,7 +2419,11 @@
         const visibleRoute = routeWindow.trees;
         visibleRoute.forEach((tree, index) => {
           const routeIndex = routeWindow.startIndex + index;
-          const marker = dangerWateringNumberMarker(routeIndex);
+          const marker = dangerWateringNumberMarker(
+            routeIndex,
+            false,
+            carryCapacity,
+          );
           if (!map.hasImage(marker.imageName)) {
             map.addImage(
               marker.imageName,
@@ -2416,7 +2435,11 @@
             currentTreeId != null &&
             String(tree.id) === String(currentTreeId)
           ) {
-            const currentMarker = dangerWateringNumberMarker(routeIndex, true);
+            const currentMarker = dangerWateringNumberMarker(
+              routeIndex,
+              true,
+              carryCapacity,
+            );
             if (!map.hasImage(currentMarker.imageName)) {
               map.addImage(
                 currentMarker.imageName,
@@ -2440,6 +2463,7 @@
               visibleRoute,
               routeWindow.startIndex,
               wateringRoute.length,
+              carryCapacity,
             ),
           );
         map
@@ -2449,6 +2473,7 @@
               visibleRoute,
               currentTreeId,
               routeWindow.startIndex,
+              carryCapacity,
             ),
           );
         if (map.getLayer("watering-target-pin")) {
@@ -2494,10 +2519,17 @@
         wateringTargetScope.querySelector('option[value="danger"]').textContent =
           `Danger trees · ${currentDangerTreeCount}`;
         const watersDangerTrees = wateringTargetScope.value === "danger";
+        const carryCapacity = wateringCarryCapacity(
+          wateringCarryCapacityInput.value,
+        );
         wateringRowField.hidden = watersDangerTrees;
         wateringSourceControls.hidden = !watersDangerTrees;
         wateringTargetScope.disabled = wateringProgress != null;
         wateringPlaceSource.disabled = wateringProgress != null;
+        wateringCarryCapacityInput.disabled = wateringProgress != null;
+        wateringCarryCapacityInput.setCustomValidity(
+          carryCapacity == null ? "Enter a positive whole number." : "",
+        );
         if (watersDangerTrees && !wateringSource) {
           wateringSource = defaultWaterSource(orchardFeatures);
           wateringSourceStatus.textContent = wateringSource
@@ -2513,12 +2545,16 @@
         }
         updateWaterSourcePin();
         wateringHelp.textContent = watersDangerTrees
-          ? "Blue and purple loops show every source → two trees → source trip. Done always advances to the next tree."
+          ? carryCapacity == null
+            ? "Enter a positive whole number of watering cans."
+            : carryCapacity === 1
+              ? "The route starts at the tree closest to the source, then follows one optimized path through every danger tree. Returns to the source are not shown."
+              : `Blue and purple loops show every source → ${carryCapacity} trees → source trip. Done always advances to the next tree.`
           : "Trees are visited in their saved order. Dead trees are skipped.";
         wateringStart.disabled =
           wateringProgress != null ||
           (watersDangerTrees
-            ? currentDangerTreeCount === 0 || !wateringSource
+            ? currentDangerTreeCount === 0 || !wateringSource || carryCapacity == null
             : !wateringRow.value);
         wateringStart.hidden = wateringProgress != null;
         wateringCancel.hidden = wateringProgress == null;
@@ -2844,6 +2880,12 @@
         wateringRoute = progress?.target === "danger" ? progress.route || [] : [];
         if (progress?.target === "danger") {
           wateringTargetScope.value = "danger";
+          const restoredCarryCapacity = wateringCarryCapacity(
+            progress.carry_capacity,
+          );
+          if (restoredCarryCapacity != null) {
+            wateringCarryCapacityInput.value = String(restoredCarryCapacity);
+          }
           wateringSource =
             progress.water_source ||
             wateringSource ||
@@ -2920,9 +2962,12 @@
 
       async function startWatering() {
         const target = wateringTargetScope.value;
+        const carryCapacity = wateringCarryCapacity(
+          wateringCarryCapacityInput.value,
+        );
         if (
           (target === "row" && !wateringRow.value) ||
-          (target === "danger" && !wateringSource) ||
+          (target === "danger" && (!wateringSource || carryCapacity == null)) ||
           wateringProgress
         ) return;
         wateringError.hidden = true;
@@ -2940,7 +2985,12 @@
                 ...accessHeaders(currentAccess),
               },
               body: JSON.stringify(
-                wateringStartRequest(target, wateringRow.value, wateringSource),
+                wateringStartRequest(
+                  target,
+                  wateringRow.value,
+                  wateringSource,
+                  carryCapacity,
+                ),
               ),
             },
           );
@@ -2957,6 +3007,9 @@
                 ? "No living trees are currently marked in danger."
                 : "This row no longer exists.",
             );
+          }
+          if (response.status === 400) {
+            throw new Error("Enter a positive whole number of watering cans.");
           }
           if (!response.ok) throw new Error("Could not start watering. Please try again.");
           setWorkflowPanel(null);
@@ -4185,6 +4238,7 @@
       wateringClose.addEventListener("click", () => setWorkflowPanel(null));
       wateringTargetScope.addEventListener("change", refreshWorkflowRows);
       wateringPlaceSource.addEventListener("click", beginWaterSourcePlacement);
+      wateringCarryCapacityInput.addEventListener("input", refreshWorkflowRows);
       wateringShowRoute.addEventListener("change", updateWaterSourcePin);
       wateringStart.addEventListener("click", startWatering);
       wateringCancel.addEventListener("click", cancelWateringRun);

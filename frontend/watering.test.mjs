@@ -11,6 +11,7 @@ import {
   dangerTreeCount,
   orchardRows,
   treeIdsInRow,
+  wateringCarryCapacity,
   wateringRouteWindow,
   wateringCancellationNeedsConfirmation,
   wateringStartRequest,
@@ -96,13 +97,21 @@ test("start danger watering without depending on saved row order", () => {
   assert.deepEqual(wateringStartRequest("danger", "North", {
     longitude: -73.409,
     latitude: 12.476,
-  }), {
+  }, 3), {
     target: "danger",
     water_source: { longitude: -73.409, latitude: 12.476 },
+    carry_capacity: 3,
   });
   assert.deepEqual(wateringStartRequest("row", "North"), {
     row_name: "North",
   });
+});
+
+test("accept only a positive whole watering-can capacity", () => {
+  assert.equal(wateringCarryCapacity("3"), 3);
+  assert.equal(wateringCarryCapacity("2.5"), null);
+  assert.equal(wateringCarryCapacity(0), null);
+  assert.equal(wateringCarryCapacity("not a number"), null);
 });
 
 test("only warn before cancelling a run that contains recorded progress", () => {
@@ -202,6 +211,95 @@ test("draw every two-can danger trip from the source and back", () => {
   });
 });
 
+test("draw danger trips using the selected arbitrary carry capacity", () => {
+  const source = { longitude: -73.5, latitude: 12.25 };
+  const route = [1, 2, 3, 4, 5].map((id) => ({
+    longitude: -73.5 + 0.91 * id / 100,
+    latitude: 12.25 + 1.13 * id / 100,
+  }));
+
+  assert.deepEqual(
+    dangerWateringPathGeoJson(source, route, 0, route.length, 3),
+    {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { trip_parity: "even" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [-73.5, 12.25],
+              [-73.4909, 12.2613],
+              [-73.4818, 12.2726],
+              [-73.4727, 12.2839],
+              [-73.5, 12.25],
+            ],
+          },
+        },
+        {
+          type: "Feature",
+          properties: { trip_parity: "odd" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [-73.5, 12.25],
+              [-73.4636, 12.2952],
+              [-73.4545, 12.3065],
+              [-73.5, 12.25],
+            ],
+          },
+        },
+      ],
+    },
+  );
+});
+
+test("with one can draw one continuous route and no return to the source", () => {
+  const source = { longitude: -73.5, latitude: 12.25 };
+  const route = [1, 2, 3].map((id) => ({
+    id,
+    longitude: -73.5 + 0.91 * id / 100,
+    latitude: 12.25 + 1.13 * id / 100,
+  }));
+
+  assert.deepEqual(
+    dangerWateringPathGeoJson(source, route, 0, route.length, 1),
+    {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { trip_parity: "even" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [-73.5, 12.25],
+              [-73.4909, 12.2613],
+              [-73.4818, 12.2726],
+              [-73.4727, 12.2839],
+            ],
+          },
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    dangerWateringPathGeoJson(source, route.slice(1), 1, route.length, 1)
+      .features[0].geometry.coordinates,
+    [
+      [-73.4818, 12.2726],
+      [-73.4727, 12.2839],
+    ],
+  );
+  assert.equal(dangerWateringNumberMarker(1, false, 1).fillColor, "#1677b8");
+  assert.equal(
+    dangerWateringNumberGeoJson(route, null, 0, 1).features[1].properties
+      .trip_parity,
+    "even",
+  );
+});
+
 test("show four upcoming mobile route steps without losing trip boundaries or numbers", () => {
   const source = { longitude: -73.5, latitude: 12.25 };
   const route = [1, 2, 3, 4, 5, 6].map((id) => ({
@@ -292,7 +390,7 @@ test("number every danger tree in route order and mark the current tree", () => 
           id: 41,
           properties: {
             route_number: 1,
-            route_number_image: "watering-route-number-1",
+            route_number_image: "watering-route-number-2-1",
             trip_parity: "even",
             is_current: false,
             route_number_scale: 1,
@@ -316,7 +414,7 @@ test("number every danger tree in route order and mark the current tree", () => 
           id: 63,
           properties: {
             route_number: 3,
-            route_number_image: "watering-route-number-3",
+            route_number_image: "watering-route-number-2-3",
             trip_parity: "odd",
             is_current: false,
             route_number_scale: 1,
@@ -330,7 +428,7 @@ test("number every danger tree in route order and mark the current tree", () => 
 
 test("make the current route number larger and red", () => {
   assert.deepEqual(dangerWateringNumberMarker(1, false), {
-    imageName: "watering-route-number-2",
+    imageName: "watering-route-number-2-2",
     fillColor: "#1677b8",
     scale: 1,
   });

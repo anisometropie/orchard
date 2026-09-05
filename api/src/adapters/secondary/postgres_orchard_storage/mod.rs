@@ -654,7 +654,7 @@ impl OrchardStorage for PostgresOrchardStorage {
             .client
             .query_opt(
                 "SELECT id, orchard_id, target_kind, row_name, completed_at IS NOT NULL,
-                        ST_X(water_source), ST_Y(water_source)
+                        ST_X(water_source), ST_Y(water_source), carry_capacity
                  FROM watering_runs
                  WHERE orchard_id = $1 AND completed_at IS NULL",
                 &[&orchard_id],
@@ -674,7 +674,7 @@ impl OrchardStorage for PostgresOrchardStorage {
             .client
             .query_opt(
                 "SELECT id, orchard_id, target_kind, row_name, completed_at IS NOT NULL,
-                        ST_X(water_source), ST_Y(water_source)
+                        ST_X(water_source), ST_Y(water_source), carry_capacity
                  FROM watering_runs
                  WHERE id = $1",
                 &[&watering_run_id],
@@ -689,6 +689,7 @@ impl OrchardStorage for PostgresOrchardStorage {
         orchard_id: OrchardId,
         target: &WateringRunTarget,
         water_source: Option<GeoPoint>,
+        carry_capacity: Option<u32>,
         ordered_tree_ids: &[TreeId],
     ) -> Result<WateringRunId, OrchardStorageError> {
         let orchard_id = i64::try_from(orchard_id.0)
@@ -699,15 +700,22 @@ impl OrchardStorage for PostgresOrchardStorage {
         };
         let water_source_longitude = water_source.map(|source| source.longitude);
         let water_source_latitude = water_source.map(|source| source.latitude);
+        let carry_capacity = carry_capacity
+            .map(i32::try_from)
+            .transpose()
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeCreated)?;
         let run_id = self
             .client
             .query_one(
-                "INSERT INTO watering_runs (orchard_id, target_kind, row_name, water_source)
+                "INSERT INTO watering_runs (
+                    orchard_id, target_kind, row_name, water_source, carry_capacity
+                 )
                  VALUES (
                     $1, $2, $3,
                     CASE WHEN $4::DOUBLE PRECISION IS NULL THEN NULL
                          ELSE ST_SetSRID(ST_MakePoint($4, $5), 4326)
-                    END
+                    END,
+                    $6
                  )
                  RETURNING id",
                 &[
@@ -716,6 +724,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                     &row_name,
                     &water_source_longitude,
                     &water_source_latitude,
+                    &carry_capacity,
                 ],
             )
             .map_err(|_| OrchardStorageError::WateringRunCouldNotBeCreated)?
@@ -1138,6 +1147,11 @@ fn watering_run_from_row(
             (None, None) => None,
             _ => return Err(OrchardStorageError::WateringRunCouldNotBeRead),
         },
+        carry_capacity: row
+            .get::<_, Option<i32>>(7)
+            .map(u32::try_from)
+            .transpose()
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?,
         ordered_tree_ids,
         watered_tree_ids,
         completed: row.get(4),

@@ -37,6 +37,7 @@ fn start_at_the_danger_tree_closest_to_the_source_then_minimize_all_two_can_trip
         DangerWateringRunStartRequested {
             orchard_id: OrchardId(7),
             water_source,
+            carry_capacity: 2,
         },
         &mut storage,
     )
@@ -44,6 +45,7 @@ fn start_at_the_danger_tree_closest_to_the_source_then_minimize_all_two_can_trip
 
     assert_eq!(progress.target, WateringRunTarget::DangerTrees);
     assert_eq!(progress.water_source, Some(water_source));
+    assert_eq!(progress.carry_capacity, Some(2));
     let route = observer.active_watering_run_tree_ids(OrchardId(7));
     assert_eq!(
         progress
@@ -59,6 +61,116 @@ fn start_at_the_danger_tree_closest_to_the_source_then_minimize_all_two_can_trip
     assert_eq!(
         capacity_two_route_distance(&route, &danger_coordinates, water_source),
         shortest_capacity_two_route_distance(&danger_coordinates, water_source),
+    );
+}
+
+#[test]
+fn persist_an_arbitrary_capacity_and_start_at_the_tree_closest_to_the_source() {
+    let trees = vec![
+        tree(-73.4636, 12.2952, true, true),
+        tree(-73.49909, 12.25113, true, true),
+        tree(-73.4818, 12.2726, true, true),
+        tree(-73.5091, 12.2387, true, true),
+        tree(-73.4727, 12.2839, true, true),
+    ];
+    let (mut storage, observer) = InMemoryOrchardStorage::with_user_owned_orchard(
+        "owner",
+        "password",
+        orchard(),
+        vec![apple_identity()],
+        trees,
+    );
+
+    let progress = start_danger_watering_run(
+        DangerWateringRunStartRequested {
+            orchard_id: OrchardId(7),
+            water_source: GeoPoint {
+                longitude: -73.5,
+                latitude: 12.25,
+            },
+            carry_capacity: 3,
+        },
+        &mut storage,
+    )
+    .unwrap();
+
+    assert_eq!(progress.carry_capacity, Some(3));
+    assert_eq!(progress.next_tree.unwrap().id, TreeId(2));
+    let route = observer.active_watering_run_tree_ids(OrchardId(7));
+    assert_eq!(route.len(), 5);
+    let mut sorted_route = route;
+    sorted_route.sort_by_key(|tree_id| tree_id.0);
+    assert_eq!(
+        sorted_route,
+        vec![TreeId(1), TreeId(2), TreeId(3), TreeId(4), TreeId(5)]
+    );
+}
+
+#[test]
+fn refuse_a_zero_carry_capacity_before_creating_a_run() {
+    let (mut storage, observer) = InMemoryOrchardStorage::with_user_owned_orchard(
+        "owner",
+        "password",
+        orchard(),
+        vec![apple_identity()],
+        vec![tree(-73.5, 12.25, true, true)],
+    );
+
+    let result = start_danger_watering_run(
+        DangerWateringRunStartRequested {
+            orchard_id: OrchardId(7),
+            water_source: GeoPoint {
+                longitude: -73.5,
+                latitude: 12.2613,
+            },
+            carry_capacity: 0,
+        },
+        &mut storage,
+    );
+
+    assert_eq!(
+        result,
+        Err(DangerWateringRunStartError::InvalidCarryCapacity)
+    );
+    assert!(
+        observer
+            .active_watering_run_tree_ids(OrchardId(7))
+            .is_empty()
+    );
+}
+
+#[test]
+fn with_one_can_start_closest_to_the_source_then_follow_one_short_route() {
+    let (mut storage, observer) = InMemoryOrchardStorage::with_user_owned_orchard(
+        "owner",
+        "password",
+        orchard(),
+        vec![apple_identity()],
+        vec![
+            tree(-73.4999909, 12.25, true, true),
+            tree(-73.5000182, 12.25, true, true),
+            tree(-73.4999727, 12.25, true, true),
+        ],
+    );
+
+    let progress = start_danger_watering_run(
+        DangerWateringRunStartRequested {
+            orchard_id: OrchardId(7),
+            water_source: GeoPoint {
+                longitude: -73.5,
+                latitude: 12.25,
+            },
+            carry_capacity: 1,
+        },
+        &mut storage,
+    )
+    .unwrap();
+
+    assert_eq!(progress.carry_capacity, Some(1));
+    assert_eq!(progress.next_tree.unwrap().id, TreeId(1));
+    assert_eq!(
+        observer.active_watering_run_tree_ids(OrchardId(7)),
+        vec![TreeId(1), TreeId(3), TreeId(2)]
     );
 }
 
@@ -79,6 +191,7 @@ fn refuse_to_start_when_no_living_tree_is_currently_in_danger() {
                 longitude: -73.5,
                 latitude: 12.2613,
             },
+            carry_capacity: 2,
         },
         &mut storage,
     );
@@ -111,6 +224,7 @@ fn compute_an_exact_route_for_the_orchards_current_danger_tree_scale() {
                 longitude: -73.5,
                 latitude: 12.2726,
             },
+            carry_capacity: 2,
         },
         &mut storage,
     )
@@ -166,6 +280,7 @@ fn keep_the_single_tree_trip_last_so_every_visible_pair_uses_the_same_two_cans()
                 longitude: -73.5,
                 latitude: 12.25,
             },
+            carry_capacity: 2,
         },
         &mut storage,
     )

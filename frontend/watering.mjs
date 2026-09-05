@@ -76,9 +76,25 @@ export function defaultWaterSource(features) {
   };
 }
 
-export function wateringStartRequest(target, rowName, waterSource) {
+export function wateringCarryCapacity(value) {
+  const capacity = Number(value);
+  return Number.isSafeInteger(capacity) && capacity > 0 && capacity <= 2_147_483_647
+    ? capacity
+    : null;
+}
+
+export function wateringStartRequest(
+  target,
+  rowName,
+  waterSource,
+  carryCapacity = 2,
+) {
   return target === "danger"
-    ? { target: "danger", water_source: waterSource }
+    ? {
+        target: "danger",
+        water_source: waterSource,
+        carry_capacity: wateringCarryCapacity(carryCapacity),
+      }
     : { row_name: rowName };
 }
 
@@ -192,24 +208,47 @@ export function dangerWateringPathGeoJson(
   route,
   startIndex = 0,
   totalRouteLength = route?.length || 0,
+  carryCapacity = 2,
 ) {
   if (!source || !Array.isArray(route)) {
     return { type: "FeatureCollection", features: [] };
   }
+  const capacity = wateringCarryCapacity(carryCapacity) || 2;
   const sourceCoordinate = [source.longitude, source.latitude];
+  if (capacity === 1) {
+    const coordinates = [
+      ...(startIndex === 0 ? [sourceCoordinate] : []),
+      ...route.map((tree) => [tree.longitude, tree.latitude]),
+    ];
+    return {
+      type: "FeatureCollection",
+      features: coordinates.length < 2
+        ? []
+        : [
+            {
+              type: "Feature",
+              properties: { trip_parity: "even" },
+              geometry: {
+                type: "LineString",
+                coordinates,
+              },
+            },
+          ],
+    };
+  }
   const features = [];
   for (let index = 0; index < route.length;) {
     const globalIndex = startIndex + index;
-    const positionInTrip = globalIndex % 2;
-    const trip = route.slice(index, index + 2 - positionInTrip);
+    const positionInTrip = globalIndex % capacity;
+    const trip = route.slice(index, index + capacity - positionInTrip);
     const lastGlobalIndex = globalIndex + trip.length - 1;
-    const finishesTrip = lastGlobalIndex % 2 === 1;
+    const finishesTrip = lastGlobalIndex % capacity === capacity - 1;
     const finishesRoute = lastGlobalIndex === totalRouteLength - 1;
     features.push({
       type: "Feature",
       properties: {
         trip_parity:
-          Math.floor(globalIndex / 2) % 2 === 0 ? "even" : "odd",
+          Math.floor(globalIndex / capacity) % 2 === 0 ? "even" : "odd",
       },
       geometry: {
         type: "LineString",
@@ -225,15 +264,20 @@ export function dangerWateringPathGeoJson(
   return { type: "FeatureCollection", features };
 }
 
-export function dangerWateringNumberMarker(index, isCurrent = false) {
+export function dangerWateringNumberMarker(
+  index,
+  isCurrent = false,
+  carryCapacity = 2,
+) {
+  const capacity = wateringCarryCapacity(carryCapacity) || 2;
   const routeNumber = index + 1;
   return {
     imageName: isCurrent
       ? `watering-route-current-${routeNumber}`
-      : `watering-route-number-${routeNumber}`,
+      : `watering-route-number-${capacity}-${routeNumber}`,
     fillColor: isCurrent
       ? "#d51f2e"
-      : Math.floor(index / 2) % 2 === 0
+      : capacity === 1 || Math.floor(index / capacity) % 2 === 0
         ? "#1677b8"
         : "#8b3fb0",
     scale: isCurrent ? 1.35 : 1,
@@ -244,7 +288,9 @@ export function dangerWateringNumberGeoJson(
   route,
   currentTreeId = null,
   startIndex = 0,
+  carryCapacity = 2,
 ) {
+  const capacity = wateringCarryCapacity(carryCapacity) || 2;
   return {
     type: "FeatureCollection",
     features: Array.isArray(route)
@@ -252,7 +298,11 @@ export function dangerWateringNumberGeoJson(
           const globalIndex = startIndex + index;
           const isCurrent =
             currentTreeId != null && String(tree.id) === String(currentTreeId);
-          const marker = dangerWateringNumberMarker(globalIndex, isCurrent);
+          const marker = dangerWateringNumberMarker(
+            globalIndex,
+            isCurrent,
+            capacity,
+          );
           return {
             type: "Feature",
             id: tree.id,
@@ -260,7 +310,9 @@ export function dangerWateringNumberGeoJson(
               route_number: globalIndex + 1,
               route_number_image: marker.imageName,
               trip_parity:
-                Math.floor(globalIndex / 2) % 2 === 0 ? "even" : "odd",
+                capacity === 1 || Math.floor(globalIndex / capacity) % 2 === 0
+                  ? "even"
+                  : "odd",
               is_current: isCurrent,
               route_number_scale: marker.scale,
             },
