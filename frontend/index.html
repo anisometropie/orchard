@@ -3,6 +3,7 @@
   <head>
     <title>Orchard</title>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
     <link
       href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css"
@@ -101,6 +102,14 @@
         z-index: 10;
       }
       #map-toolbar[hidden] {
+        display: none;
+      }
+      #map-toolbar-content,
+      #top-right-controls,
+      #top-right-controls-content {
+        display: contents;
+      }
+      .mobile-menu-toggle {
         display: none;
       }
       #access-panel {
@@ -786,12 +795,300 @@
           transform: none;
         }
       }
+      @media (max-width: 430px) {
+        .mobile-menu-toggle {
+          align-items: center;
+          background: #245c2a;
+          border: 1px solid #245c2a;
+          border-radius: 9px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          color: white;
+          cursor: pointer;
+          display: inline-flex;
+          font: 700 16px sans-serif;
+          gap: 8px;
+          justify-content: center;
+          min-height: 52px;
+          padding: 10px 15px;
+        }
+        .mobile-menu-toggle span {
+          font-size: 21px;
+          line-height: 1;
+        }
+        #map-toolbar {
+          left: 10px;
+          max-width: none;
+          position: fixed;
+          top: 10px;
+          z-index: 80;
+        }
+        #map-toolbar-content {
+          background: rgba(255, 255, 255, 0.99);
+          border-radius: 10px;
+          box-shadow: 0 3px 16px rgba(0, 0, 0, 0.3);
+          box-sizing: border-box;
+          display: none;
+          gap: 9px;
+          left: 10px;
+          padding: 12px;
+          position: fixed;
+          top: 70px;
+          width: min(320px, calc(100vw - 20px));
+          z-index: 85;
+        }
+        #map-toolbar.mobile-menu-open #map-toolbar-content {
+          display: grid;
+        }
+        #map-toolbar-content > button[hidden] {
+          display: none;
+        }
+        #map-toolbar-content > .inventory-button,
+        #map-toolbar-content > .workflow-button,
+        #map-toolbar-content .map-mode-button {
+          font-size: 16px;
+          min-height: 52px;
+          padding: 11px 13px;
+          width: 100%;
+        }
+        #map-toolbar-content .map-mode-switch {
+          display: grid;
+          gap: 7px;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+        #top-right-controls {
+          display: block;
+          position: fixed;
+          right: 10px;
+          top: 10px;
+          z-index: 90;
+        }
+        #top-right-controls-content {
+          background: rgba(255, 255, 255, 0.99);
+          border-radius: 10px;
+          box-shadow: 0 3px 16px rgba(0, 0, 0, 0.3);
+          box-sizing: border-box;
+          display: none;
+          flex-direction: column;
+          max-height: calc(100vh - 80px);
+          max-height: calc(100dvh - 80px);
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          padding: 12px;
+          position: fixed;
+          right: 10px;
+          top: 70px;
+          width: min(370px, calc(100vw - 20px));
+          z-index: 95;
+        }
+        #top-right-controls.mobile-menu-open #top-right-controls-content {
+          display: flex;
+        }
+        #access-panel {
+          align-items: stretch;
+          background: transparent;
+          box-shadow: none;
+          box-sizing: border-box;
+          flex-direction: column;
+          flex-wrap: nowrap;
+          font-size: 16px;
+          left: auto;
+          max-width: none;
+          padding: 0;
+          position: static;
+          right: auto;
+          top: auto;
+          width: 100%;
+        }
+        #access-panel button,
+        #access-panel input,
+        #access-panel select,
+        #map-filter-panel button {
+          font-size: 16px;
+          min-height: 48px;
+          width: 100%;
+        }
+        #login-form {
+          align-items: stretch;
+          display: grid;
+          grid-template-columns: 1fr;
+          width: 100%;
+        }
+        #login-form label,
+        #login-form input {
+          box-sizing: border-box;
+          width: 100%;
+        }
+        #share-result {
+          flex-direction: column;
+        }
+        #share-link {
+          min-width: 0;
+        }
+        #active-map-filter {
+          align-items: stretch;
+          border-left: 0;
+          border-top: 1px solid #ccc;
+          flex-direction: column;
+          padding: 9px 0 0;
+        }
+        #active-map-filter-label,
+        #login-error {
+          font-size: 14px;
+        }
+        #map-filter-panel {
+          border-radius: 0;
+          border-top: 1px solid #ccc;
+          box-shadow: none;
+          font-size: 16px;
+          margin-top: 12px;
+          max-height: none;
+          overflow: visible;
+          padding: 12px 0 0;
+          position: static;
+          right: auto;
+          top: auto;
+          width: 100%;
+        }
+        .harvest-map-control
+          label:not(.harvest-map-control-title):not(.harvest-part-filter),
+        .harvest-part-filter,
+        .harvest-part-filters legend,
+        #harvest-window-label,
+        #date-label {
+          font-size: 15px !important;
+        }
+        #map-filter-panel input[type="checkbox"] {
+          height: 24px;
+          width: 24px;
+        }
+        #map-filter-panel input[type="range"] {
+          min-height: 44px;
+        }
+        .workflow-panel,
+        #inventory-panel {
+          border-radius: 0;
+          bottom: 0;
+          height: 100vh;
+          height: 100dvh;
+          left: 0;
+          max-height: none !important;
+          max-width: none;
+          padding: 18px;
+          position: fixed;
+          right: 0;
+          top: 0 !important;
+          width: 100%;
+          z-index: 120;
+        }
+        .workflow-panel {
+          font-size: 17px;
+        }
+        .workflow-panel header,
+        .inventory-header {
+          min-height: 52px;
+        }
+        .workflow-panel h2,
+        .inventory-header h2 {
+          font-size: 22px;
+        }
+        .workflow-panel-close,
+        .inventory-close {
+          align-items: center;
+          display: inline-flex;
+          font-size: 32px;
+          height: 52px;
+          justify-content: center;
+          min-width: 52px;
+          padding: 0;
+        }
+        .workflow-panel select,
+        .workflow-panel button:not(.workflow-panel-close),
+        .inventory-filters select,
+        .inventory-tab {
+          font-size: 16px;
+          min-height: 52px;
+        }
+        .workflow-panel button:not(.workflow-panel-close) {
+          width: 100%;
+        }
+        .workflow-panel label.workflow-checkbox {
+          min-height: 48px;
+        }
+        .workflow-panel input[type="checkbox"] {
+          height: 24px;
+          width: 24px;
+        }
+        .workflow-help,
+        .workflow-status,
+        .workflow-error,
+        .inventory-filters label,
+        .inventory-result-summary {
+          font-size: 15px;
+        }
+        .manual-order-actions {
+          display: grid;
+          grid-template-columns: 1fr;
+        }
+        .inventory-tabs {
+          gap: 0;
+        }
+        .inventory-tab {
+          flex: 1 1 50%;
+          padding: 10px 8px;
+        }
+        .inventory-table {
+          font-size: 15px;
+        }
+        .inventory-table th,
+        .inventory-table td {
+          padding: 11px 12px;
+        }
+        .inventory-row-action {
+          font-size: 22px;
+          height: 44px;
+          width: 44px;
+        }
+        .inventory-filter-button svg {
+          height: 20px;
+          width: 20px;
+        }
+        .inventory-species-actions {
+          flex-basis: 88px;
+        }
+        .harvest-schedule {
+          grid-template-columns: minmax(0, 1fr) auto 88px;
+        }
+        #watering-tree-banner {
+          font-size: 15px;
+          gap: 10px;
+          padding: 10px 12px;
+        }
+        #watering-tree-name {
+          font-size: 18px;
+        }
+        #watering-done {
+          font-size: 16px;
+          min-height: 50px;
+          min-width: 78px;
+        }
+      }
     </style>
   </head>
   <body>
     <div id="map"></div>
     <div id="map-status">Loading orchard trees…</div>
     <div id="map-toolbar" hidden>
+      <button
+        id="mobile-map-menu-toggle"
+        class="mobile-menu-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="map-toolbar-content"
+      >
+        <span aria-hidden="true">☰</span>
+        Map
+      </button>
+      <div id="map-toolbar-content">
       <button
         id="watering-toggle"
         class="workflow-button"
@@ -844,6 +1141,7 @@
         >
           Harvest
         </button>
+      </div>
       </div>
     </div>
     <section id="watering-panel" class="workflow-panel" aria-labelledby="watering-title" hidden>
@@ -910,6 +1208,18 @@
       </div>
       <button id="watering-done" type="button">Done</button>
     </section>
+    <div id="top-right-controls">
+      <button
+        id="mobile-top-right-menu-toggle"
+        class="mobile-menu-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="top-right-controls-content"
+      >
+        <span aria-hidden="true">☰</span>
+        Orchard
+      </button>
+      <div id="top-right-controls-content">
     <section id="access-panel" aria-label="Orchard access">
       <span id="access-mode">Public world map</span>
       <div id="active-map-filter" hidden>
@@ -941,6 +1251,71 @@
         <button id="copy-share-link" type="button">Copy</button>
       </div>
     </section>
+    <div id="map-filter-panel" hidden>
+      <section
+        id="harvest-map-filters"
+        class="map-mode-filters harvest-map-control"
+        aria-label="Harvest availability"
+        hidden
+      >
+        <label class="harvest-map-control-title">
+          <input type="checkbox" id="harvest-filter-enabled" checked />
+          Harvest available
+        </label>
+        <div id="harvest-window-label">This week</div>
+        <fieldset
+          id="harvest-part-filters"
+          class="harvest-part-filters"
+        >
+          <legend>Harvested parts</legend>
+        </fieldset>
+        <label>
+          Start: <span id="harvest-offset-label">this week</span>
+          <input type="range" id="harvest-offset" min="0" max="52" value="0" />
+        </label>
+        <label>
+          Width: <span id="harvest-weeks-label">1 week</span>
+          <input type="range" id="harvest-weeks" min="1" max="12" value="1" />
+        </label>
+      </section>
+      <section id="normal-map-filters" class="map-mode-filters">
+        <label
+          style="
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-weight: 600;
+          "
+        >
+          <input type="checkbox" id="date-filter-enabled" />
+          Filter by planting date
+        </label>
+
+        <div id="date-label" style="font-size: 13px; margin-bottom: 8px">
+          All dates
+        </div>
+
+        <input
+          type="range"
+          id="date-min"
+          min="0"
+          max="1000"
+          value="0"
+          style="width: 100%"
+        />
+        <input
+          type="range"
+          id="date-max"
+          min="0"
+          max="1000"
+          value="1000"
+          style="width: 100%; margin-top: 4px"
+        />
+      </section>
+    </div>
+      </div>
+    </div>
     <aside id="inventory-panel" aria-labelledby="inventory-title" hidden>
       <header class="inventory-header">
         <h2 id="inventory-title">Orchard inventory</h2>
@@ -1046,69 +1421,6 @@
         </div>
       </section>
     </aside>
-    <div id="map-filter-panel" hidden>
-      <section
-        id="harvest-map-filters"
-        class="map-mode-filters harvest-map-control"
-        aria-label="Harvest availability"
-        hidden
-      >
-        <label class="harvest-map-control-title">
-          <input type="checkbox" id="harvest-filter-enabled" checked />
-          Harvest available
-        </label>
-        <div id="harvest-window-label">This week</div>
-        <fieldset
-          id="harvest-part-filters"
-          class="harvest-part-filters"
-        >
-          <legend>Harvested parts</legend>
-        </fieldset>
-        <label>
-          Start: <span id="harvest-offset-label">this week</span>
-          <input type="range" id="harvest-offset" min="0" max="52" value="0" />
-        </label>
-        <label>
-          Width: <span id="harvest-weeks-label">1 week</span>
-          <input type="range" id="harvest-weeks" min="1" max="12" value="1" />
-        </label>
-      </section>
-      <section id="normal-map-filters" class="map-mode-filters">
-        <label
-          style="
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 8px;
-            font-weight: 600;
-          "
-        >
-          <input type="checkbox" id="date-filter-enabled" />
-          Filter by planting date
-        </label>
-
-        <div id="date-label" style="font-size: 13px; margin-bottom: 8px">
-          All dates
-        </div>
-
-        <input
-          type="range"
-          id="date-min"
-          min="0"
-          max="1000"
-          value="0"
-          style="width: 100%"
-        />
-        <input
-          type="range"
-          id="date-max"
-          min="0"
-          max="1000"
-          value="1000"
-          style="width: 100%; margin-top: 4px"
-        />
-      </section>
-    </div>
     <script type="module">
       import {
         HARVEST_PIN_ICONS,
@@ -1337,6 +1649,13 @@
       const normalMapFilters = document.getElementById("normal-map-filters");
       const harvestMapFilters = document.getElementById("harvest-map-filters");
       const mapToolbar = document.getElementById("map-toolbar");
+      const mobileMapMenuToggle = document.getElementById(
+        "mobile-map-menu-toggle",
+      );
+      const topRightControls = document.getElementById("top-right-controls");
+      const mobileTopRightMenuToggle = document.getElementById(
+        "mobile-top-right-menu-toggle",
+      );
       const accessPanel = document.getElementById("access-panel");
       const accessMode = document.getElementById("access-mode");
       const activeMapFilter = document.getElementById("active-map-filter");
@@ -1390,8 +1709,34 @@
       const wateringTreeName = document.getElementById("watering-tree-name");
       const wateringTreeProgress = document.getElementById("watering-tree-progress");
       const wateringDone = document.getElementById("watering-done");
+      const compactMobileLayout = window.matchMedia("(max-width: 430px)");
+
+      function setMobileMenuOpen(container, toggle, isOpen) {
+        container.classList.toggle("mobile-menu-open", isOpen);
+        toggle.setAttribute("aria-expanded", String(isOpen));
+      }
+
+      function closeMobileMenus() {
+        setMobileMenuOpen(mapToolbar, mobileMapMenuToggle, false);
+        setMobileMenuOpen(
+          topRightControls,
+          mobileTopRightMenuToggle,
+          false,
+        );
+      }
+
+      function toggleMobileMenu(container, toggle) {
+        const willOpen = !container.classList.contains("mobile-menu-open");
+        closeMobileMenus();
+        setMobileMenuOpen(container, toggle, willOpen);
+      }
 
       function placeMapFiltersBelowAccessMenu() {
+        if (compactMobileLayout.matches) {
+          mapFilterPanel.style.removeProperty("top");
+          mapFilterPanel.style.removeProperty("max-height");
+          return;
+        }
         const viewportInset = window.innerWidth <= 760 ? 10 : 20;
         let top = Math.ceil(accessPanel.getBoundingClientRect().bottom + 12);
         if (!mapFilterPanel.hidden) {
@@ -1416,6 +1761,10 @@
 
       function placeToolbarAroundAccessMenu() {
         if (mapToolbar.hidden) return;
+        if (compactMobileLayout.matches) {
+          mapToolbar.style.removeProperty("top");
+          return;
+        }
         const viewportInset = window.innerWidth <= 760 ? 10 : 20;
         mapToolbar.style.top = `${viewportInset}px`;
         const accessBounds = accessPanel.getBoundingClientRect();
@@ -1427,6 +1776,16 @@
 
       function placeWateringBannerBelowTopControls() {
         if (wateringTreeBanner.hidden) return;
+        if (compactMobileLayout.matches) {
+          const controlBottom = Math.max(
+            mobileTopRightMenuToggle.getBoundingClientRect().bottom,
+            mapToolbar.hidden
+              ? 0
+              : mobileMapMenuToggle.getBoundingClientRect().bottom,
+          );
+          wateringTreeBanner.style.top = `${Math.ceil(controlBottom + 8)}px`;
+          return;
+        }
         const accessBottom = accessPanel.getBoundingClientRect().bottom;
         const toolbarBottom = mapToolbar.hidden
           ? 0
@@ -1438,6 +1797,13 @@
 
       function placeWorkflowPanelsBelowToolbar() {
         if (mapToolbar.hidden) return;
+        if (compactMobileLayout.matches) {
+          [wateringPanel, rowOrderPanel].forEach((panel) => {
+            panel.style.removeProperty("top");
+            panel.style.removeProperty("max-height");
+          });
+          return;
+        }
         const viewportInset = window.innerWidth <= 760 ? 10 : 20;
         const bannerBottom = wateringTreeBanner.hidden
           ? 0
@@ -1466,6 +1832,10 @@
       mapControlsObserver.observe(mapToolbar);
       mapControlsObserver.observe(wateringTreeBanner);
       window.addEventListener("resize", layoutMapControls);
+      compactMobileLayout.addEventListener("change", (event) => {
+        if (!event.matches) closeMobileMenus();
+        layoutMapControls();
+      });
       layoutMapControls();
 
       function renderHarvestPartFilters() {
@@ -1911,7 +2281,10 @@
         inventoryPanel.hidden = !isOpen;
         inventoryToggle.hidden = isOpen;
         inventoryToggle.setAttribute("aria-expanded", String(isOpen));
-        if (isOpen) inventoryClose.focus();
+        if (isOpen) {
+          closeMobileMenus();
+          inventoryClose.focus();
+        }
       }
 
       function setWorkflowPanel(openPanel) {
@@ -1931,6 +2304,7 @@
           String(openPanel === rowOrderPanel),
         );
         if (openPanel) {
+          closeMobileMenus();
           setInventoryOpen(false);
         }
         layoutMapControls();
@@ -3028,6 +3402,7 @@
       }
 
       function clearOrchardPresentation() {
+        closeMobileMenus();
         closeTreeEditor();
         closeTreeTooltip();
         cancelManualRowOrder();
@@ -3450,9 +3825,18 @@
       harvestOffset.addEventListener("input", applyHarvestWindow);
       harvestWeeks.addEventListener("input", applyHarvestWindow);
       mapModeButtons.forEach((button) => {
-        button.addEventListener("click", () => setMapMode(button.dataset.mapMode));
+        button.addEventListener("click", () => {
+          setMapMode(button.dataset.mapMode);
+          closeMobileMenus();
+        });
       });
 
+      mobileMapMenuToggle.addEventListener("click", () =>
+        toggleMobileMenu(mapToolbar, mobileMapMenuToggle),
+      );
+      mobileTopRightMenuToggle.addEventListener("click", () =>
+        toggleMobileMenu(topRightControls, mobileTopRightMenuToggle),
+      );
       inventoryToggle.addEventListener("click", () => setInventoryOpen(true));
       inventoryClose.addEventListener("click", () => setInventoryOpen(false));
       treesTab.addEventListener("click", () => selectInventoryView("trees"));
