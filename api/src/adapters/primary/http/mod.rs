@@ -18,7 +18,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use crate::hexagon::models::{
     AerialOverlayId, AnnualDate, BotanicalTaxon, HarvestScheduleOwner, HarvestedPart,
     InfraspecificRank, MapConfiguration, NamedTaxon, OrchardId, OrchardTree, PlantCultivarId,
-    PlantIdentity, PlantIdentityId, Tree, TreeId,
+    PlantIdentity, PlantIdentityId, Tree, TreeId, WateringRunId,
 };
 use crate::hexagon::ports::{AccessControl, MapConfigurationStorage, OrchardStorage};
 use crate::hexagon::use_cases::authorize_orchard_owner::{
@@ -32,6 +32,9 @@ use crate::hexagon::use_cases::change_tree_condition::{
     OrchardTreeConditionChanged, TreeConditionChangeError, change_orchard_tree_condition,
 };
 use crate::hexagon::use_cases::list_orchard_trees::list_trees_for_orchard;
+use crate::hexagon::use_cases::load_active_watering_run::{
+    ActiveWateringRunError, load_active_watering_run,
+};
 use crate::hexagon::use_cases::load_aerial_overlay_image::{
     AerialOverlayImageLoadError, load_orchard_aerial_overlay_image,
 };
@@ -40,6 +43,12 @@ use crate::hexagon::use_cases::load_map_configuration::{
 };
 use crate::hexagon::use_cases::log_in_user::{UserLoginError, UserLoginRequested, log_in_user};
 use crate::hexagon::use_cases::log_out_user::log_out_user;
+use crate::hexagon::use_cases::order_orchard_row::{
+    OrchardRowOrderError, OrchardRowOrderRequested, RowOrder, order_orchard_row,
+};
+use crate::hexagon::use_cases::record_tree_watered::{
+    TreeWatered, TreeWateredError, record_tree_watered,
+};
 use crate::hexagon::use_cases::replace_plant_harvest_windows::{
     AnnualHarvestWindowChanged, OrchardHarvestWindowsReplaced, PlantHarvestWindowsReplacementError,
     replace_orchard_harvest_windows,
@@ -49,6 +58,9 @@ use crate::hexagon::use_cases::restore_user_session::{
 };
 use crate::hexagon::use_cases::share_orchard::{
     OrchardShareError, OrchardShareLinkRequested, share_orchard,
+};
+use crate::hexagon::use_cases::start_watering_run::{
+    WateringProgress, WateringRunStartError, WateringRunStartRequested, start_watering_run,
 };
 
 pub async fn start_http_server<U>(
@@ -102,6 +114,22 @@ where
         .route(
             "/orchards/{orchard_id}/share",
             post(share_orchard_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/row-order",
+            put(order_orchard_row_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/watering-run",
+            get(active_watering_run_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/watering-runs",
+            post(start_watering_run_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/watering-runs/{watering_run_id}/watered",
+            post(record_tree_watered_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/plant-identities/{plant_identity_id}/harvest-windows",
@@ -255,6 +283,198 @@ where
         OrchardShareError::SessionNotFound => StatusCode::UNAUTHORIZED,
         OrchardShareError::OrchardNotOwned => StatusCode::NOT_FOUND,
         OrchardShareError::ShareLinkCouldNotBeCreated => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrderOrchardRowRequest {
+    row_name: String,
+    order: RequestedRowOrder,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
+enum RequestedRowOrder {
+    Manual { tree_ids: Vec<u64> },
+    EastToWest,
+    WestToEast,
+    NorthToSouth,
+    SouthToNorth,
+}
+
+async fn order_orchard_row_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+    request: Result<Json<OrderOrchardRowRequest>, JsonRejection>,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        let order = match request.order {
+            RequestedRowOrder::Manual { tree_ids } => {
+                RowOrder::Manual(tree_ids.into_iter().map(TreeId).collect())
+            }
+            RequestedRowOrder::EastToWest => RowOrder::EastToWest,
+            RequestedRowOrder::WestToEast => RowOrder::WestToEast,
+            RequestedRowOrder::NorthToSouth => RowOrder::NorthToSouth,
+            RequestedRowOrder::SouthToNorth => RowOrder::SouthToNorth,
+        };
+        order_orchard_row(
+            OrchardRowOrderRequested {
+                orchard_id,
+                row_name: request.row_name,
+                order,
+            },
+            &mut *storage,
+        )
+        .map(|tree_ids| {
+            Json(json!({
+                "tree_ids": tree_ids.into_iter().map(|tree_id| tree_id.0).collect::<Vec<_>>()
+            }))
+        })
+        .map_err(|error| match error {
+            OrchardRowOrderError::RowNotFound => StatusCode::NOT_FOUND,
+            OrchardRowOrderError::InvalidManualOrder => StatusCode::BAD_REQUEST,
+            OrchardRowOrderError::OrderCouldNotBeSaved => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartWateringRunRequest {
+    row_name: String,
+}
+
+async fn start_watering_run_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+    request: Result<Json<StartWateringRunRequest>, JsonRejection>,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        start_watering_run(
+            WateringRunStartRequested {
+                orchard_id,
+                row_name: request.row_name,
+            },
+            &mut *storage,
+        )
+        .map(|progress| Json(watering_progress_json(progress)))
+        .map_err(|error| match error {
+            WateringRunStartError::RowNotFound => StatusCode::NOT_FOUND,
+            WateringRunStartError::RowNotOrdered
+            | WateringRunStartError::AnotherWateringRunIsActive => StatusCode::CONFLICT,
+            WateringRunStartError::WateringRunCouldNotBeStarted => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn active_watering_run_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        load_active_watering_run(orchard_id, &mut *storage)
+            .map(|progress| match progress {
+                Some(progress) => Json(watering_progress_json(progress)).into_response(),
+                None => StatusCode::NO_CONTENT.into_response(),
+            })
+            .map_err(|error| match error {
+                ActiveWateringRunError::WateringRunCouldNotBeLoaded => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordTreeWateredRequest {
+    tree_id: u64,
+}
+
+async fn record_tree_watered_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, watering_run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<RecordTreeWateredRequest>, JsonRejection>,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        record_tree_watered(
+            TreeWatered {
+                orchard_id,
+                watering_run_id: WateringRunId(watering_run_id),
+                tree_id: TreeId(request.tree_id),
+            },
+            &mut *storage,
+        )
+        .map(|progress| Json(watering_progress_json(progress)))
+        .map_err(|error| match error {
+            TreeWateredError::WateringRunNotFound => StatusCode::NOT_FOUND,
+            TreeWateredError::WateringRunAlreadyCompleted | TreeWateredError::TreeIsNotNext => {
+                StatusCode::CONFLICT
+            }
+            TreeWateredError::TreeCouldNotBeRecorded => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+fn watering_progress_json(progress: WateringProgress) -> Value {
+    json!({
+        "run_id": progress.run_id.0,
+        "row_name": progress.row_name,
+        "watered_tree_count": progress.watered_tree_count,
+        "total_tree_count": progress.total_tree_count,
+        "next_tree": progress.next_tree.map(|tree| json!({
+            "id": tree.id.0,
+            "name": tree.name,
+            "longitude": tree.longitude,
+            "latitude": tree.latitude,
+            "row_rank": tree.row_rank,
+        })),
     })
 }
 
@@ -637,6 +857,7 @@ where
 fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
     let features = trees.into_iter().map(|orchard_tree| {
         let tree_id = orchard_tree.id;
+        let row_rank = orchard_tree.row_rank;
         let harvest_windows = orchard_tree
             .harvest_windows
             .iter()
@@ -718,6 +939,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
                 "botanical_species": botanical_species,
                 "planted_on": planted_on,
                 "row_name": row_name,
+                "row_rank": row_rank,
                 "roles": roles,
                 "is_alive": is_alive,
                 "is_in_danger": is_in_danger,

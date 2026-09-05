@@ -90,6 +90,72 @@ fn persist_password_sessions_ownership_and_rotating_share_tokens() {
 }
 
 #[test]
+fn persist_row_ranks_and_resumable_watering_progress() {
+    let _database_lock = database_lock();
+    let (database_url, mut verification_connection) = empty_orchard_database();
+    verification_connection
+        .batch_execute(
+            r#"
+            INSERT INTO users (username, default_center, is_default)
+            VALUES ('owner', ST_SetSRID(ST_MakePoint(5, 45), 4326), TRUE);
+            INSERT INTO orchards (owner_user_id, name, center, reference_region)
+            VALUES (1, 'My orchard', ST_SetSRID(ST_MakePoint(5, 45), 4326), 'Drôme');
+            INSERT INTO plant_identities (common_name, botanical_taxon)
+            VALUES (
+                'Apple',
+                '{"Named":{"genus":"Malus","species":null,"species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}'
+            );
+            INSERT INTO trees (
+                orchard_id, plant_identity_id, location, row_name,
+                roles, is_alive, identification_status
+            ) VALUES
+                (1, 1, ST_SetSRID(ST_MakePoint(5.1, 45), 4326), 'North', '{}', TRUE, 'confirmed'),
+                (1, 1, ST_SetSRID(ST_MakePoint(5.2, 45), 4326), 'North', '{}', TRUE, 'confirmed');
+            "#,
+        )
+        .unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+
+    storage
+        .transaction(|orchard| {
+            orchard.replace_row_order(OrchardId(1), "North", &[TreeId(2), TreeId(1)])
+        })
+        .unwrap();
+    let trees = storage.trees_in_orchard(OrchardId(1)).unwrap();
+    assert_eq!(trees[0].row_rank, Some(2));
+    assert_eq!(trees[1].row_rank, Some(1));
+
+    let run_id = storage
+        .transaction(|orchard| {
+            orchard.create_watering_run(OrchardId(1), "North", &[TreeId(2), TreeId(1)])
+        })
+        .unwrap();
+    assert_eq!(
+        storage
+            .active_watering_run(OrchardId(1))
+            .unwrap()
+            .unwrap()
+            .ordered_tree_ids,
+        vec![TreeId(2), TreeId(1)]
+    );
+    storage
+        .transaction(|orchard| orchard.mark_watering_tree_watered(run_id, TreeId(2)))
+        .unwrap();
+    assert_eq!(
+        storage
+            .watering_run(run_id)
+            .unwrap()
+            .unwrap()
+            .watered_tree_ids,
+        vec![TreeId(2)]
+    );
+    storage
+        .transaction(|orchard| orchard.complete_watering_run(run_id))
+        .unwrap();
+    assert_eq!(storage.active_watering_run(OrchardId(1)).unwrap(), None);
+}
+
+#[test]
 fn commit_persists_identity_and_tree() {
     let _database_lock = database_lock();
     let (database_url, mut verification_connection) = empty_orchard_database();
@@ -248,6 +314,7 @@ fn read_tree_with_its_identity() {
         orchard_storage.trees(),
         Ok(vec![OrchardTree {
             id: TreeId(1),
+            row_rank: None,
             tree,
             plant_identity: apple,
             plant_cultivar: None,
@@ -1132,9 +1199,20 @@ fn empty_orchard_database() -> (String, Client) {
             ))
             .unwrap();
     }
+    let watering_was_applied: bool = verification_connection
+        .query_one("SELECT to_regclass('watering_runs') IS NOT NULL", &[])
+        .unwrap()
+        .get(0);
+    if !watering_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/013_add_row_ordering_and_watering.sql"
+            ))
+            .unwrap();
+    }
     verification_connection
         .batch_execute(
-            "TRUNCATE TABLE user_sessions, orchards, plant_harvest_windows,
+            "TRUNCATE TABLE watering_runs, user_sessions, orchards, plant_harvest_windows,
                             aerial_overlays, users, trees, plant_cultivars, plant_identities
              RESTART IDENTITY CASCADE",
         )

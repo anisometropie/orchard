@@ -12,7 +12,8 @@ use crate::hexagon::models::{
     HarvestDataOrigin, HarvestScheduleOwner, HarvestedPart, IdentificationStatus,
     LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, Orchard, OrchardId, OrchardTree,
     PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
-    PlantIdentityReference, ReproductiveRole, Tree, TreeId, User, UserId,
+    PlantIdentityReference, ReproductiveRole, Tree, TreeId, User, UserId, WateringRun,
+    WateringRunId,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -492,7 +493,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                     t.reproductive_role, t.adult_height_meters, t.adult_width_meters,
                     t.is_in_danger, t.cultivar_id, t.identification_status,
                     p.common_name, p.botanical_taxon::text, c.cultivar, c.trade_name,
-                    t.id, COALESCE(harvest.windows, '[]')
+                    t.id, COALESCE(harvest.windows, '[]'), t.row_rank
                  FROM trees t
                  JOIN plant_identities p ON p.id = t.plant_identity_id
                  LEFT JOIN plant_cultivars c ON c.id = t.cultivar_id
@@ -539,7 +540,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                     t.reproductive_role, t.adult_height_meters, t.adult_width_meters,
                     t.is_in_danger, t.cultivar_id, t.identification_status,
                     p.common_name, p.botanical_taxon::text, c.cultivar, c.trade_name,
-                    t.id, COALESCE(harvest.windows, '[]')
+                    t.id, COALESCE(harvest.windows, '[]'), t.row_rank
                  FROM trees t
                  JOIN plant_identities p ON p.id = t.plant_identity_id
                  LEFT JOIN plant_cultivars c ON c.id = t.cultivar_id
@@ -587,6 +588,152 @@ impl OrchardStorage for PostgresOrchardStorage {
             )
             .map(|row| row.is_some())
             .map_err(|_| OrchardStorageError::TreeCouldNotBeRead)
+    }
+
+    fn replace_row_order(
+        &mut self,
+        orchard_id: OrchardId,
+        row_name: &str,
+        ordered_tree_ids: &[TreeId],
+    ) -> Result<(), OrchardStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| OrchardStorageError::RowOrderCouldNotBeSaved)?;
+        self.client
+            .execute(
+                "UPDATE trees SET row_rank = NULL WHERE orchard_id = $1 AND row_name = $2",
+                &[&orchard_id, &row_name],
+            )
+            .map_err(|_| OrchardStorageError::RowOrderCouldNotBeSaved)?;
+        for (index, tree_id) in ordered_tree_ids.iter().enumerate() {
+            let tree_id = i64::try_from(tree_id.0)
+                .map_err(|_| OrchardStorageError::RowOrderCouldNotBeSaved)?;
+            let rank = i32::try_from(index + 1)
+                .map_err(|_| OrchardStorageError::RowOrderCouldNotBeSaved)?;
+            let changed = self
+                .client
+                .execute(
+                    "UPDATE trees
+                     SET row_rank = $4
+                     WHERE id = $1 AND orchard_id = $2 AND row_name = $3",
+                    &[&tree_id, &orchard_id, &row_name, &rank],
+                )
+                .map_err(|_| OrchardStorageError::RowOrderCouldNotBeSaved)?;
+            if changed != 1 {
+                return Err(OrchardStorageError::RowOrderCouldNotBeSaved);
+            }
+        }
+        Ok(())
+    }
+
+    fn active_watering_run(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Option<WateringRun>, OrchardStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?;
+        let run = self
+            .client
+            .query_opt(
+                "SELECT id, orchard_id, row_name, completed_at IS NOT NULL
+                 FROM watering_runs
+                 WHERE orchard_id = $1 AND completed_at IS NULL",
+                &[&orchard_id],
+            )
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?;
+        run.map(|row| watering_run_from_row(&mut self.client, &row))
+            .transpose()
+    }
+
+    fn watering_run(
+        &mut self,
+        watering_run_id: WateringRunId,
+    ) -> Result<Option<WateringRun>, OrchardStorageError> {
+        let watering_run_id = i64::try_from(watering_run_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?;
+        let run = self
+            .client
+            .query_opt(
+                "SELECT id, orchard_id, row_name, completed_at IS NOT NULL
+                 FROM watering_runs
+                 WHERE id = $1",
+                &[&watering_run_id],
+            )
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?;
+        run.map(|row| watering_run_from_row(&mut self.client, &row))
+            .transpose()
+    }
+
+    fn create_watering_run(
+        &mut self,
+        orchard_id: OrchardId,
+        row_name: &str,
+        ordered_tree_ids: &[TreeId],
+    ) -> Result<WateringRunId, OrchardStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeCreated)?;
+        let run_id = self
+            .client
+            .query_one(
+                "INSERT INTO watering_runs (orchard_id, row_name)
+                 VALUES ($1, $2)
+                 RETURNING id",
+                &[&orchard_id, &row_name],
+            )
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeCreated)?
+            .get::<_, i64>(0);
+        for (index, tree_id) in ordered_tree_ids.iter().enumerate() {
+            let tree_id = i64::try_from(tree_id.0)
+                .map_err(|_| OrchardStorageError::WateringRunCouldNotBeCreated)?;
+            let row_rank = i32::try_from(index + 1)
+                .map_err(|_| OrchardStorageError::WateringRunCouldNotBeCreated)?;
+            self.client
+                .execute(
+                    "INSERT INTO watering_run_trees (watering_run_id, tree_id, row_rank)
+                     VALUES ($1, $2, $3)",
+                    &[&run_id, &tree_id, &row_rank],
+                )
+                .map_err(|_| OrchardStorageError::WateringRunCouldNotBeCreated)?;
+        }
+        u64::try_from(run_id)
+            .map(WateringRunId)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeCreated)
+    }
+
+    fn mark_watering_tree_watered(
+        &mut self,
+        watering_run_id: WateringRunId,
+        tree_id: TreeId,
+    ) -> Result<(), OrchardStorageError> {
+        let watering_run_id = i64::try_from(watering_run_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeChanged)?;
+        let tree_id = i64::try_from(tree_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeChanged)?;
+        match self.client.execute(
+            "UPDATE watering_run_trees
+             SET watered_at = now()
+             WHERE watering_run_id = $1 AND tree_id = $2 AND watered_at IS NULL",
+            &[&watering_run_id, &tree_id],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::WateringRunCouldNotBeChanged),
+        }
+    }
+
+    fn complete_watering_run(
+        &mut self,
+        watering_run_id: WateringRunId,
+    ) -> Result<(), OrchardStorageError> {
+        let watering_run_id = i64::try_from(watering_run_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeChanged)?;
+        match self.client.execute(
+            "UPDATE watering_runs
+             SET completed_at = now()
+             WHERE id = $1 AND completed_at IS NULL",
+            &[&watering_run_id],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::WateringRunCouldNotBeChanged),
+        }
     }
 }
 
@@ -837,6 +984,10 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
             u64::try_from(row.get::<_, i64>(23))
                 .map_err(|_| OrchardStorageError::TreesCouldNotBeRead)?,
         ),
+        row_rank: row
+            .get::<_, Option<i32>>(25)
+            .map(|rank| u32::try_from(rank).map_err(|_| OrchardStorageError::TreesCouldNotBeRead))
+            .transpose()?,
         tree: Tree {
             legacy_source,
             plant_identity_id: PlantIdentityId(
@@ -874,6 +1025,53 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
                 trade_name: row.get(22),
             }),
         harvest_windows,
+    })
+}
+
+fn watering_run_from_row(
+    client: &mut Client,
+    row: &Row,
+) -> Result<WateringRun, OrchardStorageError> {
+    let stored_run_id = row.get::<_, i64>(0);
+    let entries = client
+        .query(
+            "SELECT tree_id, watered_at IS NOT NULL
+             FROM watering_run_trees
+             WHERE watering_run_id = $1
+             ORDER BY row_rank",
+            &[&stored_run_id],
+        )
+        .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?;
+    let ordered_tree_ids = entries
+        .iter()
+        .map(|entry| {
+            u64::try_from(entry.get::<_, i64>(0))
+                .map(TreeId)
+                .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let watered_tree_ids = entries
+        .iter()
+        .filter(|entry| entry.get::<_, bool>(1))
+        .map(|entry| {
+            u64::try_from(entry.get::<_, i64>(0))
+                .map(TreeId)
+                .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(WateringRun {
+        id: WateringRunId(
+            u64::try_from(stored_run_id)
+                .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?,
+        ),
+        orchard_id: OrchardId(
+            u64::try_from(row.get::<_, i64>(1))
+                .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?,
+        ),
+        row_name: row.get(2),
+        ordered_tree_ids,
+        watered_tree_ids,
+        completed: row.get(3),
     })
 }
 

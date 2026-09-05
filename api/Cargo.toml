@@ -61,6 +61,18 @@ name = "change_tree_condition_unit"
 path = "src/hexagon/use_cases/change_tree_condition/change_tree_condition_unit_test.rs"
 
 [[test]]
+name = "order_orchard_row_unit"
+path = "src/hexagon/use_cases/order_orchard_row/order_orchard_row_unit_test.rs"
+
+[[test]]
+name = "start_watering_run_unit"
+path = "src/hexagon/use_cases/start_watering_run/start_watering_run_unit_test.rs"
+
+[[test]]
+name = "record_tree_watered_unit"
+path = "src/hexagon/use_cases/record_tree_watered/record_tree_watered_unit_test.rs"
+
+[[test]]
 name = "in_memory_orchard_storage_integration"
 path = "src/adapters/secondary/in_memory_orchard_storage/in_memory_orchard_storage_integration_test.rs"
 

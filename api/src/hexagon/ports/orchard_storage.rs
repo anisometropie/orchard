@@ -1,6 +1,6 @@
 use crate::hexagon::models::{
     AnnualHarvestWindow, HarvestScheduleOwner, OrchardId, OrchardTree, PlantIdentification,
-    PlantIdentityReference, Tree, TreeId,
+    PlantIdentityReference, Tree, TreeId, WateringRun, WateringRunId,
 };
 
 #[derive(Debug, PartialEq)]
@@ -13,6 +13,10 @@ pub enum OrchardStorageError {
     TreeCouldNotBeRead,
     TreeDangerCouldNotBeChanged,
     TreeLifeStatusCouldNotBeChanged,
+    RowOrderCouldNotBeSaved,
+    WateringRunCouldNotBeRead,
+    WateringRunCouldNotBeCreated,
+    WateringRunCouldNotBeChanged,
     AtomicOperationCouldNotCommit,
     TreesCouldNotBeRead,
 }
@@ -66,4 +70,33 @@ pub trait OrchardStorage {
         tree_id: TreeId,
         orchard_id: OrchardId,
     ) -> Result<bool, OrchardStorageError>;
+    fn replace_row_order(
+        &mut self,
+        orchard_id: OrchardId,
+        row_name: &str,
+        ordered_tree_ids: &[TreeId],
+    ) -> Result<(), OrchardStorageError>;
+    fn active_watering_run(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Option<WateringRun>, OrchardStorageError>;
+    fn watering_run(
+        &mut self,
+        watering_run_id: WateringRunId,
+    ) -> Result<Option<WateringRun>, OrchardStorageError>;
+    fn create_watering_run(
+        &mut self,
+        orchard_id: OrchardId,
+        row_name: &str,
+        ordered_tree_ids: &[TreeId],
+    ) -> Result<WateringRunId, OrchardStorageError>;
+    fn mark_watering_tree_watered(
+        &mut self,
+        watering_run_id: WateringRunId,
+        tree_id: TreeId,
+    ) -> Result<(), OrchardStorageError>;
+    fn complete_watering_run(
+        &mut self,
+        watering_run_id: WateringRunId,
+    ) -> Result<(), OrchardStorageError>;
 }

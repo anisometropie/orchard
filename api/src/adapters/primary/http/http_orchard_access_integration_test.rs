@@ -200,6 +200,114 @@ async fn shared_access_includes_only_the_orchards_map_and_aerial_image() {
     assert_eq!(image.bytes().await.unwrap().as_ref(), &[1_u8, 2, 3]);
 }
 
+#[tokio::test]
+async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let token = create_share_token(&client, server.url(), &cookie).await;
+
+    let shared_order = client
+        .put(format!("{}/orchards/7/row-order", server.url()))
+        .header("x-orchard-share-token", &token)
+        .json(&serde_json::json!({
+            "row_name": "North",
+            "order": { "method": "east_to_west" }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(shared_order.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        client
+            .post(format!("{}/orchards/7/watering-runs", server.url()))
+            .header("x-orchard-share-token", &token)
+            .json(&serde_json::json!({ "row_name": "North" }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .get(format!("{}/orchards/7/watering-run", server.url()))
+            .header("x-orchard-share-token", &token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let ordered = client
+        .put(format!("{}/orchards/7/row-order", server.url()))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "row_name": "North",
+            "order": { "method": "east_to_west" }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ordered.status(), StatusCode::OK);
+    assert_eq!(
+        ordered.json::<serde_json::Value>().await.unwrap()["tree_ids"],
+        serde_json::json!([1])
+    );
+
+    let started = client
+        .post(format!("{}/orchards/7/watering-runs", server.url()))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({ "row_name": "North" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(started.status(), StatusCode::OK);
+    let progress = started.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(progress["next_tree"]["id"], 1);
+
+    let restored = client
+        .get(format!("{}/orchards/7/watering-run", server.url()))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(restored.status(), StatusCode::OK);
+    assert_eq!(
+        restored.json::<serde_json::Value>().await.unwrap()["next_tree"]["id"],
+        1
+    );
+
+    let completed = client
+        .post(format!(
+            "{}/orchards/7/watering-runs/1/watered",
+            server.url()
+        ))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({ "tree_id": 1 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(completed.status(), StatusCode::OK);
+    let completed = completed.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(completed["watered_tree_count"], 1);
+    assert!(completed["next_tree"].is_null());
+
+    assert_eq!(
+        client
+            .get(format!("{}/orchards/7/watering-run", server.url()))
+            .header(header::COOKIE, cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
 async fn login_cookie(client: &Client, server_url: &str) -> String {
     client
         .post(format!("{server_url}/session"))
@@ -307,7 +415,7 @@ fn tree() -> Tree {
         longitude: 5.02,
         latitude: 45.25,
         planted_on: None,
-        row_name: None,
+        row_name: Some("North".into()),
         roles: vec!["fruit".into()],
         is_alive: true,
         is_in_danger: false,

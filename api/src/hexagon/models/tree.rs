@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{IdentificationStatus, LegacyTreeSource, PlantCultivarId, PlantIdentityId};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct TreeId(pub u64);
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

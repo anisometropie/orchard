@@ -4,7 +4,7 @@ use crate::hexagon::models::{
     AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, HarvestScheduleOwner,
     MapConfiguration, Orchard, OrchardId, OrchardTree, PlantCultivar, PlantCultivarId,
     PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId,
-    User, UserId,
+    User, UserId, WateringRun, WateringRunId,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -40,6 +40,8 @@ struct InMemoryOrchard {
     orchard_harvest_schedules: Vec<(OrchardId, HarvestScheduleOwner, Vec<AnnualHarvestWindow>)>,
     trees: Vec<Tree>,
     tree_orchard_ids: Vec<Option<OrchardId>>,
+    tree_row_ranks: Vec<Option<u32>>,
+    watering_runs: Vec<WateringRun>,
 }
 
 struct InMemoryUser {
@@ -65,6 +67,10 @@ struct InMemoryOrchardTransaction {
         Vec<(OrchardId, HarvestScheduleOwner, Vec<AnnualHarvestWindow>)>,
     staged_tree_danger_changes: Vec<(TreeId, bool)>,
     staged_tree_life_status_changes: Vec<(TreeId, bool)>,
+    staged_row_orders: Vec<(OrchardId, String, Vec<TreeId>)>,
+    staged_watering_runs: Vec<WateringRun>,
+    staged_watered_trees: Vec<(WateringRunId, TreeId)>,
+    staged_completed_watering_runs: Vec<WateringRunId>,
 }
 
 #[derive(Default)]
@@ -74,6 +80,7 @@ struct InMemoryOrchardConfiguration {
     plant_identities: Vec<PlantIdentity>,
     trees: Vec<Tree>,
     tree_orchard_ids: Vec<Option<OrchardId>>,
+    tree_row_ranks: Vec<Option<u32>>,
     failing_legacy_feature_id: Option<u32>,
     fail_when_saving_any_tree: bool,
     failing_plant_identity_genus: Option<String>,
@@ -251,6 +258,11 @@ impl InMemoryOrchardStorage {
     fn with_configuration(
         configuration: InMemoryOrchardConfiguration,
     ) -> (Self, InMemoryOrchardObserver) {
+        let tree_row_ranks = if configuration.tree_row_ranks.is_empty() {
+            vec![None; configuration.trees.len()]
+        } else {
+            configuration.tree_row_ranks
+        };
         let orchard = Arc::new(Mutex::new(InMemoryOrchard {
             users: configuration.users,
             sessions: Vec::new(),
@@ -263,6 +275,8 @@ impl InMemoryOrchardStorage {
             orchard_harvest_schedules: Vec::new(),
             trees: configuration.trees,
             tree_orchard_ids: configuration.tree_orchard_ids,
+            tree_row_ranks,
+            watering_runs: Vec::new(),
         }));
         (
             Self {
@@ -559,6 +573,42 @@ impl OrchardStorage for InMemoryOrchardStorage {
                         .get_mut(index)
                         .expect("a staged life-status change should target an existing tree")
                         .is_alive = is_alive;
+                }
+                for (orchard_id, row_name, ordered_tree_ids) in transaction.staged_row_orders {
+                    for index in 0..committed_orchard.trees.len() {
+                        let belongs_to_row = committed_orchard.tree_orchard_ids.get(index)
+                            == Some(&Some(orchard_id))
+                            && committed_orchard.trees[index].row_name.as_deref()
+                                == Some(row_name.as_str());
+                        if !belongs_to_row {
+                            continue;
+                        }
+                        committed_orchard.tree_row_ranks[index] = ordered_tree_ids
+                            .iter()
+                            .position(|tree_id| tree_id.0 == (index + 1) as u64)
+                            .map(|rank| (rank + 1) as u32);
+                    }
+                }
+                committed_orchard
+                    .watering_runs
+                    .extend(transaction.staged_watering_runs);
+                for (run_id, tree_id) in transaction.staged_watered_trees {
+                    if let Some(run) = committed_orchard
+                        .watering_runs
+                        .iter_mut()
+                        .find(|run| run.id == run_id)
+                    {
+                        run.watered_tree_ids.push(tree_id);
+                    }
+                }
+                for run_id in transaction.staged_completed_watering_runs {
+                    if let Some(run) = committed_orchard
+                        .watering_runs
+                        .iter_mut()
+                        .find(|run| run.id == run_id)
+                    {
+                        run.completed = true;
+                    }
                 }
                 Ok(value)
             }
@@ -903,6 +953,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
                     .unwrap_or_default();
                 Ok(OrchardTree {
                     id: TreeId((index + 1) as u64),
+                    row_rank: orchard.tree_row_ranks.get(index).copied().flatten(),
                     tree: tree.clone(),
                     plant_identity,
                     plant_cultivar,
@@ -962,6 +1013,99 @@ impl OrchardStorage for InMemoryOrchardStorage {
             })
             .is_some_and(|stored_orchard_id| stored_orchard_id == orchard_id))
     }
+
+    fn replace_row_order(
+        &mut self,
+        orchard_id: OrchardId,
+        row_name: &str,
+        ordered_tree_ids: &[TreeId],
+    ) -> Result<(), OrchardStorageError> {
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_row_orders
+            .push((orchard_id, row_name.into(), ordered_tree_ids.to_vec()));
+        Ok(())
+    }
+
+    fn active_watering_run(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Option<WateringRun>, OrchardStorageError> {
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .find(|run| run.orchard_id == orchard_id && !run.completed)
+            .cloned())
+    }
+
+    fn watering_run(
+        &mut self,
+        watering_run_id: WateringRunId,
+    ) -> Result<Option<WateringRun>, OrchardStorageError> {
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .find(|run| run.id == watering_run_id)
+            .cloned())
+    }
+
+    fn create_watering_run(
+        &mut self,
+        orchard_id: OrchardId,
+        row_name: &str,
+        ordered_tree_ids: &[TreeId],
+    ) -> Result<WateringRunId, OrchardStorageError> {
+        let transaction = self
+            .transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        let run_id = WateringRunId(
+            (self.orchard.lock().unwrap().watering_runs.len()
+                + transaction.staged_watering_runs.len()
+                + 1) as u64,
+        );
+        transaction.staged_watering_runs.push(WateringRun {
+            id: run_id,
+            orchard_id,
+            row_name: row_name.into(),
+            ordered_tree_ids: ordered_tree_ids.to_vec(),
+            watered_tree_ids: vec![],
+            completed: false,
+        });
+        Ok(run_id)
+    }
+
+    fn mark_watering_tree_watered(
+        &mut self,
+        watering_run_id: WateringRunId,
+        tree_id: TreeId,
+    ) -> Result<(), OrchardStorageError> {
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_watered_trees
+            .push((watering_run_id, tree_id));
+        Ok(())
+    }
+
+    fn complete_watering_run(
+        &mut self,
+        watering_run_id: WateringRunId,
+    ) -> Result<(), OrchardStorageError> {
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_completed_watering_runs
+            .push(watering_run_id);
+        Ok(())
+    }
 }
 
 fn has_legacy_feature_id(orchard: &InMemoryOrchard, legacy_feature_id: u32) -> bool {
@@ -1013,6 +1157,35 @@ impl InMemoryOrchardObserver {
 
     pub fn trees(&self) -> Vec<Tree> {
         self.orchard.lock().unwrap().trees.clone()
+    }
+
+    pub fn row_order(&self, orchard_id: OrchardId, row_name: &str) -> Vec<TreeId> {
+        let orchard = self.orchard.lock().unwrap();
+        let mut ranked = orchard
+            .trees
+            .iter()
+            .enumerate()
+            .filter(|(index, tree)| {
+                tree.row_name.as_deref() == Some(row_name)
+                    && orchard.tree_orchard_ids.get(*index) == Some(&Some(orchard_id))
+            })
+            .filter_map(|(index, _)| {
+                orchard.tree_row_ranks[index].map(|rank| (rank, TreeId((index + 1) as u64)))
+            })
+            .collect::<Vec<_>>();
+        ranked.sort_by_key(|(rank, _)| *rank);
+        ranked.into_iter().map(|(_, tree_id)| tree_id).collect()
+    }
+
+    pub fn active_watering_run_tree_ids(&self, orchard_id: OrchardId) -> Vec<TreeId> {
+        self.orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .find(|run| run.orchard_id == orchard_id && !run.completed)
+            .map(|run| run.ordered_tree_ids.clone())
+            .unwrap_or_default()
     }
 
     pub fn harvest_windows(&self, owner: HarvestScheduleOwner) -> Vec<AnnualHarvestWindow> {

@@ -92,7 +92,9 @@
       #map-toolbar {
         align-items: center;
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
+        max-width: calc(100vw - 40px);
         position: absolute;
         left: 20px;
         top: 20px;
@@ -165,7 +167,8 @@
         color: #555;
         white-space: nowrap;
       }
-      .inventory-button {
+      .inventory-button,
+      .workflow-button {
         background: #245c2a;
         border: 1px solid #245c2a;
         border-radius: 6px;
@@ -173,6 +176,147 @@
         cursor: pointer;
         font: 600 13px sans-serif;
         padding: 8px 12px;
+      }
+      .workflow-button.order-button {
+        background: #3d5266;
+        border-color: #3d5266;
+      }
+      .workflow-panel {
+        background: rgba(255, 255, 255, 0.98);
+        border-radius: 10px;
+        box-shadow: 0 3px 16px rgba(0, 0, 0, 0.3);
+        box-sizing: border-box;
+        font: 13px sans-serif;
+        left: 20px;
+        overflow-y: auto;
+        padding: 14px;
+        position: absolute;
+        top: 68px;
+        width: min(330px, calc(100vw - 40px));
+        z-index: 25;
+      }
+      .workflow-panel[hidden],
+      #watering-tree-banner[hidden],
+      .manual-order-actions[hidden] {
+        display: none;
+      }
+      .workflow-panel header {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+      .workflow-panel h2 {
+        font-size: 17px;
+        margin: 0;
+      }
+      .workflow-panel-close {
+        background: transparent;
+        border: 0;
+        cursor: pointer;
+        font-size: 24px;
+        line-height: 1;
+      }
+      .workflow-panel label {
+        display: block;
+        font-weight: 600;
+        margin-top: 10px;
+      }
+      .workflow-panel select,
+      .workflow-panel button:not(.workflow-panel-close) {
+        border: 1px solid #777;
+        border-radius: 5px;
+        box-sizing: border-box;
+        font: inherit;
+        padding: 7px 9px;
+      }
+      .workflow-panel select {
+        display: block;
+        margin-top: 5px;
+        width: 100%;
+      }
+      .workflow-panel button:not(.workflow-panel-close) {
+        background: #245c2a;
+        border-color: #245c2a;
+        color: white;
+        cursor: pointer;
+        margin-top: 10px;
+      }
+      .workflow-panel button.secondary {
+        background: white;
+        border-color: #777;
+        color: #333;
+      }
+      .workflow-panel button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+      .workflow-help,
+      .workflow-status,
+      .workflow-error {
+        font-size: 12px;
+        margin: 9px 0 0;
+      }
+      .workflow-help,
+      .workflow-status {
+        color: #555;
+      }
+      .workflow-error {
+        color: #b42318;
+      }
+      .manual-order-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .manual-order-marker {
+        align-items: center;
+        background: #245c2a;
+        border: 2px solid white;
+        border-radius: 50%;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+        color: white;
+        display: flex;
+        font: 700 12px sans-serif;
+        height: 24px;
+        justify-content: center;
+        pointer-events: none;
+        width: 24px;
+      }
+      #watering-tree-banner {
+        align-items: center;
+        background: rgba(255, 255, 255, 0.98);
+        border: 2px solid #245c2a;
+        border-radius: 10px;
+        box-shadow: 0 3px 16px rgba(0, 0, 0, 0.3);
+        display: flex;
+        font: 13px sans-serif;
+        gap: 14px;
+        left: 50%;
+        max-width: calc(100vw - 40px);
+        overflow-y: auto;
+        padding: 10px 12px;
+        position: absolute;
+        top: 20px;
+        transform: translateX(-50%);
+        z-index: 40;
+      }
+      #watering-tree-name {
+        font-size: 16px;
+        font-weight: 700;
+      }
+      #watering-tree-progress {
+        color: #555;
+        margin-top: 2px;
+      }
+      #watering-done {
+        background: #245c2a;
+        border: 1px solid #245c2a;
+        border-radius: 6px;
+        color: white;
+        cursor: pointer;
+        font: 700 14px sans-serif;
+        padding: 9px 14px;
       }
       .map-mode-switch {
         display: flex;
@@ -526,6 +670,7 @@
           top: 10px;
         }
         .inventory-button,
+        .workflow-button,
         .map-mode-button {
           padding: 7px 8px;
         }
@@ -541,6 +686,10 @@
           padding: 12px;
           top: 10px;
           width: calc(100vw - 20px);
+        }
+        .workflow-panel {
+          left: 10px;
+          width: min(330px, calc(100vw - 20px));
         }
         .inventory-filters {
           grid-template-columns: 1fr;
@@ -571,7 +720,14 @@
         }
         #map-toolbar {
           left: 10px;
+          max-width: calc(100vw - 20px);
           top: 74px;
+        }
+        #watering-tree-banner {
+          left: 10px;
+          max-width: calc(100vw - 20px);
+          right: 10px;
+          transform: none;
         }
       }
     </style>
@@ -580,6 +736,24 @@
     <div id="map"></div>
     <div id="map-status">Loading orchard trees…</div>
     <div id="map-toolbar" hidden>
+      <button
+        id="watering-toggle"
+        class="workflow-button"
+        type="button"
+        aria-controls="watering-panel"
+        hidden
+      >
+        Watering
+      </button>
+      <button
+        id="row-order-toggle"
+        class="workflow-button order-button"
+        type="button"
+        aria-controls="row-order-panel"
+        hidden
+      >
+        Order rows
+      </button>
       <button
         id="inventory-toggle"
         class="inventory-button"
@@ -616,6 +790,55 @@
         </button>
       </div>
     </div>
+    <section id="watering-panel" class="workflow-panel" aria-labelledby="watering-title" hidden>
+      <header>
+        <h2 id="watering-title">Water a row</h2>
+        <button id="watering-close" class="workflow-panel-close" type="button" aria-label="Close watering menu">×</button>
+      </header>
+      <label>
+        Row
+        <select id="watering-row"></select>
+      </label>
+      <p class="workflow-help">Trees are visited in their saved order. Dead trees are skipped.</p>
+      <button id="watering-start" type="button">Start</button>
+      <p id="watering-menu-status" class="workflow-status" hidden></p>
+      <p id="watering-error" class="workflow-error" role="alert" hidden></p>
+    </section>
+    <section id="row-order-panel" class="workflow-panel" aria-labelledby="row-order-title" hidden>
+      <header>
+        <h2 id="row-order-title">Order trees in a row</h2>
+        <button id="row-order-close" class="workflow-panel-close" type="button" aria-label="Close row ordering menu">×</button>
+      </header>
+      <label>
+        Row
+        <select id="row-order-row"></select>
+      </label>
+      <label>
+        Automatic direction
+        <select id="row-order-direction">
+          <option value="east_to_west">East → west</option>
+          <option value="west_to_east">West → east</option>
+          <option value="north_to_south">North → south</option>
+          <option value="south_to_north">South → north</option>
+        </select>
+      </label>
+      <button id="row-order-automatic" type="button">Apply automatic order</button>
+      <button id="row-order-manual" class="secondary" type="button">Order manually on map</button>
+      <p id="row-order-status" class="workflow-status" hidden></p>
+      <div id="manual-order-actions" class="manual-order-actions" hidden>
+        <button id="manual-order-undo" class="secondary" type="button">Undo</button>
+        <button id="manual-order-save" type="button" disabled>Save order</button>
+        <button id="manual-order-cancel" class="secondary" type="button">Cancel</button>
+      </div>
+      <p id="row-order-error" class="workflow-error" role="alert" hidden></p>
+    </section>
+    <section id="watering-tree-banner" aria-live="polite" hidden>
+      <div>
+        <div id="watering-tree-name"></div>
+        <div id="watering-tree-progress"></div>
+      </div>
+      <button id="watering-done" type="button">Done</button>
+    </section>
     <section id="access-panel" aria-label="Orchard access">
       <span id="access-mode">Public world map</span>
       <button id="login-toggle" type="button">Log in</button>
@@ -837,6 +1060,12 @@
         resolveOrchardAccess,
         sharedOrchardUrl,
       } from "./orchard-access.mjs?v=2";
+      import {
+        appendManualTree,
+        orchardRows,
+        treeIdsInRow,
+        wateringTargetGeoJson,
+      } from "./watering.mjs?v=2";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -973,6 +1202,9 @@
       let session = null;
       let currentAccess = { mode: "empty", orchardId: null };
       let aerialOverlaySources = [];
+      let manualOrder = null;
+      let manualOrderMarkers = [];
+      let wateringProgress = null;
       const inventoryToggle = document.getElementById("inventory-toggle");
       const inventoryPanel = document.getElementById("inventory-panel");
       const inventoryClose = document.getElementById("inventory-close");
@@ -1027,10 +1259,47 @@
       const shareResult = document.getElementById("share-result");
       const shareLink = document.getElementById("share-link");
       const copyShareLink = document.getElementById("copy-share-link");
+      const wateringToggle = document.getElementById("watering-toggle");
+      const wateringPanel = document.getElementById("watering-panel");
+      const wateringClose = document.getElementById("watering-close");
+      const wateringRow = document.getElementById("watering-row");
+      const wateringStart = document.getElementById("watering-start");
+      const wateringMenuStatus = document.getElementById("watering-menu-status");
+      const wateringError = document.getElementById("watering-error");
+      const rowOrderToggle = document.getElementById("row-order-toggle");
+      const rowOrderPanel = document.getElementById("row-order-panel");
+      const rowOrderClose = document.getElementById("row-order-close");
+      const rowOrderRow = document.getElementById("row-order-row");
+      const rowOrderDirection = document.getElementById("row-order-direction");
+      const rowOrderAutomatic = document.getElementById("row-order-automatic");
+      const rowOrderManual = document.getElementById("row-order-manual");
+      const rowOrderStatus = document.getElementById("row-order-status");
+      const rowOrderError = document.getElementById("row-order-error");
+      const manualOrderActions = document.getElementById("manual-order-actions");
+      const manualOrderUndo = document.getElementById("manual-order-undo");
+      const manualOrderSave = document.getElementById("manual-order-save");
+      const manualOrderCancel = document.getElementById("manual-order-cancel");
+      const wateringTreeBanner = document.getElementById("watering-tree-banner");
+      const wateringTreeName = document.getElementById("watering-tree-name");
+      const wateringTreeProgress = document.getElementById("watering-tree-progress");
+      const wateringDone = document.getElementById("watering-done");
 
       function placeMapFiltersBelowAccessMenu() {
         const viewportInset = window.innerWidth <= 760 ? 10 : 20;
-        const top = Math.ceil(accessPanel.getBoundingClientRect().bottom + 12);
+        let top = Math.ceil(accessPanel.getBoundingClientRect().bottom + 12);
+        if (!mapFilterPanel.hidden) {
+          mapFilterPanel.style.top = `${top}px`;
+          const filterBounds = mapFilterPanel.getBoundingClientRect();
+          const blockers = [mapToolbar, wateringTreeBanner].filter(
+            (element) => !element.hidden,
+          );
+          blockers.forEach((blocker) => {
+            const bounds = blocker.getBoundingClientRect();
+            const overlapsHorizontally =
+              bounds.left < filterBounds.right && bounds.right > filterBounds.left;
+            if (overlapsHorizontally) top = Math.max(top, Math.ceil(bounds.bottom + 12));
+          });
+        }
         mapFilterPanel.style.top = `${top}px`;
         mapFilterPanel.style.maxHeight = `${Math.max(
           80,
@@ -1038,9 +1307,59 @@
         )}px`;
       }
 
-      new ResizeObserver(placeMapFiltersBelowAccessMenu).observe(accessPanel);
-      window.addEventListener("resize", placeMapFiltersBelowAccessMenu);
-      placeMapFiltersBelowAccessMenu();
+      function placeToolbarAroundAccessMenu() {
+        if (mapToolbar.hidden) return;
+        const viewportInset = window.innerWidth <= 760 ? 10 : 20;
+        mapToolbar.style.top = `${viewportInset}px`;
+        const accessBounds = accessPanel.getBoundingClientRect();
+        const toolbarBounds = mapToolbar.getBoundingClientRect();
+        if (toolbarBounds.right + 12 > accessBounds.left) {
+          mapToolbar.style.top = `${Math.ceil(accessBounds.bottom + 12)}px`;
+        }
+      }
+
+      function placeWateringBannerBelowTopControls() {
+        if (wateringTreeBanner.hidden) return;
+        const accessBottom = accessPanel.getBoundingClientRect().bottom;
+        const toolbarBottom = mapToolbar.hidden
+          ? 0
+          : mapToolbar.getBoundingClientRect().bottom;
+        wateringTreeBanner.style.top = `${Math.ceil(
+          Math.max(accessBottom, toolbarBottom) + 12,
+        )}px`;
+      }
+
+      function placeWorkflowPanelsBelowToolbar() {
+        if (mapToolbar.hidden) return;
+        const viewportInset = window.innerWidth <= 760 ? 10 : 20;
+        const bannerBottom = wateringTreeBanner.hidden
+          ? 0
+          : wateringTreeBanner.getBoundingClientRect().bottom;
+        const top = Math.ceil(
+          Math.max(mapToolbar.getBoundingClientRect().bottom, bannerBottom) + 12,
+        );
+        [wateringPanel, rowOrderPanel].forEach((panel) => {
+          panel.style.top = `${top}px`;
+          panel.style.maxHeight = `${Math.max(
+            120,
+            window.innerHeight - top - viewportInset,
+          )}px`;
+        });
+      }
+
+      function layoutMapControls() {
+        placeToolbarAroundAccessMenu();
+        placeWateringBannerBelowTopControls();
+        placeMapFiltersBelowAccessMenu();
+        placeWorkflowPanelsBelowToolbar();
+      }
+
+      const mapControlsObserver = new ResizeObserver(layoutMapControls);
+      mapControlsObserver.observe(accessPanel);
+      mapControlsObserver.observe(mapToolbar);
+      mapControlsObserver.observe(wateringTreeBanner);
+      window.addEventListener("resize", layoutMapControls);
+      layoutMapControls();
 
       function renderHarvestPartFilters() {
         Object.entries(HARVEST_PIN_ICONS)
@@ -1133,6 +1452,58 @@
           context.beginPath();
           context.arc(22, 27.5, 1.9, 0, Math.PI * 2);
           context.fill();
+        });
+      }
+
+      function createWateringPinImage() {
+        return createMapPinImage("#147d92", (context) => {
+          context.save();
+          context.translate(24.1, 20);
+          context.scale(0.7, 0.7);
+          context.translate(-22, -20);
+          context.fillStyle = "#0a5665";
+          context.strokeStyle = "#0a5665";
+          context.lineCap = "round";
+          context.lineJoin = "round";
+          context.lineWidth = 2;
+
+          context.beginPath();
+          context.moveTo(15, 18);
+          context.lineTo(27, 18);
+          context.lineTo(28, 27);
+          context.quadraticCurveTo(21.5, 29, 15, 27);
+          context.closePath();
+          context.fill();
+
+          context.beginPath();
+          context.moveTo(18, 18);
+          context.lineTo(18, 15);
+          context.lineTo(23, 15);
+          context.lineTo(23, 18);
+          context.stroke();
+
+          context.beginPath();
+          context.moveTo(27, 19);
+          context.bezierCurveTo(35, 15, 35, 28, 28, 26);
+          context.stroke();
+
+          context.beginPath();
+          context.moveTo(15, 21);
+          context.lineTo(8, 16);
+          context.lineTo(7, 19);
+          context.lineTo(15, 25);
+          context.closePath();
+          context.fill();
+          context.beginPath();
+          context.arc(7.5, 16.5, 2.3, 0, Math.PI * 2);
+          context.fill();
+
+          context.fillStyle = "#39a9d1";
+          context.beginPath();
+          context.arc(5, 22.5, 1.2, 0, Math.PI * 2);
+          context.arc(8.5, 24.5, 1.2, 0, Math.PI * 2);
+          context.fill();
+          context.restore();
         });
       }
 
@@ -1302,6 +1673,317 @@
         inventoryToggle.hidden = isOpen;
         inventoryToggle.setAttribute("aria-expanded", String(isOpen));
         if (isOpen) inventoryClose.focus();
+      }
+
+      function setWorkflowPanel(openPanel) {
+        wateringPanel.hidden = openPanel !== wateringPanel;
+        rowOrderPanel.hidden = openPanel !== rowOrderPanel;
+        mapFilterPanel.hidden = openPanel != null || !hasOpenOrchard(currentAccess);
+        wateringToggle.setAttribute(
+          "aria-expanded",
+          String(openPanel === wateringPanel),
+        );
+        rowOrderToggle.setAttribute(
+          "aria-expanded",
+          String(openPanel === rowOrderPanel),
+        );
+        if (openPanel) {
+          setInventoryOpen(false);
+        }
+        layoutMapControls();
+      }
+
+      function replaceRowOptions(select, rows) {
+        const previous = select.value;
+        const options = rows.map((row) => {
+          const orderState = row.isOrdered ? "ordered" : "not ordered";
+          return new Option(
+            `${row.name} · ${row.treeCount} trees · ${orderState}`,
+            row.name,
+          );
+        });
+        select.replaceChildren(...options);
+        if (rows.some((row) => row.name === previous)) select.value = previous;
+      }
+
+      function refreshWorkflowRows() {
+        const rows = orchardRows(orchardFeatures);
+        replaceRowOptions(wateringRow, rows.filter((row) => row.livingTreeCount > 0));
+        replaceRowOptions(rowOrderRow, rows);
+        wateringStart.disabled = rows.length === 0 || wateringProgress != null;
+        rowOrderAutomatic.disabled = rows.length === 0;
+        rowOrderManual.disabled = rows.length === 0;
+      }
+
+      async function saveRowOrder(rowName, order) {
+        const response = await fetch(
+          orchardResourceUrl(currentAccess, "row-order"),
+          {
+            method: "PUT",
+            headers: {
+              "content-type": "application/json",
+              ...accessHeaders(currentAccess),
+            },
+            body: JSON.stringify({ row_name: rowName, order }),
+          },
+        );
+        if (response.ok) return response.json();
+        if (response.status === 400) {
+          throw new Error("The manual order must include every tree in this row once.");
+        }
+        if (response.status === 404) throw new Error("This row no longer exists.");
+        throw new Error("Could not save this row order. Please try again.");
+      }
+
+      async function applyAutomaticRowOrder() {
+        if (!rowOrderRow.value) return;
+        rowOrderError.hidden = true;
+        rowOrderAutomatic.disabled = true;
+        try {
+          const result = await saveRowOrder(rowOrderRow.value, {
+            method: rowOrderDirection.value,
+          });
+          await fetchOrchardTrees();
+          rowOrderStatus.textContent = `Saved ${result.tree_ids.length} trees in ${rowOrderRow.value}.`;
+          rowOrderStatus.hidden = false;
+        } catch (error) {
+          rowOrderError.textContent = error.message;
+          rowOrderError.hidden = false;
+        } finally {
+          rowOrderAutomatic.disabled = false;
+        }
+      }
+
+      function clearManualOrderMarkers() {
+        manualOrderMarkers.forEach((marker) => marker.remove());
+        manualOrderMarkers = [];
+      }
+
+      function renderManualOrder() {
+        clearManualOrderMarkers();
+        if (!manualOrder) {
+          manualOrderActions.hidden = true;
+          return;
+        }
+        manualOrder.treeIds.forEach((treeId, index) => {
+          const feature = orchardFeatures.find(
+            (candidate) => Number(candidate.id) === treeId,
+          );
+          if (!feature) return;
+          const element = document.createElement("div");
+          element.className = "manual-order-marker";
+          element.textContent = String(index + 1);
+          manualOrderMarkers.push(
+            new maplibregl.Marker({ element })
+              .setLngLat(feature.geometry.coordinates)
+              .addTo(map),
+          );
+        });
+        const selected = manualOrder.treeIds.length;
+        const total = manualOrder.allowedTreeIds.length;
+        rowOrderStatus.textContent =
+          selected === total
+            ? `All ${total} trees selected. Save the order.`
+            : `Click tree ${selected + 1} of ${total} in ${manualOrder.rowName}.`;
+        rowOrderStatus.hidden = false;
+        manualOrderActions.hidden = false;
+        manualOrderUndo.disabled = selected === 0;
+        manualOrderSave.disabled = selected !== total;
+      }
+
+      function beginManualRowOrder() {
+        const rowName = rowOrderRow.value;
+        if (!rowName) return;
+        closeTreeEditor();
+        treeTooltip?.remove();
+        treeTooltip = undefined;
+        manualOrder = {
+          rowName,
+          allowedTreeIds: treeIdsInRow(orchardFeatures, rowName),
+          treeIds: [],
+        };
+        rowOrderError.hidden = true;
+        renderManualOrder();
+      }
+
+      function cancelManualRowOrder() {
+        manualOrder = null;
+        clearManualOrderMarkers();
+        manualOrderActions.hidden = true;
+        rowOrderStatus.hidden = true;
+        map.getCanvas().style.cursor = "";
+      }
+
+      function selectManualOrderTree(feature) {
+        if (!manualOrder) return false;
+        const next = appendManualTree(
+          manualOrder.treeIds,
+          feature.id,
+          manualOrder.allowedTreeIds,
+        );
+        if (next === manualOrder.treeIds) {
+          rowOrderError.textContent =
+            feature.properties.row_name === manualOrder.rowName
+              ? "That tree is already in the order."
+              : `Choose a tree in ${manualOrder.rowName}.`;
+          rowOrderError.hidden = false;
+          return true;
+        }
+        manualOrder.treeIds = next;
+        rowOrderError.hidden = true;
+        renderManualOrder();
+        return true;
+      }
+
+      async function saveManualRowOrder() {
+        if (!manualOrder) return;
+        manualOrderSave.disabled = true;
+        rowOrderError.hidden = true;
+        const { rowName, treeIds } = manualOrder;
+        try {
+          await saveRowOrder(rowName, {
+            method: "manual",
+            tree_ids: treeIds,
+          });
+          cancelManualRowOrder();
+          await fetchOrchardTrees();
+          rowOrderStatus.textContent = `Saved ${treeIds.length} trees in ${rowName}.`;
+          rowOrderStatus.hidden = false;
+        } catch (error) {
+          rowOrderError.textContent = error.message;
+          rowOrderError.hidden = false;
+          manualOrderSave.disabled = false;
+        }
+      }
+
+      function showWateringProgress(progress) {
+        wateringProgress = progress?.next_tree ? progress : null;
+        refreshWorkflowRows();
+        if (!progress?.next_tree) {
+          map
+            .getSource("watering-target")
+            ?.setData(wateringTargetGeoJson(null));
+          wateringTreeBanner.hidden = true;
+          if (progress) {
+            wateringMenuStatus.textContent = `${progress.row_name} complete · ${progress.total_tree_count} trees watered.`;
+            wateringMenuStatus.hidden = false;
+          }
+          layoutMapControls();
+          return;
+        }
+        closeTreeEditor();
+        treeTooltip?.remove();
+        treeTooltip = undefined;
+        wateringTreeName.textContent = progress.next_tree.name;
+        wateringTreeProgress.textContent = `${progress.row_name} · tree ${progress.next_tree.row_rank} of ${progress.total_tree_count} · ${progress.watered_tree_count} done`;
+        map
+          .getSource("watering-target")
+          ?.setData(wateringTargetGeoJson(progress.next_tree));
+        wateringTreeBanner.hidden = false;
+        layoutMapControls();
+        wateringMenuStatus.textContent = `Watering ${progress.row_name}: ${progress.watered_tree_count} of ${progress.total_tree_count} done.`;
+        wateringMenuStatus.hidden = false;
+        const pinHeight = 54 * 1.55;
+        const bannerBottom = wateringTreeBanner.getBoundingClientRect().bottom;
+        const topPadding = Math.max(
+          0,
+          Math.min(
+            window.innerHeight - 120,
+            2 * (bannerBottom + 20 + pinHeight) - window.innerHeight,
+          ),
+        );
+        map.easeTo({
+          center: [progress.next_tree.longitude, progress.next_tree.latitude],
+          zoom: Math.max(map.getZoom(), 21),
+          duration: 700,
+          padding: { top: topPadding, right: 0, bottom: 0, left: 0 },
+          retainPadding: false,
+        });
+      }
+
+      async function restoreActiveWateringRun() {
+        wateringProgress = null;
+        map
+          .getSource("watering-target")
+          ?.setData(wateringTargetGeoJson(null));
+        wateringTreeBanner.hidden = true;
+        if (!isEditable()) return;
+        const response = await fetch(
+          orchardResourceUrl(currentAccess, "watering-run"),
+          { headers: accessHeaders(currentAccess), cache: "no-store" },
+        );
+        if (response.status === 204) {
+          refreshWorkflowRows();
+          layoutMapControls();
+          return;
+        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        showWateringProgress(await response.json());
+      }
+
+      async function startWatering() {
+        if (!wateringRow.value || wateringProgress) return;
+        wateringError.hidden = true;
+        wateringStart.disabled = true;
+        try {
+          const response = await fetch(
+            orchardResourceUrl(currentAccess, "watering-runs"),
+            {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                ...accessHeaders(currentAccess),
+              },
+              body: JSON.stringify({ row_name: wateringRow.value }),
+            },
+          );
+          if (response.status === 409) {
+            throw new Error(
+              "Save an order for this row first, or finish the active watering row.",
+            );
+          }
+          if (response.status === 404) throw new Error("This row no longer exists.");
+          if (!response.ok) throw new Error("Could not start watering. Please try again.");
+          setWorkflowPanel(null);
+          showWateringProgress(await response.json());
+        } catch (error) {
+          wateringError.textContent = error.message;
+          wateringError.hidden = false;
+          wateringStart.disabled = false;
+        }
+      }
+
+      async function markCurrentTreeWatered() {
+        if (!wateringProgress?.next_tree) return;
+        wateringDone.disabled = true;
+        wateringError.hidden = true;
+        try {
+          const response = await fetch(
+            orchardResourceUrl(
+              currentAccess,
+              `watering-runs/${encodeURIComponent(wateringProgress.run_id)}/watered`,
+            ),
+            {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                ...accessHeaders(currentAccess),
+              },
+              body: JSON.stringify({ tree_id: wateringProgress.next_tree.id }),
+            },
+          );
+          if (response.status === 409) {
+            throw new Error("Watering progress changed. Reload the page to resume.");
+          }
+          if (!response.ok) throw new Error("Could not record this tree. Please try again.");
+          showWateringProgress(await response.json());
+        } catch (error) {
+          wateringError.textContent = error.message;
+          wateringError.hidden = false;
+          setWorkflowPanel(wateringPanel);
+        } finally {
+          wateringDone.disabled = false;
+        }
       }
 
       function selectInventoryView(view) {
@@ -1711,7 +2393,13 @@
       }
 
       map.on("mousemove", "trees", (event) => {
-        map.getCanvas().style.cursor = "pointer";
+        map.getCanvas().style.cursor = manualOrder ? "crosshair" : "pointer";
+        if (manualOrder) {
+          treeTooltip?.remove();
+          treeTooltip = undefined;
+          treeTooltipTreeId = undefined;
+          return;
+        }
         if (treeEditor) return;
 
         const feature = event.features[0];
@@ -1730,7 +2418,7 @@
       });
 
       map.on("mouseleave", "trees", () => {
-        map.getCanvas().style.cursor = "";
+        map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
         treeTooltip?.remove();
         treeTooltip = undefined;
         treeTooltipTreeId = undefined;
@@ -1738,6 +2426,7 @@
 
       map.on("click", "trees", (event) => {
         const feature = event.features[0];
+        if (selectManualOrderTree(feature)) return;
         treeTooltip?.remove();
         treeTooltip = undefined;
         treeTooltipTreeId = undefined;
@@ -1770,6 +2459,9 @@
           });
         });
         map.addImage("danger-tree", createDangerPinImage(), { pixelRatio: 2 });
+        map.addImage("watering-tree", createWateringPinImage(), {
+          pixelRatio: 2,
+        });
         map.addImage("dead-tree-cross", createDeadTreeCrossImage());
         map.addLayer({
           id: "dead-tree-crosses",
@@ -1791,6 +2483,22 @@
           },
           paint: {
             "icon-opacity": 0.3,
+          },
+        });
+        map.addSource("watering-target", {
+          type: "geojson",
+          data: wateringTargetGeoJson(null),
+        });
+        map.addLayer({
+          id: "watering-target-pin",
+          type: "symbol",
+          source: "watering-target",
+          layout: {
+            "icon-allow-overlap": true,
+            "icon-anchor": "bottom",
+            "icon-ignore-placement": true,
+            "icon-image": "watering-tree",
+            "icon-size": 1.55,
           },
         });
 
@@ -1835,6 +2543,7 @@
         try {
           await loadMapConfiguration();
           await fetchOrchardTrees();
+          await restoreActiveWateringRun();
           status.hidden = true;
         } catch (error) {
           console.error("Could not initialize the orchard map", error);
@@ -1851,6 +2560,16 @@
 
       function clearOrchardPresentation() {
         closeTreeEditor();
+        cancelManualRowOrder();
+        setWorkflowPanel(null);
+        wateringProgress = null;
+        map
+          .getSource("watering-target")
+          ?.setData(wateringTargetGeoJson(null));
+        wateringTreeBanner.hidden = true;
+        wateringMenuStatus.hidden = true;
+        wateringError.hidden = true;
+        rowOrderError.hidden = true;
         setInventoryOpen(false);
         orchardFeatures = [];
         map.getSource("orchard")?.setData({
@@ -1865,6 +2584,7 @@
         });
         aerialOverlaySources = [];
         refreshTaxonomyFilters();
+        refreshWorkflowRows();
         renderInventory();
       }
 
@@ -1922,6 +2642,7 @@
         orchardFeatures = orchard.features || [];
         applyHarvestWindow();
         refreshTaxonomyFilters();
+        refreshWorkflowRows();
         renderInventory();
       }
 
@@ -1942,6 +2663,13 @@
         const loggedIn = session != null;
         mapToolbar.hidden = !orchardIsOpen;
         mapFilterPanel.hidden = !orchardIsOpen;
+        wateringToggle.hidden = !isEditable();
+        rowOrderToggle.hidden = !isEditable();
+        if (!isEditable()) {
+          cancelManualRowOrder();
+          setWorkflowPanel(null);
+          wateringTreeBanner.hidden = true;
+        }
         loginToggle.hidden = loggedIn;
         orchardSelect.hidden = !loggedIn;
         logout.hidden = !loggedIn;
@@ -1968,6 +2696,7 @@
             ? String(currentAccess.orchardId)
             : "";
         }
+        layoutMapControls();
       }
 
       function showLoginForm() {
@@ -2230,6 +2959,28 @@
         refreshSpeciesFilter();
         renderTreeInventory();
       });
+      wateringToggle.addEventListener("click", () => {
+        setWorkflowPanel(wateringPanel.hidden ? wateringPanel : null);
+      });
+      wateringClose.addEventListener("click", () => setWorkflowPanel(null));
+      wateringStart.addEventListener("click", startWatering);
+      wateringDone.addEventListener("click", markCurrentTreeWatered);
+      rowOrderToggle.addEventListener("click", () => {
+        setWorkflowPanel(rowOrderPanel.hidden ? rowOrderPanel : null);
+      });
+      rowOrderClose.addEventListener("click", () => {
+        cancelManualRowOrder();
+        setWorkflowPanel(null);
+      });
+      rowOrderAutomatic.addEventListener("click", applyAutomaticRowOrder);
+      rowOrderManual.addEventListener("click", beginManualRowOrder);
+      manualOrderUndo.addEventListener("click", () => {
+        if (!manualOrder) return;
+        manualOrder.treeIds.pop();
+        renderManualOrder();
+      });
+      manualOrderSave.addEventListener("click", saveManualRowOrder);
+      manualOrderCancel.addEventListener("click", cancelManualRowOrder);
       loginToggle.addEventListener("click", showLoginForm);
       loginCancel.addEventListener("click", () => {
         loginForm.hidden = true;
