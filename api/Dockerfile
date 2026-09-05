@@ -5,7 +5,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
 COPY db ./db
 COPY src ./src
-RUN cargo build --locked --release --bin orchard
+RUN cargo build --locked --release --bin orchard --jobs 1
 
 FROM debian:bookworm-slim
 
