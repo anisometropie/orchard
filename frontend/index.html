@@ -1609,6 +1609,7 @@
       let wateringSource = null;
       let wateringRoute = [];
       let placingWaterSource = false;
+      let reopenWateringPanelAfterSourcePlacement = false;
       const inventoryToggle = document.getElementById("inventory-toggle");
       const inventoryPanel = document.getElementById("inventory-panel");
       const inventoryClose = document.getElementById("inventory-close");
@@ -2290,6 +2291,7 @@
       function setWorkflowPanel(openPanel) {
         if (openPanel !== wateringPanel && placingWaterSource) {
           placingWaterSource = false;
+          reopenWateringPanelAfterSourcePlacement = false;
           map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
         }
         wateringPanel.hidden = openPanel !== wateringPanel;
@@ -2370,17 +2372,27 @@
       function beginWaterSourcePlacement() {
         if (wateringProgress) return;
         placingWaterSource = true;
+        reopenWateringPanelAfterSourcePlacement = compactMobileLayout.matches;
         wateringSourceStatus.textContent = "Click the map to place the water source.";
         map.getCanvas().style.cursor = "crosshair";
+        if (reopenWateringPanelAfterSourcePlacement) {
+          wateringPanel.hidden = true;
+          wateringToggle.setAttribute("aria-expanded", "false");
+          layoutMapControls();
+        }
       }
 
       function placeWaterSource(longitude, latitude) {
+        const shouldReopenWateringPanel =
+          reopenWateringPanelAfterSourcePlacement;
         wateringSource = { longitude, latitude };
         placingWaterSource = false;
+        reopenWateringPanelAfterSourcePlacement = false;
         wateringSourceStatus.textContent = "Water source placed on the map.";
         map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
         updateWaterSourcePin();
         refreshWorkflowRows();
+        if (shouldReopenWateringPanel) setWorkflowPanel(wateringPanel);
       }
 
       function refreshWorkflowRows() {
@@ -2403,6 +2415,7 @@
         }
         if (!watersDangerTrees && !wateringProgress) {
           placingWaterSource = false;
+          reopenWateringPanelAfterSourcePlacement = false;
           wateringSource = null;
           wateringRoute = [];
           map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
@@ -3411,6 +3424,7 @@
         wateringSource = null;
         wateringRoute = [];
         placingWaterSource = false;
+        reopenWateringPanelAfterSourcePlacement = false;
         activeMapIdentityFilter = null;
         activeMapFilter.hidden = true;
         activeMapFilterLabel.textContent = "";
