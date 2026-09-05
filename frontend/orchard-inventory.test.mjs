@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   filterTreeFeatures,
+  filterTreeFeaturesByIdentity,
   harvestScheduleEndpoint,
   harvestSchedulesForSpecies,
   harvestWindowSpan,
@@ -101,6 +102,26 @@ test("filter trees by role, genus, and species", () => {
       ({ id }) => id,
     ),
     [3],
+  );
+});
+
+test("filter the map by a complete species or one cultivar using stored identities", () => {
+  assert.deepEqual(
+    filterTreeFeaturesByIdentity(trees, { plantIdentityId: 10 }).map(
+      ({ id }) => id,
+    ),
+    [1, 2, 5],
+  );
+  assert.deepEqual(
+    filterTreeFeaturesByIdentity(trees, {
+      plantIdentityId: 10,
+      cultivarId: 101,
+    }).map(({ id }) => id),
+    [1, 5],
+  );
+  assert.deepEqual(
+    filterTreeFeaturesByIdentity(trees, null).map(({ id }) => id),
+    [1, 2, 3, 4, 5],
   );
 });
 
