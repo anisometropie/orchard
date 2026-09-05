@@ -1,10 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 use crate::hexagon::models::{
-    AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, HarvestScheduleOwner,
-    MapConfiguration, Orchard, OrchardId, OrchardTree, PlantCultivar, PlantCultivarId,
-    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId,
-    User, UserId, WateringRun, WateringRunId, WateringRunTarget,
+    AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, GeoPoint,
+    HarvestScheduleOwner, MapConfiguration, Orchard, OrchardId, OrchardTree, PlantCultivar,
+    PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
+    Tree, TreeId, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -1060,6 +1060,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
         &mut self,
         orchard_id: OrchardId,
         target: &WateringRunTarget,
+        water_source: Option<GeoPoint>,
         ordered_tree_ids: &[TreeId],
     ) -> Result<WateringRunId, OrchardStorageError> {
         let transaction = self
@@ -1075,6 +1076,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
             id: run_id,
             orchard_id,
             target: target.clone(),
+            water_source,
             ordered_tree_ids: ordered_tree_ids.to_vec(),
             watered_tree_ids: vec![],
             completed: false,

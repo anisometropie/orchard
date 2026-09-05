@@ -130,6 +130,7 @@ fn persist_row_ranks_and_resumable_watering_progress() {
             orchard.create_watering_run(
                 OrchardId(1),
                 &WateringRunTarget::Row("North".into()),
+                None,
                 &[TreeId(2), TreeId(1)],
             )
         })
@@ -160,12 +161,25 @@ fn persist_row_ranks_and_resumable_watering_progress() {
 
     let danger_run_id = storage
         .transaction(|orchard| {
-            orchard.create_watering_run(OrchardId(1), &WateringRunTarget::DangerTrees, &[TreeId(1)])
+            orchard.create_watering_run(
+                OrchardId(1),
+                &WateringRunTarget::DangerTrees,
+                Some(GeoPoint {
+                    longitude: 5.01,
+                    latitude: 45.03,
+                }),
+                &[TreeId(1)],
+            )
         })
         .unwrap();
+    let danger_run = storage.watering_run(danger_run_id).unwrap().unwrap();
+    assert_eq!(danger_run.target, WateringRunTarget::DangerTrees);
     assert_eq!(
-        storage.watering_run(danger_run_id).unwrap().unwrap().target,
-        WateringRunTarget::DangerTrees
+        danger_run.water_source,
+        Some(GeoPoint {
+            longitude: 5.01,
+            latitude: 45.03,
+        })
     );
 }
 
@@ -1240,6 +1254,25 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/014_add_danger_watering_runs.sql"
+            ))
+            .unwrap();
+    }
+    let watering_source_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'watering_runs'
+                  AND column_name = 'water_source'
+             )",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !watering_source_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/015_add_watering_source.sql"
             ))
             .unwrap();
     }

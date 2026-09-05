@@ -21,6 +21,8 @@ pub struct WateringTree {
 pub struct WateringProgress {
     pub run_id: WateringRunId,
     pub target: WateringRunTarget,
+    pub water_source: Option<crate::hexagon::models::GeoPoint>,
+    pub route: Vec<WateringTree>,
     pub watered_tree_count: usize,
     pub total_tree_count: usize,
     pub next_tree: Option<WateringTree>,
@@ -69,12 +71,13 @@ pub fn start_watering_run(
         let ordered_tree_ids = row_trees.iter().map(|tree| tree.id).collect::<Vec<_>>();
         let target = WateringRunTarget::Row(event.row_name);
         let run_id = orchard
-            .create_watering_run(event.orchard_id, &target, &ordered_tree_ids)
+            .create_watering_run(event.orchard_id, &target, None, &ordered_tree_ids)
             .map_err(|_| WateringRunStartError::WateringRunCouldNotBeStarted)?;
         let run = WateringRun {
             id: run_id,
             orchard_id: event.orchard_id,
             target,
+            water_source: None,
             ordered_tree_ids,
             watered_tree_ids: vec![],
             completed: false,
@@ -88,14 +91,11 @@ pub(crate) fn watering_progress(
     run: &WateringRun,
     orchard_trees: &[OrchardTree],
 ) -> Option<WateringProgress> {
-    let next_tree = match run
+    let route = run
         .ordered_tree_ids
         .iter()
         .enumerate()
-        .find(|(_, tree_id)| !run.watered_tree_ids.contains(tree_id))
-    {
-        None => None,
-        Some((index, tree_id)) => {
+        .map(|(index, tree_id)| {
             let tree = orchard_trees.iter().find(|tree| tree.id == *tree_id)?;
             Some(WateringTree {
                 id: tree.id,
@@ -110,11 +110,17 @@ pub(crate) fn watering_progress(
                 latitude: tree.tree.latitude,
                 row_rank: u32::try_from(index + 1).ok()?,
             })
-        }
-    };
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let next_tree = route
+        .iter()
+        .find(|tree| !run.watered_tree_ids.contains(&tree.id))
+        .cloned();
     Some(WateringProgress {
         run_id: run.id,
         target: run.target.clone(),
+        water_source: run.water_source,
+        route,
         watered_tree_count: run.watered_tree_ids.len(),
         total_tree_count: run.ordered_tree_ids.len(),
         next_tree,
