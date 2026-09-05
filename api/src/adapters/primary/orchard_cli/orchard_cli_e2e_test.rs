@@ -33,7 +33,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
     );
     assert_eq!(
         String::from_utf8(adoption.stdout).unwrap(),
-        "Adopted the existing version-10 schema.\nApplied migrations: 11, 12, 13.\n"
+        "Adopted the existing version-10 schema.\nApplied migrations: 11, 12, 13, 14.\n"
     );
     let versions = verification_connection
         .query(
@@ -44,7 +44,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
         .into_iter()
         .map(|row| row.get::<_, i32>(0))
         .collect::<Vec<_>>();
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14]);
 
     let repeated = Command::new(orchard_command)
         .arg("migrate")
@@ -64,7 +64,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
     assert!(revert.status.success());
     assert_eq!(
         String::from_utf8(revert.stdout).unwrap(),
-        "Reverted migrations: 13, 12, 11.\n"
+        "Reverted migrations: 14, 13, 12, 11.\n"
     );
     verification_connection
         .batch_execute(

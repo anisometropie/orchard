@@ -299,13 +299,38 @@ async fn only_the_owner_can_order_a_row_and_complete_its_watering_run() {
     assert_eq!(
         client
             .get(format!("{}/orchards/7/watering-run", server.url()))
-            .header(header::COOKIE, cookie)
+            .header(header::COOKIE, &cookie)
             .send()
             .await
             .unwrap()
             .status(),
         StatusCode::NO_CONTENT
     );
+
+    assert_eq!(
+        client
+            .patch(format!("{}/orchards/7/trees/1", server.url()))
+            .header(header::COOKIE, &cookie)
+            .json(&serde_json::json!({ "is_in_danger": true }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let danger_run = client
+        .post(format!("{}/orchards/7/watering-runs", server.url()))
+        .header(header::COOKIE, cookie)
+        .json(&serde_json::json!({ "target": "danger" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(danger_run.status(), StatusCode::OK);
+    let danger_progress = danger_run.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(danger_progress["target"], "danger");
+    assert_eq!(danger_progress["target_label"], "Danger trees");
+    assert!(danger_progress["row_name"].is_null());
+    assert_eq!(danger_progress["next_tree"]["id"], 1);
 }
 
 async fn login_cookie(client: &Client, server_url: &str) -> String {

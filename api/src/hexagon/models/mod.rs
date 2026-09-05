@@ -17,7 +17,7 @@ pub use plant_identity::{
     PlantIdentityReference,
 };
 pub use tree::{ReproductiveRole, Tree, TreeId};
-pub use watering::{WateringRun, WateringRunId};
+pub use watering::{WateringRun, WateringRunId, WateringRunTarget};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrchardTree {

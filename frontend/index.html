@@ -197,6 +197,7 @@
       }
       .workflow-panel[hidden],
       #watering-tree-banner[hidden],
+      #watering-row-field[hidden],
       .manual-order-actions[hidden] {
         display: none;
       }
@@ -792,14 +793,21 @@
     </div>
     <section id="watering-panel" class="workflow-panel" aria-labelledby="watering-title" hidden>
       <header>
-        <h2 id="watering-title">Water a row</h2>
+        <h2 id="watering-title">Water trees</h2>
         <button id="watering-close" class="workflow-panel-close" type="button" aria-label="Close watering menu">×</button>
       </header>
       <label>
+        Water
+        <select id="watering-target-scope">
+          <option value="row">One row</option>
+          <option value="danger">Danger trees</option>
+        </select>
+      </label>
+      <label id="watering-row-field">
         Row
         <select id="watering-row"></select>
       </label>
-      <p class="workflow-help">Trees are visited in their saved order. Dead trees are skipped.</p>
+      <p id="watering-help" class="workflow-help">Trees are visited in their saved order. Dead trees are skipped.</p>
       <button id="watering-start" type="button">Start</button>
       <p id="watering-menu-status" class="workflow-status" hidden></p>
       <p id="watering-error" class="workflow-error" role="alert" hidden></p>
@@ -1062,10 +1070,12 @@
       } from "./orchard-access.mjs?v=2";
       import {
         appendManualTree,
+        dangerTreeCount,
         orchardRows,
         treeIdsInRow,
+        wateringStartRequest,
         wateringTargetGeoJson,
-      } from "./watering.mjs?v=2";
+      } from "./watering.mjs?v=3";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -1262,7 +1272,10 @@
       const wateringToggle = document.getElementById("watering-toggle");
       const wateringPanel = document.getElementById("watering-panel");
       const wateringClose = document.getElementById("watering-close");
+      const wateringTargetScope = document.getElementById("watering-target-scope");
+      const wateringRowField = document.getElementById("watering-row-field");
       const wateringRow = document.getElementById("watering-row");
+      const wateringHelp = document.getElementById("watering-help");
       const wateringStart = document.getElementById("watering-start");
       const wateringMenuStatus = document.getElementById("watering-menu-status");
       const wateringError = document.getElementById("watering-error");
@@ -1710,7 +1723,19 @@
         const rows = orchardRows(orchardFeatures);
         replaceRowOptions(wateringRow, rows.filter((row) => row.livingTreeCount > 0));
         replaceRowOptions(rowOrderRow, rows);
-        wateringStart.disabled = rows.length === 0 || wateringProgress != null;
+        const currentDangerTreeCount = dangerTreeCount(orchardFeatures);
+        wateringTargetScope.querySelector('option[value="danger"]').textContent =
+          `Danger trees · ${currentDangerTreeCount}`;
+        const watersDangerTrees = wateringTargetScope.value === "danger";
+        wateringRowField.hidden = watersDangerTrees;
+        wateringHelp.textContent = watersDangerTrees
+          ? "Starts at the northernmost living danger tree, then follows the shortest route through the current danger trees."
+          : "Trees are visited in their saved order. Dead trees are skipped.";
+        wateringStart.disabled =
+          wateringProgress != null ||
+          (watersDangerTrees
+            ? currentDangerTreeCount === 0
+            : !wateringRow.value);
         rowOrderAutomatic.disabled = rows.length === 0;
         rowOrderManual.disabled = rows.length === 0;
       }
@@ -1859,13 +1884,14 @@
       function showWateringProgress(progress) {
         wateringProgress = progress?.next_tree ? progress : null;
         refreshWorkflowRows();
+        const targetLabel = progress?.target_label || progress?.row_name || "Watering";
         if (!progress?.next_tree) {
           map
             .getSource("watering-target")
             ?.setData(wateringTargetGeoJson(null));
           wateringTreeBanner.hidden = true;
           if (progress) {
-            wateringMenuStatus.textContent = `${progress.row_name} complete · ${progress.total_tree_count} trees watered.`;
+            wateringMenuStatus.textContent = `${targetLabel} complete · ${progress.total_tree_count} trees watered.`;
             wateringMenuStatus.hidden = false;
           }
           layoutMapControls();
@@ -1875,13 +1901,13 @@
         treeTooltip?.remove();
         treeTooltip = undefined;
         wateringTreeName.textContent = progress.next_tree.name;
-        wateringTreeProgress.textContent = `${progress.row_name} · tree ${progress.next_tree.row_rank} of ${progress.total_tree_count} · ${progress.watered_tree_count} done`;
+        wateringTreeProgress.textContent = `${targetLabel} · tree ${progress.next_tree.row_rank} of ${progress.total_tree_count} · ${progress.watered_tree_count} done`;
         map
           .getSource("watering-target")
           ?.setData(wateringTargetGeoJson(progress.next_tree));
         wateringTreeBanner.hidden = false;
         layoutMapControls();
-        wateringMenuStatus.textContent = `Watering ${progress.row_name}: ${progress.watered_tree_count} of ${progress.total_tree_count} done.`;
+        wateringMenuStatus.textContent = `Watering ${targetLabel}: ${progress.watered_tree_count} of ${progress.total_tree_count} done.`;
         wateringMenuStatus.hidden = false;
         const pinHeight = 54 * 1.55;
         const bannerBottom = wateringTreeBanner.getBoundingClientRect().bottom;
@@ -1922,7 +1948,8 @@
       }
 
       async function startWatering() {
-        if (!wateringRow.value || wateringProgress) return;
+        const target = wateringTargetScope.value;
+        if ((target === "row" && !wateringRow.value) || wateringProgress) return;
         wateringError.hidden = true;
         wateringStart.disabled = true;
         try {
@@ -1934,22 +1961,30 @@
                 "content-type": "application/json",
                 ...accessHeaders(currentAccess),
               },
-              body: JSON.stringify({ row_name: wateringRow.value }),
+              body: JSON.stringify(wateringStartRequest(target, wateringRow.value)),
             },
           );
           if (response.status === 409) {
             throw new Error(
-              "Save an order for this row first, or finish the active watering row.",
+              target === "danger"
+                ? "Finish the active watering run first."
+                : "Save an order for this row first, or finish the active watering run.",
             );
           }
-          if (response.status === 404) throw new Error("This row no longer exists.");
+          if (response.status === 404) {
+            throw new Error(
+              target === "danger"
+                ? "No living trees are currently marked in danger."
+                : "This row no longer exists.",
+            );
+          }
           if (!response.ok) throw new Error("Could not start watering. Please try again.");
           setWorkflowPanel(null);
           showWateringProgress(await response.json());
         } catch (error) {
           wateringError.textContent = error.message;
           wateringError.hidden = false;
-          wateringStart.disabled = false;
+          refreshWorkflowRows();
         }
       }
 
@@ -2963,6 +2998,7 @@
         setWorkflowPanel(wateringPanel.hidden ? wateringPanel : null);
       });
       wateringClose.addEventListener("click", () => setWorkflowPanel(null));
+      wateringTargetScope.addEventListener("change", refreshWorkflowRows);
       wateringStart.addEventListener("click", startWatering);
       wateringDone.addEventListener("click", markCurrentTreeWatered);
       rowOrderToggle.addEventListener("click", () => {

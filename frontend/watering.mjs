@@ -41,6 +41,18 @@ export function appendManualTree(orderedTreeIds, treeId, allowedTreeIds) {
   return [...orderedTreeIds, normalizedTreeId];
 }
 
+export function dangerTreeCount(features) {
+  return features.filter(
+    (feature) =>
+      feature.properties?.is_alive !== false &&
+      feature.properties?.is_in_danger === true,
+  ).length;
+}
+
+export function wateringStartRequest(target, rowName) {
+  return target === "danger" ? { target: "danger" } : { row_name: rowName };
+}
+
 export function wateringTargetGeoJson(tree) {
   return {
     type: "FeatureCollection",

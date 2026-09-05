@@ -1,4 +1,6 @@
-use crate::hexagon::models::{OrchardId, OrchardTree, TreeId, WateringRun, WateringRunId};
+use crate::hexagon::models::{
+    OrchardId, OrchardTree, TreeId, WateringRun, WateringRunId, WateringRunTarget,
+};
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
 pub struct WateringRunStartRequested {
@@ -18,7 +20,7 @@ pub struct WateringTree {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WateringProgress {
     pub run_id: WateringRunId,
-    pub row_name: String,
+    pub target: WateringRunTarget,
     pub watered_tree_count: usize,
     pub total_tree_count: usize,
     pub next_tree: Option<WateringTree>,
@@ -44,7 +46,7 @@ pub fn start_watering_run(
             .active_watering_run(event.orchard_id)
             .map_err(|_| WateringRunStartError::WateringRunCouldNotBeStarted)?
         {
-            if active_run.row_name != event.row_name {
+            if active_run.target != WateringRunTarget::Row(event.row_name.clone()) {
                 return Err(WateringRunStartError::AnotherWateringRunIsActive);
             }
             return watering_progress(&active_run, &orchard_trees)
@@ -65,13 +67,14 @@ pub fn start_watering_run(
         }
         row_trees.sort_by_key(|tree| tree.row_rank);
         let ordered_tree_ids = row_trees.iter().map(|tree| tree.id).collect::<Vec<_>>();
+        let target = WateringRunTarget::Row(event.row_name);
         let run_id = orchard
-            .create_watering_run(event.orchard_id, &event.row_name, &ordered_tree_ids)
+            .create_watering_run(event.orchard_id, &target, &ordered_tree_ids)
             .map_err(|_| WateringRunStartError::WateringRunCouldNotBeStarted)?;
         let run = WateringRun {
             id: run_id,
             orchard_id: event.orchard_id,
-            row_name: event.row_name,
+            target,
             ordered_tree_ids,
             watered_tree_ids: vec![],
             completed: false,
@@ -111,7 +114,7 @@ pub(crate) fn watering_progress(
     };
     Some(WateringProgress {
         run_id: run.id,
-        row_name: run.row_name.clone(),
+        target: run.target.clone(),
         watered_tree_count: run.watered_tree_ids.len(),
         total_tree_count: run.ordered_tree_ids.len(),
         next_tree,

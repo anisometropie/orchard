@@ -13,7 +13,7 @@ use crate::hexagon::models::{
     LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, Orchard, OrchardId, OrchardTree,
     PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
     PlantIdentityReference, ReproductiveRole, Tree, TreeId, User, UserId, WateringRun,
-    WateringRunId,
+    WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -634,7 +634,7 @@ impl OrchardStorage for PostgresOrchardStorage {
         let run = self
             .client
             .query_opt(
-                "SELECT id, orchard_id, row_name, completed_at IS NOT NULL
+                "SELECT id, orchard_id, target_kind, row_name, completed_at IS NOT NULL
                  FROM watering_runs
                  WHERE orchard_id = $1 AND completed_at IS NULL",
                 &[&orchard_id],
@@ -653,7 +653,7 @@ impl OrchardStorage for PostgresOrchardStorage {
         let run = self
             .client
             .query_opt(
-                "SELECT id, orchard_id, row_name, completed_at IS NOT NULL
+                "SELECT id, orchard_id, target_kind, row_name, completed_at IS NOT NULL
                  FROM watering_runs
                  WHERE id = $1",
                 &[&watering_run_id],
@@ -666,18 +666,22 @@ impl OrchardStorage for PostgresOrchardStorage {
     fn create_watering_run(
         &mut self,
         orchard_id: OrchardId,
-        row_name: &str,
+        target: &WateringRunTarget,
         ordered_tree_ids: &[TreeId],
     ) -> Result<WateringRunId, OrchardStorageError> {
         let orchard_id = i64::try_from(orchard_id.0)
             .map_err(|_| OrchardStorageError::WateringRunCouldNotBeCreated)?;
+        let (target_kind, row_name) = match target {
+            WateringRunTarget::Row(row_name) => ("row", Some(row_name.as_str())),
+            WateringRunTarget::DangerTrees => ("danger", None),
+        };
         let run_id = self
             .client
             .query_one(
-                "INSERT INTO watering_runs (orchard_id, row_name)
-                 VALUES ($1, $2)
+                "INSERT INTO watering_runs (orchard_id, target_kind, row_name)
+                 VALUES ($1, $2, $3)
                  RETURNING id",
-                &[&orchard_id, &row_name],
+                &[&orchard_id, &target_kind, &row_name],
             )
             .map_err(|_| OrchardStorageError::WateringRunCouldNotBeCreated)?
             .get::<_, i64>(0);
@@ -1068,10 +1072,17 @@ fn watering_run_from_row(
             u64::try_from(row.get::<_, i64>(1))
                 .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?,
         ),
-        row_name: row.get(2),
+        target: match row.get::<_, &str>(2) {
+            "row" => WateringRunTarget::Row(
+                row.get::<_, Option<String>>(3)
+                    .ok_or(OrchardStorageError::WateringRunCouldNotBeRead)?,
+            ),
+            "danger" => WateringRunTarget::DangerTrees,
+            _ => return Err(OrchardStorageError::WateringRunCouldNotBeRead),
+        },
         ordered_tree_ids,
         watered_tree_ids,
-        completed: row.get(3),
+        completed: row.get(4),
     })
 }
 

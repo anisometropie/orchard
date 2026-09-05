@@ -69,6 +69,10 @@ name = "start_watering_run_unit"
 path = "src/hexagon/use_cases/start_watering_run/start_watering_run_unit_test.rs"
 
 [[test]]
+name = "start_danger_watering_run_unit"
+path = "src/hexagon/use_cases/start_danger_watering_run/start_danger_watering_run_unit_test.rs"
+
+[[test]]
 name = "record_tree_watered_unit"
 path = "src/hexagon/use_cases/record_tree_watered/record_tree_watered_unit_test.rs"
 

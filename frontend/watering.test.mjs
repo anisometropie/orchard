@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 
 import {
   appendManualTree,
+  dangerTreeCount,
   orchardRows,
   treeIdsInRow,
+  wateringStartRequest,
   wateringTargetGeoJson,
 } from "./watering.mjs";
 
@@ -72,4 +74,20 @@ test("put only the current watering tree in the target pin source", () => {
       ],
     },
   );
+});
+
+test("start danger watering without depending on saved row order", () => {
+  const features = [
+    { properties: { is_alive: true, is_in_danger: true } },
+    { properties: { is_alive: true, is_in_danger: false } },
+    { properties: { is_alive: false, is_in_danger: true } },
+  ];
+
+  assert.equal(dangerTreeCount(features), 1);
+  assert.deepEqual(wateringStartRequest("danger", "North"), {
+    target: "danger",
+  });
+  assert.deepEqual(wateringStartRequest("row", "North"), {
+    row_name: "North",
+  });
 });

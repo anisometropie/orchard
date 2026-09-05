@@ -4,7 +4,7 @@ use crate::hexagon::models::{
     AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, HarvestScheduleOwner,
     MapConfiguration, Orchard, OrchardId, OrchardTree, PlantCultivar, PlantCultivarId,
     PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId,
-    User, UserId, WateringRun, WateringRunId,
+    User, UserId, WateringRun, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -1059,7 +1059,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
     fn create_watering_run(
         &mut self,
         orchard_id: OrchardId,
-        row_name: &str,
+        target: &WateringRunTarget,
         ordered_tree_ids: &[TreeId],
     ) -> Result<WateringRunId, OrchardStorageError> {
         let transaction = self
@@ -1074,7 +1074,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
         transaction.staged_watering_runs.push(WateringRun {
             id: run_id,
             orchard_id,
-            row_name: row_name.into(),
+            target: target.clone(),
             ordered_tree_ids: ordered_tree_ids.to_vec(),
             watered_tree_ids: vec![],
             completed: false,

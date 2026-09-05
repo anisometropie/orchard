@@ -5,7 +5,7 @@ use orchard_api::hexagon::models::{
     IdentificationStatus, InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification,
     LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardId, OrchardTree, PlantCultivar,
     PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
-    ReproductiveRole, Tree, TreeId, UserId,
+    ReproductiveRole, Tree, TreeId, UserId, WateringRunTarget,
 };
 use orchard_api::hexagon::ports::{
     AccessControl, MapConfigurationStorage, OrchardStorage, OrchardStorageError,
@@ -127,7 +127,11 @@ fn persist_row_ranks_and_resumable_watering_progress() {
 
     let run_id = storage
         .transaction(|orchard| {
-            orchard.create_watering_run(OrchardId(1), "North", &[TreeId(2), TreeId(1)])
+            orchard.create_watering_run(
+                OrchardId(1),
+                &WateringRunTarget::Row("North".into()),
+                &[TreeId(2), TreeId(1)],
+            )
         })
         .unwrap();
     assert_eq!(
@@ -153,6 +157,16 @@ fn persist_row_ranks_and_resumable_watering_progress() {
         .transaction(|orchard| orchard.complete_watering_run(run_id))
         .unwrap();
     assert_eq!(storage.active_watering_run(OrchardId(1)).unwrap(), None);
+
+    let danger_run_id = storage
+        .transaction(|orchard| {
+            orchard.create_watering_run(OrchardId(1), &WateringRunTarget::DangerTrees, &[TreeId(1)])
+        })
+        .unwrap();
+    assert_eq!(
+        storage.watering_run(danger_run_id).unwrap().unwrap().target,
+        WateringRunTarget::DangerTrees
+    );
 }
 
 #[test]
@@ -1207,6 +1221,25 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/013_add_row_ordering_and_watering.sql"
+            ))
+            .unwrap();
+    }
+    let danger_watering_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'watering_runs'
+                  AND column_name = 'target_kind'
+             )",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !danger_watering_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/014_add_danger_watering_runs.sql"
             ))
             .unwrap();
     }

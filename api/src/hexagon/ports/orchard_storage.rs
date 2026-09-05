@@ -1,6 +1,6 @@
 use crate::hexagon::models::{
     AnnualHarvestWindow, HarvestScheduleOwner, OrchardId, OrchardTree, PlantIdentification,
-    PlantIdentityReference, Tree, TreeId, WateringRun, WateringRunId,
+    PlantIdentityReference, Tree, TreeId, WateringRun, WateringRunId, WateringRunTarget,
 };
 
 #[derive(Debug, PartialEq)]
@@ -87,7 +87,7 @@ pub trait OrchardStorage {
     fn create_watering_run(
         &mut self,
         orchard_id: OrchardId,
-        row_name: &str,
+        target: &WateringRunTarget,
         ordered_tree_ids: &[TreeId],
     ) -> Result<WateringRunId, OrchardStorageError>;
     fn mark_watering_tree_watered(
