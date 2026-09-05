@@ -22,6 +22,7 @@ pub struct WateringProgress {
     pub run_id: WateringRunId,
     pub target: WateringRunTarget,
     pub water_source: Option<crate::hexagon::models::GeoPoint>,
+    pub carry_capacity: Option<u32>,
     pub route: Vec<WateringTree>,
     pub watered_tree_count: usize,
     pub total_tree_count: usize,
@@ -71,13 +72,14 @@ pub fn start_watering_run(
         let ordered_tree_ids = row_trees.iter().map(|tree| tree.id).collect::<Vec<_>>();
         let target = WateringRunTarget::Row(event.row_name);
         let run_id = orchard
-            .create_watering_run(event.orchard_id, &target, None, &ordered_tree_ids)
+            .create_watering_run(event.orchard_id, &target, None, None, &ordered_tree_ids)
             .map_err(|_| WateringRunStartError::WateringRunCouldNotBeStarted)?;
         let run = WateringRun {
             id: run_id,
             orchard_id: event.orchard_id,
             target,
             water_source: None,
+            carry_capacity: None,
             ordered_tree_ids,
             watered_tree_ids: vec![],
             completed: false,
@@ -120,6 +122,7 @@ pub(crate) fn watering_progress(
         run_id: run.id,
         target: run.target.clone(),
         water_source: run.water_source,
+        carry_capacity: run.carry_capacity,
         route,
         watered_tree_count: run.watered_tree_ids.len(),
         total_tree_count: run.ordered_tree_ids.len(),

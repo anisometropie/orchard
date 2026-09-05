@@ -10,11 +10,13 @@ const EXACT_ROUTE_TREE_LIMIT: usize = 20;
 pub struct DangerWateringRunStartRequested {
     pub orchard_id: OrchardId,
     pub water_source: GeoPoint,
+    pub carry_capacity: u32,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum DangerWateringRunStartError {
     InvalidWaterSource,
+    InvalidCarryCapacity,
     NoDangerTrees,
     AnotherWateringRunIsActive,
     WateringRunCouldNotBeStarted,
@@ -36,6 +38,9 @@ pub fn start_danger_watering_run(
         || !(-90.0..=90.0).contains(&event.water_source.latitude)
     {
         return Err(DangerWateringRunStartError::InvalidWaterSource);
+    }
+    if event.carry_capacity == 0 || i32::try_from(event.carry_capacity).is_err() {
+        return Err(DangerWateringRunStartError::InvalidCarryCapacity);
     }
     storage.transaction(|orchard| {
         let orchard_trees = orchard
@@ -59,13 +64,18 @@ pub fn start_danger_watering_run(
         if danger_trees.is_empty() {
             return Err(DangerWateringRunStartError::NoDangerTrees);
         }
-        let ordered_tree_ids = shortest_danger_route(danger_trees, event.water_source);
+        let ordered_tree_ids = shortest_danger_route(
+            danger_trees,
+            event.water_source,
+            event.carry_capacity as usize,
+        );
         let target = WateringRunTarget::DangerTrees;
         let run_id = orchard
             .create_watering_run(
                 event.orchard_id,
                 &target,
                 Some(event.water_source),
+                Some(event.carry_capacity),
                 &ordered_tree_ids,
             )
             .map_err(|_| DangerWateringRunStartError::WateringRunCouldNotBeStarted)?;
@@ -74,6 +84,7 @@ pub fn start_danger_watering_run(
             orchard_id: event.orchard_id,
             target,
             water_source: Some(event.water_source),
+            carry_capacity: Some(event.carry_capacity),
             ordered_tree_ids,
             watered_tree_ids: vec![],
             completed: false,
@@ -83,19 +94,89 @@ pub fn start_danger_watering_run(
     })
 }
 
-fn shortest_danger_route(mut trees: Vec<&OrchardTree>, water_source: GeoPoint) -> Vec<TreeId> {
+fn shortest_danger_route(
+    mut trees: Vec<&OrchardTree>,
+    water_source: GeoPoint,
+    carry_capacity: usize,
+) -> Vec<TreeId> {
     trees.sort_by_key(|tree| tree.id.0);
-    let mut trips = if trees.len() <= EXACT_ROUTE_TREE_LIMIT {
+    if carry_capacity == 1 {
+        return optimized_single_can_route(&trees, water_source)
+            .into_iter()
+            .map(|index| trees[index].id)
+            .collect();
+    }
+    let mut trips = if carry_capacity == 2 && trees.len() <= EXACT_ROUTE_TREE_LIMIT {
         exact_capacity_two_trips(&trees, water_source)
-    } else {
+    } else if carry_capacity == 2 {
         optimized_capacity_two_trips(&trees, water_source)
+    } else {
+        optimized_capacity_trips(&trees, water_source, carry_capacity)
     };
-    order_trips_from_source(&mut trips, &trees, water_source);
+    if carry_capacity == 2 {
+        order_trips_from_source(&mut trips, &trees, water_source);
+    } else {
+        order_capacity_trips_from_source(&mut trips, &trees, water_source);
+    }
     trips
         .into_iter()
         .flatten()
         .map(|index| trees[index].id)
         .collect()
+}
+
+fn optimized_single_can_route(trees: &[&OrchardTree], water_source: GeoPoint) -> Vec<usize> {
+    let tree_distances = distance_matrix(trees);
+    let source_distances = trees
+        .iter()
+        .map(|tree| distance_to_source(tree, water_source))
+        .collect::<Vec<_>>();
+    let first = closest_tree_index(trees, &source_distances);
+    let mut remaining = (0..trees.len())
+        .filter(|index| *index != first)
+        .collect::<Vec<_>>();
+    let mut route = vec![first];
+    while !remaining.is_empty() {
+        let previous = *route.last().expect("a watering route has a first tree");
+        let next_position = remaining
+            .iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| {
+                tree_distances[previous][**left]
+                    .total_cmp(&tree_distances[previous][**right])
+                    .then_with(|| trees[**left].id.0.cmp(&trees[**right].id.0))
+            })
+            .map(|(position, _)| position)
+            .expect("a non-empty remainder has a nearest tree");
+        route.push(remaining.remove(next_position));
+    }
+    improve_open_route(&mut route, &tree_distances);
+    route
+}
+
+fn improve_open_route(route: &mut [usize], distances: &[Vec<f64>]) {
+    loop {
+        let mut improved = false;
+        for start in 1..route.len().saturating_sub(1) {
+            for end in start + 1..route.len() {
+                let old_distance = distances[route[start - 1]][route[start]]
+                    + route
+                        .get(end + 1)
+                        .map_or(0.0, |next| distances[route[end]][*next]);
+                let new_distance = distances[route[start - 1]][route[end]]
+                    + route
+                        .get(end + 1)
+                        .map_or(0.0, |next| distances[route[start]][*next]);
+                if new_distance < old_distance {
+                    route[start..=end].reverse();
+                    improved = true;
+                }
+            }
+        }
+        if !improved {
+            return;
+        }
+    }
 }
 
 fn exact_capacity_two_trips(trees: &[&OrchardTree], water_source: GeoPoint) -> Vec<Vec<usize>> {
@@ -277,6 +358,129 @@ fn optimized_capacity_two_trips(trees: &[&OrchardTree], water_source: GeoPoint) 
         }
     }
     trips
+}
+
+fn optimized_capacity_trips(
+    trees: &[&OrchardTree],
+    water_source: GeoPoint,
+    carry_capacity: usize,
+) -> Vec<Vec<usize>> {
+    let tree_distances = distance_matrix(trees);
+    let source_distances = trees
+        .iter()
+        .map(|tree| distance_to_source(tree, water_source))
+        .collect::<Vec<_>>();
+    let mut savings = Vec::new();
+    for first in 0..trees.len() {
+        for second in first + 1..trees.len() {
+            savings.push((
+                source_distances[first] + source_distances[second] - tree_distances[first][second],
+                first,
+                second,
+            ));
+        }
+    }
+    savings.sort_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| trees[left.1].id.0.cmp(&trees[right.1].id.0))
+            .then_with(|| trees[left.2].id.0.cmp(&trees[right.2].id.0))
+    });
+
+    let mut trips = (0..trees.len())
+        .map(|index| vec![index])
+        .collect::<Vec<_>>();
+    for (_, first, second) in savings {
+        let Some(first_trip_index) = trips.iter().position(|trip| trip.contains(&first)) else {
+            continue;
+        };
+        let Some(second_trip_index) = trips.iter().position(|trip| trip.contains(&second)) else {
+            continue;
+        };
+        if first_trip_index == second_trip_index
+            || trips[first_trip_index].len() + trips[second_trip_index].len() > carry_capacity
+        {
+            continue;
+        }
+        let mut first_trip = trips[first_trip_index].clone();
+        let mut second_trip = trips[second_trip_index].clone();
+        if !orient_trip_endpoint(&mut first_trip, first, true)
+            || !orient_trip_endpoint(&mut second_trip, second, false)
+        {
+            continue;
+        }
+        first_trip.extend(second_trip);
+        trips[first_trip_index] = first_trip;
+        trips.remove(second_trip_index);
+    }
+    trips
+}
+
+fn orient_trip_endpoint(trip: &mut [usize], tree_index: usize, at_end: bool) -> bool {
+    let already_oriented = if at_end {
+        trip.last() == Some(&tree_index)
+    } else {
+        trip.first() == Some(&tree_index)
+    };
+    if already_oriented {
+        return true;
+    }
+    let can_reverse = if at_end {
+        trip.first() == Some(&tree_index)
+    } else {
+        trip.last() == Some(&tree_index)
+    };
+    if can_reverse {
+        trip.reverse();
+    }
+    can_reverse
+}
+
+fn order_capacity_trips_from_source(
+    trips: &mut [Vec<usize>],
+    trees: &[&OrchardTree],
+    water_source: GeoPoint,
+) {
+    let tree_distances = distance_matrix(trees);
+    let source_distances = trees
+        .iter()
+        .map(|tree| distance_to_source(tree, water_source))
+        .collect::<Vec<_>>();
+    for trip in trips.iter_mut() {
+        let first = trip
+            .iter()
+            .copied()
+            .min_by(|left, right| {
+                source_distances[*left]
+                    .total_cmp(&source_distances[*right])
+                    .then_with(|| trees[*left].id.0.cmp(&trees[*right].id.0))
+            })
+            .expect("a watering trip contains at least one tree");
+        let mut remaining = trip.clone();
+        remaining.retain(|tree_index| *tree_index != first);
+        let mut ordered = vec![first];
+        while !remaining.is_empty() {
+            let previous = *ordered.last().expect("an ordered trip has a first tree");
+            let next_position = remaining
+                .iter()
+                .enumerate()
+                .min_by(|(_, left), (_, right)| {
+                    tree_distances[previous][**left]
+                        .total_cmp(&tree_distances[previous][**right])
+                        .then_with(|| trees[**left].id.0.cmp(&trees[**right].id.0))
+                })
+                .map(|(position, _)| position)
+                .expect("a non-empty remainder has a nearest tree");
+            ordered.push(remaining.remove(next_position));
+        }
+        *trip = ordered;
+    }
+    trips.sort_by(|left, right| {
+        source_distances[left[0]]
+            .total_cmp(&source_distances[right[0]])
+            .then_with(|| trees[left[0]].id.0.cmp(&trees[right[0]].id.0))
+    });
 }
 
 fn order_trips_from_source(

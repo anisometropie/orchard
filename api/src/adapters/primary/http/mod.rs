@@ -411,6 +411,7 @@ struct StartWateringRunRequest {
     row_name: Option<String>,
     target: Option<RequestedWateringTarget>,
     water_source: Option<RequestedWaterSource>,
+    carry_capacity: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -441,8 +442,13 @@ where
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
         authorize_watering_access(&mut *storage, orchard_id, credential)?;
-        let progress = match (request.row_name, request.target, request.water_source) {
-            (Some(row_name), None, None) => start_watering_run(
+        let progress = match (
+            request.row_name,
+            request.target,
+            request.water_source,
+            request.carry_capacity,
+        ) {
+            (Some(row_name), None, None, None) => start_watering_run(
                 WateringRunStartRequested {
                     orchard_id,
                     row_name,
@@ -457,7 +463,7 @@ where
                     StatusCode::INTERNAL_SERVER_ERROR
                 }
             })?,
-            (None, Some(RequestedWateringTarget::Danger), Some(water_source)) => {
+            (None, Some(RequestedWateringTarget::Danger), Some(water_source), carry_capacity) => {
                 start_danger_watering_run(
                     DangerWateringRunStartRequested {
                         orchard_id,
@@ -465,11 +471,13 @@ where
                             longitude: water_source.longitude,
                             latitude: water_source.latitude,
                         },
+                        carry_capacity: carry_capacity.unwrap_or(2),
                     },
                     &mut *storage,
                 )
                 .map_err(|error| match error {
                     DangerWateringRunStartError::InvalidWaterSource => StatusCode::BAD_REQUEST,
+                    DangerWateringRunStartError::InvalidCarryCapacity => StatusCode::BAD_REQUEST,
                     DangerWateringRunStartError::NoDangerTrees => StatusCode::NOT_FOUND,
                     DangerWateringRunStartError::AnotherWateringRunIsActive => StatusCode::CONFLICT,
                     DangerWateringRunStartError::WateringRunCouldNotBeStarted => {
@@ -602,6 +610,7 @@ fn watering_progress_json(progress: WateringProgress) -> Value {
             "longitude": source.longitude,
             "latitude": source.latitude,
         })),
+        "carry_capacity": progress.carry_capacity,
         "route": progress.route.into_iter().map(watering_tree_json).collect::<Vec<_>>(),
         "watered_tree_count": progress.watered_tree_count,
         "total_tree_count": progress.total_tree_count,

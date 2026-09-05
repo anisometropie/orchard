@@ -1070,6 +1070,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
         orchard_id: OrchardId,
         target: &WateringRunTarget,
         water_source: Option<GeoPoint>,
+        carry_capacity: Option<u32>,
         ordered_tree_ids: &[TreeId],
     ) -> Result<WateringRunId, OrchardStorageError> {
         let transaction = self
@@ -1086,6 +1087,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
             orchard_id,
             target: target.clone(),
             water_source,
+            carry_capacity,
             ordered_tree_ids: ordered_tree_ids.to_vec(),
             watered_tree_ids: vec![],
             completed: false,

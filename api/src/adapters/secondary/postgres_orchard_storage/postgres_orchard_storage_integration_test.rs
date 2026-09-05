@@ -165,6 +165,7 @@ fn persist_row_ranks_and_resumable_watering_progress() {
                 OrchardId(1),
                 &WateringRunTarget::Row("North".into()),
                 None,
+                None,
                 &[TreeId(2), TreeId(1)],
             )
         })
@@ -202,6 +203,7 @@ fn persist_row_ranks_and_resumable_watering_progress() {
                     longitude: 5.01,
                     latitude: 45.03,
                 }),
+                Some(3),
                 &[TreeId(1)],
             )
         })
@@ -215,6 +217,7 @@ fn persist_row_ranks_and_resumable_watering_progress() {
             latitude: 45.03,
         })
     );
+    assert_eq!(danger_run.carry_capacity, Some(3));
     storage
         .transaction(|orchard| orchard.delete_watering_run(danger_run_id))
         .unwrap();
@@ -1348,6 +1351,25 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/017_keep_shared_links_valid.sql"
+            ))
+            .unwrap();
+    }
+    let watering_capacity_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'watering_runs'
+                  AND column_name = 'carry_capacity'
+             )",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !watering_capacity_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/018_add_watering_carry_capacity.sql"
             ))
             .unwrap();
     }

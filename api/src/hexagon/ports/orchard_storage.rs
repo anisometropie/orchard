@@ -91,6 +91,7 @@ pub trait OrchardStorage {
         orchard_id: OrchardId,
         target: &WateringRunTarget,
         water_source: Option<GeoPoint>,
+        carry_capacity: Option<u32>,
         ordered_tree_ids: &[TreeId],
     ) -> Result<WateringRunId, OrchardStorageError>;
     fn mark_watering_tree_watered(

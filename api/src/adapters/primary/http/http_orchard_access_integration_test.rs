@@ -352,12 +352,28 @@ async fn only_a_watering_link_can_water_and_only_the_owner_can_order_a_row() {
             .status(),
         StatusCode::NO_CONTENT
     );
+    assert_eq!(
+        client
+            .post(format!("{}/orchards/7/watering-runs", server.url()))
+            .header("x-orchard-share-token", &watering_token)
+            .json(&serde_json::json!({
+                "target": "danger",
+                "water_source": { "longitude": 5.01, "latitude": 45.03 },
+                "carry_capacity": 0
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
     let danger_run = client
         .post(format!("{}/orchards/7/watering-runs", server.url()))
         .header("x-orchard-share-token", watering_token)
         .json(&serde_json::json!({
             "target": "danger",
-            "water_source": { "longitude": 5.01, "latitude": 45.03 }
+            "water_source": { "longitude": 5.01, "latitude": 45.03 },
+            "carry_capacity": 3
         }))
         .send()
         .await
@@ -369,6 +385,7 @@ async fn only_a_watering_link_can_water_and_only_the_owner_can_order_a_row() {
     assert!(danger_progress["row_name"].is_null());
     assert_eq!(danger_progress["water_source"]["longitude"], 5.01);
     assert_eq!(danger_progress["water_source"]["latitude"], 45.03);
+    assert_eq!(danger_progress["carry_capacity"], 3);
     assert_eq!(danger_progress["route"][0]["id"], 1);
     assert_eq!(danger_progress["next_tree"]["id"], 1);
 }
