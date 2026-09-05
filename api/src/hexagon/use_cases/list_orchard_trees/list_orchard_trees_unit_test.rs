@@ -44,6 +44,7 @@ fn list_a_stored_tree_with_its_plant_identity() {
         listed_trees,
         Ok(vec![OrchardTree {
             id: TreeId(1),
+            row_rank: None,
             tree,
             plant_identity: apple,
             plant_cultivar: None,
