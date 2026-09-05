@@ -18,7 +18,7 @@ docker compose run --rm migrate revert --to VERSION
 
 Version `0` removes the complete migrated schema. Down migrations live in
 `db/migrations/down/` and must have exactly the same filename as their matching
-up migration. Every active migration through version 016 has a down migration.
+up migration. Every active migration through version 017 has a down migration.
 Versions 002 through 005 need no inverse SQL because their changes are already
 present in the immutable version-001 baseline used by this runner.
 

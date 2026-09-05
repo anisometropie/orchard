@@ -123,7 +123,7 @@ async fn owner_reads_and_modifies_only_the_orchard_in_the_route() {
 }
 
 #[tokio::test]
-async fn view_and_watering_links_rotate_independently_and_cannot_edit_trees() {
+async fn additional_view_links_preserve_existing_links_and_neither_permission_can_edit_trees() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
@@ -175,7 +175,7 @@ async fn view_and_watering_links_rotate_independently_and_cannot_edit_trees() {
             .await
             .unwrap()
             .status(),
-        StatusCode::NOT_FOUND
+        StatusCode::OK
     );
     assert_eq!(
         client

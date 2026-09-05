@@ -16,7 +16,7 @@ use orchard_api::hexagon::use_cases::change_tree_condition::{
 use postgres::{Client, NoTls};
 
 #[test]
-fn persist_password_sessions_ownership_and_rotating_share_tokens() {
+fn persist_password_sessions_ownership_and_multiple_permanent_share_tokens() {
     let _database_lock = database_lock();
     let (database_url, mut verification_connection) = empty_orchard_database();
     verification_connection
@@ -65,7 +65,7 @@ fn persist_password_sessions_ownership_and_rotating_share_tokens() {
         Some(user.clone())
     );
     let first_share_token = storage
-        .replace_share_token(user.id, OrchardId(1), OrchardSharePermission::View)
+        .create_share_token(user.id, OrchardId(1), OrchardSharePermission::View)
         .unwrap();
     assert_eq!(
         storage.orchard_share_for_token(&first_share_token).unwrap(),
@@ -75,7 +75,7 @@ fn persist_password_sessions_ownership_and_rotating_share_tokens() {
         })
     );
     let watering_share_token = storage
-        .replace_share_token(user.id, OrchardId(1), OrchardSharePermission::Watering)
+        .create_share_token(user.id, OrchardId(1), OrchardSharePermission::Watering)
         .unwrap();
     assert_eq!(
         storage
@@ -87,11 +87,14 @@ fn persist_password_sessions_ownership_and_rotating_share_tokens() {
         })
     );
     let second_share_token = storage
-        .replace_share_token(user.id, OrchardId(1), OrchardSharePermission::View)
+        .create_share_token(user.id, OrchardId(1), OrchardSharePermission::View)
         .unwrap();
     assert_eq!(
         storage.orchard_share_for_token(&first_share_token).unwrap(),
-        None
+        Some(orchard_api::hexagon::models::OrchardShareAccess {
+            orchard_id: OrchardId(1),
+            permission: OrchardSharePermission::View,
+        })
     );
     assert_eq!(
         storage
@@ -1318,6 +1321,20 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/016_add_share_permissions.sql"
+            ))
+            .unwrap();
+    }
+    let permanent_share_links_were_applied: bool = verification_connection
+        .query_one(
+            "SELECT to_regclass('orchard_share_tokens_orchard_permission_idx') IS NOT NULL",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !permanent_share_links_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/017_keep_shared_links_valid.sql"
             ))
             .unwrap();
     }

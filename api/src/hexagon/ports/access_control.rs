@@ -34,7 +34,7 @@ pub trait AccessControl {
         orchard_id: OrchardId,
     ) -> Result<bool, AccessControlError>;
 
-    fn replace_share_token(
+    fn create_share_token(
         &mut self,
         user_id: UserId,
         orchard_id: OrchardId,
