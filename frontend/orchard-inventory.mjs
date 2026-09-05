@@ -26,6 +26,26 @@ export function filterTreeFeatures(
   });
 }
 
+export function filterTreeFeaturesByIdentity(features, selection) {
+  if (!selection) return features;
+
+  return features.filter(({ properties = {} }) => {
+    const sameIdentity =
+      selection.plantIdentityId != null
+        ? properties.plant_identity_id === selection.plantIdentityId
+        : properties.plant_identity_taxon_name === selection.taxonName;
+    if (!sameIdentity) return false;
+
+    if (selection.cultivarId != null) {
+      return properties.plant_cultivar_id === selection.cultivarId;
+    }
+    if (selection.cultivarName) {
+      return properties.plant_identity_cultivar === selection.cultivarName;
+    }
+    return true;
+  });
+}
+
 export function taxonomyOptions(features, selectedGenus = "") {
   const genera = new Set();
   const species = new Set();
