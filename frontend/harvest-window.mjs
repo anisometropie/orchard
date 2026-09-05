@@ -9,6 +9,17 @@ export function parseAnnualDate(value) {
   return { month, day };
 }
 
+export function formatHarvestWindows(windows) {
+  const configuredWindows = normalizeHarvestWindows(windows).filter(
+    (window) => window?.start && window?.end,
+  );
+  return configuredWindows.length > 0
+    ? configuredWindows
+        .map(({ start, end }) => `${start} → ${end}`)
+        .join(" · ")
+    : "Not set";
+}
+
 export function harvestAvailability(features, startDate, weekCount) {
   const weeks = Math.max(1, Number(weekCount) || 1);
   const selectionStart = startOfUtcDay(startDate);
@@ -56,9 +67,18 @@ export function harvestLayerFilter(plantingDateFilter = null) {
 }
 
 function harvestWindows(properties) {
-  return Array.isArray(properties.harvest_windows)
-    ? properties.harvest_windows
-    : [];
+  return normalizeHarvestWindows(properties.harvest_windows);
+}
+
+function normalizeHarvestWindows(windows) {
+  if (Array.isArray(windows)) return windows;
+  if (typeof windows !== "string") return [];
+  try {
+    const parsed = JSON.parse(windows);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 export function harvestAvailabilitySummary(features) {

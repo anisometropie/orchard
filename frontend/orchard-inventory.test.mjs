@@ -8,7 +8,26 @@ import {
   harvestWindowSpan,
   summarizeSpecies,
   taxonomyOptions,
+  treeTooltipFields,
 } from "./orchard-inventory.mjs";
+
+test("include every harvest window in the tree hover fields", () => {
+  assert.deepEqual(
+    treeTooltipFields({
+      name: "Apple",
+      latin_name: "Malus domestica",
+      harvest_windows: [
+        { start: "08-01", end: "08-20" },
+        { start: "09-10", end: "09-30" },
+      ],
+    }),
+    [
+      ["Name", "Apple"],
+      ["Latin name", "Malus domestica"],
+      ["Harvest", "08-01 → 08-20 · 09-10 → 09-30"],
+    ],
+  );
+});
 
 const trees = [
   tree(1, {
