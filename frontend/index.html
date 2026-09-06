@@ -658,17 +658,15 @@
       }
       .tree-tooltip-actions {
         border-top: 1px solid #ddd;
+        display: flex;
+        gap: 4px;
+        justify-content: flex-end;
         margin-top: 7px;
         padding-top: 7px;
       }
-      .tree-tooltip-filter {
-        background: #245c2a;
-        border: 0;
-        border-radius: 4px;
-        color: white;
-        cursor: pointer;
-        font: 600 12px sans-serif;
-        padding: 5px 8px;
+      .tree-tooltip-actions .inventory-row-action {
+        opacity: 1;
+        pointer-events: auto;
       }
       .harvest-editor-error {
         color: #b42318;
@@ -2173,7 +2171,11 @@
         };
       }
 
-      function createTreeTooltip(properties, interactiveHover = false) {
+      function createTreeTooltip(
+        properties,
+        interactiveHover = false,
+        feature = null,
+      ) {
         const tooltip = document.createElement("div");
 
         treeTooltipFields(properties).forEach(([label, value]) => {
@@ -2184,23 +2186,42 @@
           tooltip.append(field);
         });
 
-        if (
-          interactiveHover &&
-          (properties.plant_identity_id != null ||
-            properties.plant_identity_taxon_name)
-        ) {
+        const canFilter =
+          properties.plant_identity_id != null ||
+          properties.plant_identity_taxon_name;
+        const canEdit = interactiveHover && feature && isEditable();
+        if (interactiveHover && (canFilter || canEdit)) {
           const actions = document.createElement("div");
           actions.className = "tree-tooltip-actions";
-          const filterButton = document.createElement("button");
-          filterButton.type = "button";
-          filterButton.className = "tree-tooltip-filter";
-          filterButton.textContent = "Show only this species";
-          filterButton.addEventListener("click", (event) => {
-            event.stopPropagation();
-            setMapIdentityFilter(speciesFilterSelection(properties));
-            closeTreeTooltip();
-          });
-          actions.append(filterButton);
+          if (canEdit) {
+            const editButton = document.createElement("button");
+            editButton.type = "button";
+            editButton.className = "inventory-row-action harvest-edit-button";
+            editButton.textContent = "✎";
+            editButton.title = `Edit ${properties.name || "tree"}`;
+            editButton.setAttribute(
+              "aria-label",
+              `Edit ${properties.name || "tree"}`,
+            );
+            editButton.addEventListener("click", (event) => {
+              event.stopPropagation();
+              openTreeClickPopup(feature);
+            });
+            actions.append(editButton);
+          }
+          if (canFilter) {
+            const selection = speciesFilterSelection(properties);
+            actions.append(
+              createInventoryFilterButton(
+                `Show only ${selection.label} on the map`,
+                (event) => {
+                  event.stopPropagation();
+                  setMapIdentityFilter(selection);
+                  closeTreeTooltip();
+                },
+              ),
+            );
+          }
           tooltip.append(actions);
         }
 
@@ -2222,6 +2243,45 @@
         treeTooltip?.remove();
         treeTooltip = undefined;
         treeTooltipTreeId = undefined;
+      }
+
+      function openTreeHoverPopup(feature) {
+        if (treeTooltip && treeTooltipTreeId === feature.id) return;
+
+        closeTreeTooltip();
+        treeTooltip = new maplibregl.Popup({
+          closeButton: false,
+          closeOnClick: false,
+          offset: 10,
+        })
+          .setLngLat(feature.geometry.coordinates)
+          .setDOMContent(createTreeTooltip(feature.properties, true, feature))
+          .addTo(map);
+        treeTooltipTreeId = feature.id;
+      }
+
+      function openTreeClickPopup(feature) {
+        closeTreeTooltip();
+        closeTreeEditor();
+
+        const editable = isEditable();
+        const popup = new maplibregl.Popup({
+          closeButton: !editable,
+          closeOnClick: false,
+          offset: 12,
+        })
+          .setLngLat(feature.geometry.coordinates)
+          .setDOMContent(
+            editable
+              ? createTreeEditor(feature)
+              : createTreeTooltip(feature.properties),
+          )
+          .addTo(map);
+        if (!editable) return;
+        treeEditor = popup;
+        popup.on("close", () => {
+          if (treeEditor === popup) treeEditor = undefined;
+        });
       }
 
       function scheduleTreeTooltipClose() {
@@ -3558,18 +3618,7 @@
         if (treeEditor) return;
 
         const feature = event.features[0];
-        if (treeTooltip && treeTooltipTreeId === feature.id) return;
-
-        treeTooltip?.remove();
-        treeTooltip = new maplibregl.Popup({
-          closeButton: false,
-          closeOnClick: false,
-          offset: 10,
-        })
-          .setLngLat(feature.geometry.coordinates)
-          .setDOMContent(createTreeTooltip(feature.properties, true))
-          .addTo(map);
-        treeTooltipTreeId = feature.id;
+        openTreeHoverPopup(feature);
       });
 
       map.on("mouseleave", "trees", () => {
@@ -3582,29 +3631,12 @@
         if (placingWaterSource) return;
         const feature = event.features[0];
         if (selectManualOrderTree(feature)) return;
-        treeTooltip?.remove();
-        treeTooltip = undefined;
-        treeTooltipTreeId = undefined;
-        closeTreeEditor();
-
-        const editable = isEditable();
-        const popup = new maplibregl.Popup({
-          closeButton: !editable,
-          closeOnClick: false,
-          offset: 12,
-        })
-          .setLngLat(feature.geometry.coordinates)
-          .setDOMContent(
-            editable
-              ? createTreeEditor(feature)
-              : createTreeTooltip(feature.properties),
-          )
-          .addTo(map);
-        if (!editable) return;
-        treeEditor = popup;
-        popup.on("close", () => {
-          if (treeEditor === popup) treeEditor = undefined;
-        });
+        if (compactMobileLayout.matches) {
+          closeTreeEditor();
+          openTreeHoverPopup(feature);
+          return;
+        }
+        openTreeClickPopup(feature);
       });
 
       map.on("click", (event) => {
