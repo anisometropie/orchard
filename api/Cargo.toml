@@ -85,6 +85,14 @@ name = "cancel_watering_run_unit"
 path = "src/hexagon/use_cases/cancel_watering_run/cancel_watering_run_unit_test.rs"
 
 [[test]]
+name = "add_tree_photo_unit"
+path = "src/hexagon/use_cases/add_tree_photo/add_tree_photo_unit_test.rs"
+
+[[test]]
+name = "load_latest_tree_photo_unit"
+path = "src/hexagon/use_cases/load_latest_tree_photo/load_latest_tree_photo_unit_test.rs"
+
+[[test]]
 name = "in_memory_orchard_storage_integration"
 path = "src/adapters/secondary/in_memory_orchard_storage/in_memory_orchard_storage_integration_test.rs"
 

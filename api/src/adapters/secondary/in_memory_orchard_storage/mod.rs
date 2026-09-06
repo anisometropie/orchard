@@ -4,12 +4,12 @@ use crate::hexagon::models::{
     AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, GeoPoint,
     HarvestScheduleOwner, MapConfiguration, Orchard, OrchardId, OrchardShareAccess,
     OrchardSharePermission, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
-    PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId, User, UserId,
-    WateringRun, WateringRunId, WateringRunTarget,
+    PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId, TreePhoto,
+    TreePhotoVariant, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
-    OrchardStorage, OrchardStorageError,
+    OrchardStorage, OrchardStorageError, TreePhotoStorage, TreePhotoStorageError,
 };
 
 /// In-memory transactional orchard storage for use-case and adapter tests.
@@ -42,6 +42,7 @@ struct InMemoryOrchard {
     trees: Vec<Tree>,
     tree_orchard_ids: Vec<Option<OrchardId>>,
     tree_row_ranks: Vec<Option<u32>>,
+    tree_photos: Vec<(OrchardId, TreeId, TreePhoto)>,
     watering_runs: Vec<WateringRun>,
 }
 
@@ -278,6 +279,7 @@ impl InMemoryOrchardStorage {
             trees: configuration.trees,
             tree_orchard_ids: configuration.tree_orchard_ids,
             tree_row_ranks,
+            tree_photos: Vec::new(),
             watering_runs: Vec::new(),
         }));
         (
@@ -501,6 +503,47 @@ impl MapConfigurationStorage for InMemoryOrchardStorage {
             return Ok(None);
         }
         self.aerial_overlay_image(overlay_id)
+    }
+}
+
+impl TreePhotoStorage for InMemoryOrchardStorage {
+    fn save_tree_photo(
+        &mut self,
+        orchard_id: OrchardId,
+        tree_id: TreeId,
+        photo: TreePhoto,
+    ) -> Result<bool, TreePhotoStorageError> {
+        let mut orchard = self.orchard.lock().unwrap();
+        let belongs_to_orchard = tree_index(tree_id)
+            .and_then(|index| orchard.tree_orchard_ids.get(index))
+            .is_some_and(|stored_orchard_id| *stored_orchard_id == Some(orchard_id));
+        if !belongs_to_orchard {
+            return Ok(false);
+        }
+        orchard.tree_photos.push((orchard_id, tree_id, photo));
+        Ok(true)
+    }
+
+    fn latest_tree_photo(
+        &mut self,
+        orchard_id: OrchardId,
+        tree_id: TreeId,
+        variant: TreePhotoVariant,
+    ) -> Result<Option<Vec<u8>>, TreePhotoStorageError> {
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .tree_photos
+            .iter()
+            .rev()
+            .find(|(stored_orchard_id, stored_tree_id, _)| {
+                *stored_orchard_id == orchard_id && *stored_tree_id == tree_id
+            })
+            .map(|(_, _, photo)| match variant {
+                TreePhotoVariant::Full => photo.full_webp.clone(),
+                TreePhotoVariant::Thumbnail => photo.thumbnail_webp.clone(),
+            }))
     }
 }
 
@@ -963,6 +1006,12 @@ impl OrchardStorage for InMemoryOrchardStorage {
                 Ok(OrchardTree {
                     id: TreeId((index + 1) as u64),
                     row_rank: orchard.tree_row_ranks.get(index).copied().flatten(),
+                    has_photo: orchard.tree_photos.iter().any(
+                        |(stored_orchard_id, stored_tree_id, _)| {
+                            orchard.tree_orchard_ids.get(index) == Some(&Some(*stored_orchard_id))
+                                && stored_tree_id.0 == (index + 1) as u64
+                        },
+                    ),
                     tree: tree.clone(),
                     plant_identity,
                     plant_cultivar,

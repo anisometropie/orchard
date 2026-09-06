@@ -6,11 +6,12 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State, rejection::JsonRejection},
+    extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle};
@@ -18,10 +19,15 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use crate::hexagon::models::{
     AerialOverlayId, AnnualDate, BotanicalTaxon, GeoPoint, HarvestScheduleOwner, HarvestedPart,
     InfraspecificRank, MapConfiguration, NamedTaxon, OrchardId, OrchardSharePermission,
-    OrchardTree, PlantCultivarId, PlantIdentity, PlantIdentityId, Tree, TreeId, WateringRunId,
-    WateringRunTarget,
+    OrchardTree, PlantCultivarId, PlantIdentity, PlantIdentityId, Tree, TreeId, TreePhotoVariant,
+    WateringRunId, WateringRunTarget,
 };
-use crate::hexagon::ports::{AccessControl, MapConfigurationStorage, OrchardStorage};
+use crate::hexagon::ports::{
+    AccessControl, MapConfigurationStorage, OrchardStorage, TreePhotoStorage,
+};
+use crate::hexagon::use_cases::add_tree_photo::{
+    TreePhotoAddError, TreePhotoAdded, add_tree_photo,
+};
 use crate::hexagon::use_cases::authorize_orchard_owner::{
     OrchardOwnerAccessError, OrchardOwnerAccessRequested, authorize_orchard_owner,
 };
@@ -45,6 +51,9 @@ use crate::hexagon::use_cases::load_active_watering_run::{
 };
 use crate::hexagon::use_cases::load_aerial_overlay_image::{
     AerialOverlayImageLoadError, load_orchard_aerial_overlay_image,
+};
+use crate::hexagon::use_cases::load_latest_tree_photo::{
+    LatestTreePhotoLoadError, LatestTreePhotoRequested, load_latest_tree_photo,
 };
 use crate::hexagon::use_cases::load_map_configuration::{
     MapConfigurationLoadError, load_orchard_map_configuration,
@@ -79,7 +88,7 @@ pub async fn start_http_server<U>(
     address: SocketAddr,
 ) -> Result<RunningHttpServer, std::io::Error>
 where
-    U: AccessControl + OrchardStorage + MapConfigurationStorage + Send + 'static,
+    U: AccessControl + OrchardStorage + MapConfigurationStorage + TreePhotoStorage + Send + 'static,
 {
     let listener = TcpListener::bind(address).await?;
     let address = listener.local_addr()?;
@@ -97,7 +106,7 @@ where
 
 pub fn router<U>(orchard_storage: Arc<Mutex<U>>) -> Router
 where
-    U: AccessControl + OrchardStorage + MapConfigurationStorage + Send + 'static,
+    U: AccessControl + OrchardStorage + MapConfigurationStorage + TreePhotoStorage + Send + 'static,
 {
     Router::new()
         .route(
@@ -113,6 +122,18 @@ where
         .route(
             "/orchards/{orchard_id}/trees/{tree_id}",
             patch(change_tree_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/trees/{tree_id}/photos",
+            post(add_tree_photo_handler::<U>).layer(DefaultBodyLimit::max(13 * 1024 * 1024)),
+        )
+        .route(
+            "/orchards/{orchard_id}/trees/{tree_id}/photos/latest",
+            get(latest_tree_photo_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/trees/{tree_id}/photos/latest/thumbnail",
+            get(latest_tree_photo_thumbnail_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/map-config",
@@ -883,6 +904,141 @@ struct ChangeTreeRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddTreePhotoRequest {
+    full_webp_base64: String,
+    thumbnail_webp_base64: String,
+}
+
+async fn add_tree_photo_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, tree_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<AddTreePhotoRequest>, JsonRejection>,
+) -> Result<StatusCode, StatusCode>
+where
+    U: AccessControl + TreePhotoStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    let Json(request) = request.map_err(|rejection| rejection.status())?;
+    let full_webp = STANDARD
+        .decode(request.full_webp_base64)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let thumbnail_webp = STANDARD
+        .decode(request.thumbnail_webp_base64)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        add_tree_photo(
+            TreePhotoAdded {
+                orchard_id,
+                tree_id: TreeId(tree_id),
+                full_webp,
+                thumbnail_webp,
+            },
+            &mut *storage,
+        )
+        .map(|()| StatusCode::CREATED)
+        .map_err(|error| match error {
+            TreePhotoAddError::InvalidWebp => StatusCode::BAD_REQUEST,
+            TreePhotoAddError::PhotoTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            TreePhotoAddError::TreeNotFound => StatusCode::NOT_FOUND,
+            TreePhotoAddError::PhotoCouldNotBeSaved => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn latest_tree_photo_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, tree_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + TreePhotoStorage + Send + 'static,
+{
+    tree_photo_response(
+        storage,
+        OrchardId(orchard_id),
+        TreeId(tree_id),
+        headers,
+        TreePhotoVariant::Full,
+    )
+    .await
+}
+
+async fn latest_tree_photo_thumbnail_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, tree_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + TreePhotoStorage + Send + 'static,
+{
+    tree_photo_response(
+        storage,
+        OrchardId(orchard_id),
+        TreeId(tree_id),
+        headers,
+        TreePhotoVariant::Thumbnail,
+    )
+    .await
+}
+
+async fn tree_photo_response<U>(
+    storage: Arc<Mutex<U>>,
+    orchard_id: OrchardId,
+    tree_id: TreeId,
+    headers: HeaderMap,
+    variant: TreePhotoVariant,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + TreePhotoStorage + Send + 'static,
+{
+    let credential = orchard_read_credential(&headers)?;
+    let bytes = tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        authorize_orchard_reader(
+            OrchardReadAccessRequested {
+                orchard_id,
+                credential,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+            OrchardReadAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        load_latest_tree_photo(
+            LatestTreePhotoRequested {
+                orchard_id,
+                tree_id,
+                variant,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            LatestTreePhotoLoadError::PhotoNotFound => StatusCode::NOT_FOUND,
+            LatestTreePhotoLoadError::PhotoCouldNotBeRead => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, "image/webp")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("Referrer-Policy", "no-referrer")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(Body::from(bytes))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[derive(Deserialize)]
 struct ReplaceHarvestWindowsRequest {
     reference_region: String,
     windows: Vec<HarvestWindowRequest>,
@@ -1043,6 +1199,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
     let features = trees.into_iter().map(|orchard_tree| {
         let tree_id = orchard_tree.id;
         let row_rank = orchard_tree.row_rank;
+        let has_photo = orchard_tree.has_photo;
         let harvest_windows = orchard_tree
             .harvest_windows
             .iter()
@@ -1125,6 +1282,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
                 "planted_on": planted_on,
                 "row_name": row_name,
                 "row_rank": row_rank,
+                "has_photo": has_photo,
                 "roles": roles,
                 "is_alive": is_alive,
                 "is_in_danger": is_in_danger,

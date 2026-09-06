@@ -3,6 +3,7 @@ mod map_configuration;
 mod orchard_access;
 mod plant_identity;
 mod tree;
+mod tree_photo;
 mod watering;
 
 pub use legacy_tree_source::{LegacyPlantIdentification, LegacyTreeSource};
@@ -20,12 +21,14 @@ pub use plant_identity::{
     PlantIdentityReference,
 };
 pub use tree::{ReproductiveRole, Tree, TreeId};
+pub use tree_photo::{TreePhoto, TreePhotoVariant};
 pub use watering::{WateringRun, WateringRunId, WateringRunTarget};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrchardTree {
     pub id: TreeId,
     pub row_rank: Option<u32>,
+    pub has_photo: bool,
     pub tree: Tree,
     pub plant_identity: PlantIdentity,
     pub plant_cultivar: Option<PlantCultivar>,

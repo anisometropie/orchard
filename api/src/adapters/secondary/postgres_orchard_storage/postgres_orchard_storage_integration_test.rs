@@ -5,10 +5,11 @@ use orchard_api::hexagon::models::{
     IdentificationStatus, InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification,
     LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardId, OrchardSharePermission, OrchardTree,
     PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
-    PlantIdentityReference, ReproductiveRole, Tree, TreeId, UserId, WateringRunTarget,
+    PlantIdentityReference, ReproductiveRole, Tree, TreeId, TreePhoto, TreePhotoVariant, UserId,
+    WateringRunTarget,
 };
 use orchard_api::hexagon::ports::{
-    AccessControl, MapConfigurationStorage, OrchardStorage, OrchardStorageError,
+    AccessControl, MapConfigurationStorage, OrchardStorage, OrchardStorageError, TreePhotoStorage,
 };
 use orchard_api::hexagon::use_cases::change_tree_condition::{
     TreeConditionChanged, change_tree_condition,
@@ -234,6 +235,84 @@ fn persist_row_ranks_and_resumable_watering_progress() {
 }
 
 #[test]
+fn persist_and_load_the_latest_tree_photo_variants_inside_the_tree_orchard() {
+    let _database_lock = database_lock();
+    let (database_url, mut verification_connection) = empty_orchard_database();
+    verification_connection
+        .batch_execute(
+            r#"
+            INSERT INTO users (username, default_center, is_default)
+            VALUES ('owner', ST_SetSRID(ST_MakePoint(5, 45), 4326), TRUE);
+            INSERT INTO orchards (owner_user_id, name, center, reference_region)
+            VALUES (1, 'My orchard', ST_SetSRID(ST_MakePoint(5, 45), 4326), 'Drôme');
+            INSERT INTO plant_identities (common_name, botanical_taxon)
+            VALUES (
+                'Apple',
+                '{"Named":{"genus":"Malus","species":null,"species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}'
+            );
+            INSERT INTO trees (
+                orchard_id, plant_identity_id, location, roles, is_alive, identification_status
+            ) VALUES (
+                1, 1, ST_SetSRID(ST_MakePoint(5.1, 45), 4326), '{}', TRUE, 'confirmed'
+            );
+            "#,
+        )
+        .unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let first = TreePhoto {
+        full_webp: webp(&[1]),
+        thumbnail_webp: webp(&[2]),
+    };
+    let latest = TreePhoto {
+        full_webp: webp(&[3]),
+        thumbnail_webp: webp(&[4]),
+    };
+
+    assert!(
+        !storage.trees_in_orchard(OrchardId(1)).unwrap()[0].has_photo,
+        "a tree without a stored photo must say so"
+    );
+    assert!(
+        storage
+            .save_tree_photo(OrchardId(1), TreeId(1), first)
+            .unwrap()
+    );
+    assert!(
+        storage.trees_in_orchard(OrchardId(1)).unwrap()[0].has_photo,
+        "saving a photo must update the orchard tree projection"
+    );
+    assert!(
+        storage
+            .save_tree_photo(OrchardId(1), TreeId(1), latest.clone())
+            .unwrap()
+    );
+    assert!(
+        !storage
+            .save_tree_photo(OrchardId(2), TreeId(1), latest.clone())
+            .unwrap()
+    );
+    assert_eq!(
+        storage
+            .latest_tree_photo(OrchardId(1), TreeId(1), TreePhotoVariant::Full)
+            .unwrap(),
+        Some(latest.full_webp)
+    );
+    assert_eq!(
+        storage
+            .latest_tree_photo(OrchardId(1), TreeId(1), TreePhotoVariant::Thumbnail,)
+            .unwrap(),
+        Some(latest.thumbnail_webp)
+    );
+    assert_eq!(
+        verification_connection
+            .query_one("SELECT count(*) FROM tree_photos", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        2
+    );
+}
+
+#[test]
 fn commit_persists_identity_and_tree() {
     let _database_lock = database_lock();
     let (database_url, mut verification_connection) = empty_orchard_database();
@@ -393,6 +472,7 @@ fn read_tree_with_its_identity() {
         Ok(vec![OrchardTree {
             id: TreeId(1),
             row_rank: None,
+            has_photo: false,
             tree,
             plant_identity: apple,
             plant_cultivar: None,
@@ -1373,6 +1453,17 @@ fn empty_orchard_database() -> (String, Client) {
             ))
             .unwrap();
     }
+    let tree_photos_were_applied: bool = verification_connection
+        .query_one("SELECT to_regclass('tree_photos') IS NOT NULL", &[])
+        .unwrap()
+        .get(0);
+    if !tree_photos_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/019_add_tree_photos.sql"
+            ))
+            .unwrap();
+    }
     verification_connection
         .batch_execute(
             "TRUNCATE TABLE watering_runs, user_sessions, orchards, plant_harvest_windows,
@@ -1402,4 +1493,12 @@ fn database_lock() -> DatabaseLock {
     DatabaseLock {
         _connection: connection,
     }
+}
+
+fn webp(payload: &[u8]) -> Vec<u8> {
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend_from_slice(&u32::try_from(payload.len() + 4).unwrap().to_le_bytes());
+    bytes.extend_from_slice(b"WEBP");
+    bytes.extend_from_slice(payload);
+    bytes
 }

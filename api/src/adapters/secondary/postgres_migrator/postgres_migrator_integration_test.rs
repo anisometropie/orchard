@@ -17,7 +17,9 @@ fn migrate_fresh_adopt_legacy_and_reject_checksum_drift() {
     let first_run = migrator.migrate().unwrap();
     assert_eq!(
         first_run.applied_versions,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+        ]
     );
     assert!(!first_run.adopted_legacy_schema);
     assert_eq!(
@@ -27,7 +29,7 @@ fn migrate_fresh_adopt_legacy_and_reject_checksum_drift() {
 
     assert_eq!(
         migrator.revert_to(10).unwrap().reverted_versions,
-        vec![18, 17, 16, 15, 14, 13, 12, 11]
+        vec![19, 18, 17, 16, 15, 14, 13, 12, 11]
     );
     migrator
         .client()
@@ -37,7 +39,7 @@ fn migrate_fresh_adopt_legacy_and_reject_checksum_drift() {
     assert!(adoption.adopted_legacy_schema);
     assert_eq!(
         adoption.applied_versions,
-        vec![11, 12, 13, 14, 15, 16, 17, 18]
+        vec![11, 12, 13, 14, 15, 16, 17, 18, 19]
     );
 
     migrator
@@ -122,7 +124,7 @@ fn assign_existing_orchard_data_to_the_default_users_orchard_before_adding_authe
 
     assert_eq!(
         migrator.migrate().unwrap().applied_versions,
-        vec![11, 12, 13, 14, 15, 16, 17, 18]
+        vec![11, 12, 13, 14, 15, 16, 17, 18, 19]
     );
 
     let migrated = migrator
@@ -207,7 +209,7 @@ fn preserve_the_existing_view_link_when_adding_separate_share_permissions() {
 
     assert_eq!(
         migrator.migrate().unwrap().applied_versions,
-        vec![16, 17, 18]
+        vec![16, 17, 18, 19]
     );
     let migrated = migrator
         .client()
@@ -293,7 +295,9 @@ fn revert_and_reapply_the_embedded_migration_chain() {
     migrator.migrate().unwrap();
     assert_eq!(
         migrator.revert_to(0).unwrap().reverted_versions,
-        vec![18, 17, 16, 15, 14, 13, 12, 11, 10, 8, 7, 6, 5, 4, 3, 2, 1]
+        vec![
+            19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 8, 7, 6, 5, 4, 3, 2, 1
+        ]
     );
     let reverted = migrator
         .client()
@@ -312,7 +316,9 @@ fn revert_and_reapply_the_embedded_migration_chain() {
     assert_eq!(reverted.get::<_, i64>(3), 0);
     assert_eq!(
         migrator.migrate().unwrap().applied_versions,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+        ]
     );
 
     migrator
@@ -369,7 +375,7 @@ fn preserve_representable_orchard_data_while_reverting_to_version_6_and_reapplyi
 
     assert_eq!(
         migrator.revert_to(6).unwrap().reverted_versions,
-        vec![18, 17, 16, 15, 14, 13, 12, 11, 10, 8, 7]
+        vec![19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 8, 7]
     );
     let version_6_tree = migrator
         .client()
@@ -393,7 +399,7 @@ fn preserve_representable_orchard_data_while_reverting_to_version_6_and_reapplyi
 
     assert_eq!(
         migrator.migrate().unwrap().applied_versions,
-        vec![7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        vec![7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     );
     let version_10_tree = migrator
         .client()
