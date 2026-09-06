@@ -1,3 +1,4 @@
+use base64::{Engine, engine::general_purpose::STANDARD};
 use orchard_api::adapters::primary::http::start_http_server;
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
@@ -220,6 +221,108 @@ async fn shared_access_includes_the_orchards_map_and_aerial_image() {
         .unwrap();
     assert_eq!(image.status(), StatusCode::OK);
     assert_eq!(image.bytes().await.unwrap().as_ref(), &[1_u8, 2, 3]);
+}
+
+#[tokio::test]
+async fn only_the_owner_adds_photos_and_shared_readers_see_the_latest_webp_variants() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let token = create_share_token(&client, server.url(), &cookie).await;
+    let photo_url = format!("{}/orchards/7/trees/1/photos", server.url());
+    let large_payload = vec![1; 2 * 1024 * 1024];
+    let first_full = webp(&large_payload);
+    let first_thumbnail = webp(&[4, 5]);
+    let second_full = webp(&[6, 7, 8]);
+    let second_thumbnail = webp(&[9, 10]);
+
+    let trees_without_photo = client
+        .get(format!("{}/orchards/7/trees.geojson", server.url()))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        trees_without_photo["features"][0]["properties"]["has_photo"],
+        false
+    );
+
+    assert_eq!(
+        client
+            .post(&photo_url)
+            .header("x-orchard-share-token", &token)
+            .json(&photo_request(&first_full, &first_thumbnail))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    for (full, thumbnail) in [
+        (&first_full, &first_thumbnail),
+        (&second_full, &second_thumbnail),
+    ] {
+        assert_eq!(
+            client
+                .post(&photo_url)
+                .header(header::COOKIE, &cookie)
+                .json(&photo_request(full, thumbnail))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+    }
+
+    let trees_with_photo = client
+        .get(format!("{}/orchards/7/trees.geojson", server.url()))
+        .header("x-orchard-share-token", &token)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        trees_with_photo["features"][0]["properties"]["has_photo"],
+        true
+    );
+
+    let full = client
+        .get(format!("{photo_url}/latest"))
+        .header("x-orchard-share-token", &token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(full.status(), StatusCode::OK);
+    assert_eq!(full.headers()[header::CONTENT_TYPE], "image/webp");
+    assert_eq!(full.bytes().await.unwrap().as_ref(), second_full);
+
+    let thumbnail = client
+        .get(format!("{photo_url}/latest/thumbnail"))
+        .header("x-orchard-share-token", token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(thumbnail.status(), StatusCode::OK);
+    assert_eq!(thumbnail.headers()[header::CONTENT_TYPE], "image/webp");
+    assert_eq!(thumbnail.bytes().await.unwrap().as_ref(), second_thumbnail);
+
+    assert_eq!(
+        client
+            .get(format!("{photo_url}/latest"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
@@ -584,4 +687,19 @@ fn tree() -> Tree {
         adult_height_meters: None,
         adult_width_meters: None,
     }
+}
+
+fn photo_request(full: &[u8], thumbnail: &[u8]) -> serde_json::Value {
+    serde_json::json!({
+        "full_webp_base64": STANDARD.encode(full),
+        "thumbnail_webp_base64": STANDARD.encode(thumbnail),
+    })
+}
+
+fn webp(payload: &[u8]) -> Vec<u8> {
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend_from_slice(&u32::try_from(payload.len() + 4).unwrap().to_le_bytes());
+    bytes.extend_from_slice(b"WEBP");
+    bytes.extend_from_slice(payload);
+    bytes
 }

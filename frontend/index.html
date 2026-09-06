@@ -68,25 +68,38 @@
       .tree-editor-error {
         color: #b42318;
       }
-      .tree-editor-actions {
+      .tree-editor-actions,
+      .tree-editor-photo-actions {
         display: flex;
         gap: 8px;
-        justify-content: flex-end;
         margin-top: 12px;
       }
-      .tree-editor-actions button {
+      .tree-editor-actions {
+        justify-content: flex-end;
+      }
+      .tree-editor-photo-actions {
+        border-top: 1px solid #ddd;
+        flex-wrap: wrap;
+        padding-top: 10px;
+      }
+      .tree-editor-actions button,
+      .tree-editor-photo-actions button {
         border: 1px solid #777;
         border-radius: 4px;
         cursor: pointer;
         font: inherit;
         padding: 5px 10px;
       }
+      .tree-editor-photo-actions button {
+        flex: 1 1 auto;
+      }
       .tree-editor-actions button[type="submit"] {
         background: #245c2a;
         border-color: #245c2a;
         color: white;
       }
-      .tree-editor-actions button:disabled {
+      .tree-editor-actions button:disabled,
+      .tree-editor-photo-actions button:disabled {
         cursor: wait;
         opacity: 0.6;
       }
@@ -668,6 +681,61 @@
         opacity: 1;
         pointer-events: auto;
       }
+      .tree-tooltip-photo {
+        background: transparent;
+        border: 0;
+        border-radius: 6px;
+        cursor: zoom-in;
+        display: block;
+        margin: 8px 0 0;
+        overflow: hidden;
+        padding: 0;
+        width: min(240px, 70vw);
+      }
+      .tree-tooltip-photo img {
+        display: block;
+        height: auto;
+        max-height: 160px;
+        object-fit: cover;
+        width: 100%;
+      }
+      .tree-photo-viewer {
+        align-items: center;
+        background: rgba(0, 0, 0, 0.88);
+        bottom: 0;
+        display: flex;
+        justify-content: center;
+        left: 0;
+        padding: 28px;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 300;
+      }
+      .tree-photo-viewer img {
+        max-height: calc(100vh - 56px);
+        max-width: calc(100vw - 56px);
+        object-fit: contain;
+      }
+      .tree-photo-viewer-status {
+        color: white;
+        font: 600 16px sans-serif;
+      }
+      .tree-photo-viewer-close {
+        align-items: center;
+        background: rgba(255, 255, 255, 0.96);
+        border: 0;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        font: 30px/1 sans-serif;
+        height: 48px;
+        justify-content: center;
+        position: absolute;
+        right: 16px;
+        top: 16px;
+        width: 48px;
+      }
       .harvest-editor-error {
         color: #b42318;
         font-size: 11px;
@@ -1060,6 +1128,25 @@
         .inventory-filter-button svg {
           height: 20px;
           width: 20px;
+        }
+        .tree-editor-actions button,
+        .tree-editor-photo-actions button,
+        .tree-photo-viewer-close {
+          min-height: 52px;
+          min-width: 52px;
+        }
+        .tree-editor-photo-actions {
+          flex-direction: column;
+        }
+        .tree-editor-photo-actions button {
+          width: 100%;
+        }
+        .tree-photo-viewer {
+          padding: 10px;
+        }
+        .tree-photo-viewer img {
+          max-height: calc(100dvh - 20px);
+          max-width: calc(100vw - 20px);
         }
         .inventory-species-actions {
           flex-basis: 88px;
@@ -1663,6 +1750,7 @@
       let treeTooltipTreeId;
       let treeTooltipHideTimer;
       let treeEditor;
+      let treePhotoViewer;
       let orchardFeatures = [];
       let activeMapIdentityFilter = null;
       let mapMode = "normal";
@@ -2171,6 +2259,105 @@
         };
       }
 
+      async function fetchLatestTreePhoto(treeId, thumbnail = false) {
+        const suffix = thumbnail
+          ? `trees/${encodeURIComponent(treeId)}/photos/latest/thumbnail`
+          : `trees/${encodeURIComponent(treeId)}/photos/latest`;
+        const response = await fetch(orchardResourceUrl(currentAccess, suffix), {
+          headers: accessHeaders(currentAccess),
+          cache: "no-store",
+        });
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error("Could not load this tree photo.");
+        return response.blob();
+      }
+
+      function appendLatestTreePhoto(tooltip, feature) {
+        const photoButton = document.createElement("button");
+        photoButton.type = "button";
+        photoButton.className = "tree-tooltip-photo";
+        photoButton.title = "Open full-size photo";
+        photoButton.setAttribute(
+          "aria-label",
+          `Open latest photo of ${feature.properties.name || "tree"}`,
+        );
+        photoButton.hidden = true;
+        const image = document.createElement("img");
+        image.alt = `Latest photo of ${feature.properties.name || "tree"}`;
+        photoButton.append(image);
+        photoButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openTreePhotoViewer(feature.id, feature.properties.name || "tree");
+        });
+        tooltip.append(photoButton);
+
+        fetchLatestTreePhoto(feature.id, true)
+          .then((blob) => {
+            if (!blob || !photoButton.isConnected) return;
+            const objectUrl = URL.createObjectURL(blob);
+            image.addEventListener("load", () => URL.revokeObjectURL(objectUrl), {
+              once: true,
+            });
+            image.addEventListener("error", () => URL.revokeObjectURL(objectUrl), {
+              once: true,
+            });
+            image.src = objectUrl;
+            photoButton.hidden = false;
+          })
+          .catch(() => {});
+      }
+
+      function closeTreePhotoViewer() {
+        if (!treePhotoViewer) return;
+        const objectUrl = treePhotoViewer.dataset.objectUrl;
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        treePhotoViewer.remove();
+        treePhotoViewer = undefined;
+      }
+
+      async function openTreePhotoViewer(treeId, treeName) {
+        closeTreePhotoViewer();
+        const viewer = document.createElement("div");
+        viewer.className = "tree-photo-viewer";
+        viewer.setAttribute("role", "dialog");
+        viewer.setAttribute("aria-modal", "true");
+        viewer.setAttribute("aria-label", `Latest photo of ${treeName}`);
+        const status = document.createElement("div");
+        status.className = "tree-photo-viewer-status";
+        status.textContent = "Loading photo…";
+        const closeButton = document.createElement("button");
+        closeButton.type = "button";
+        closeButton.className = "tree-photo-viewer-close";
+        closeButton.setAttribute("aria-label", "Close photo");
+        closeButton.textContent = "×";
+        closeButton.addEventListener("click", closeTreePhotoViewer);
+        viewer.addEventListener("click", (event) => {
+          if (event.target === viewer) closeTreePhotoViewer();
+        });
+        viewer.append(status, closeButton);
+        document.body.append(viewer);
+        treePhotoViewer = viewer;
+        closeButton.focus();
+
+        try {
+          const blob = await fetchLatestTreePhoto(treeId);
+          if (treePhotoViewer !== viewer) return;
+          if (!blob) throw new Error("This tree has no photo.");
+          const objectUrl = URL.createObjectURL(blob);
+          viewer.dataset.objectUrl = objectUrl;
+          const image = document.createElement("img");
+          image.alt = `Latest photo of ${treeName}`;
+          image.src = objectUrl;
+          status.replaceWith(image);
+        } catch (error) {
+          if (treePhotoViewer === viewer) status.textContent = error.message;
+        }
+      }
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeTreePhotoViewer();
+      });
+
       function createTreeTooltip(
         properties,
         interactiveHover = false,
@@ -2185,6 +2372,14 @@
           field.append(labelElement, document.createTextNode(value));
           tooltip.append(field);
         });
+
+        if (
+          interactiveHover &&
+          feature?.id != null &&
+          properties.has_photo === true
+        ) {
+          appendLatestTreePhoto(tooltip, feature);
+        }
 
         const canFilter =
           properties.plant_identity_id != null ||
@@ -2294,6 +2489,115 @@
         treeEditor = undefined;
       }
 
+      function loadPhotoFile(file) {
+        return new Promise((resolve, reject) => {
+          const objectUrl = URL.createObjectURL(file);
+          const image = new Image();
+          image.onload = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve(image);
+          };
+          image.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error("This image format cannot be opened."));
+          };
+          image.src = objectUrl;
+        });
+      }
+
+      function webpVariant(image, maximumDimension, quality) {
+        const scale = Math.min(
+          1,
+          maximumDimension / Math.max(image.naturalWidth, image.naturalHeight),
+        );
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        canvas
+          .getContext("2d")
+          .drawImage(image, 0, 0, canvas.width, canvas.height);
+        return new Promise((resolve, reject) => {
+          canvas.toBlob(
+            (blob) => {
+              if (!blob || blob.type !== "image/webp") {
+                reject(new Error("This browser cannot create WebP photos."));
+                return;
+              }
+              resolve(blob);
+            },
+            "image/webp",
+            quality,
+          );
+        });
+      }
+
+      async function prepareTreePhoto(file) {
+        if (!file.type.startsWith("image/")) {
+          throw new Error("Choose an image file.");
+        }
+        if (file.size > 40 * 1024 * 1024) {
+          throw new Error("Choose an image smaller than 40 MB.");
+        }
+        const image = await loadPhotoFile(file);
+        const [fullWebp, thumbnailWebp] = await Promise.all([
+          webpVariant(image, 2400, 0.86),
+          webpVariant(image, 480, 0.66),
+        ]);
+        if (fullWebp.size > 8 * 1024 * 1024) {
+          throw new Error("The compressed photo is still larger than 8 MB.");
+        }
+        if (thumbnailWebp.size > 512 * 1024) {
+          throw new Error("The photo thumbnail is too large.");
+        }
+        return { fullWebp, thumbnailWebp };
+      }
+
+      function blobBase64(blob) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(",", 2)[1]);
+          reader.onerror = () => reject(new Error("Could not read the photo."));
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      async function uploadTreePhoto(treeId, photo) {
+        if (!isEditable()) throw new Error("Only the orchard owner can add photos.");
+        if (treeId == null) throw new Error("This tree has no editable ID.");
+        const [fullWebpBase64, thumbnailWebpBase64] = await Promise.all([
+          blobBase64(photo.fullWebp),
+          blobBase64(photo.thumbnailWebp),
+        ]);
+        const response = await fetch(
+          orchardResourceUrl(
+            currentAccess,
+            `trees/${encodeURIComponent(treeId)}/photos`,
+          ),
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              full_webp_base64: fullWebpBase64,
+              thumbnail_webp_base64: thumbnailWebpBase64,
+            }),
+          },
+        );
+        if (response.ok) return;
+        if (response.status === 404) throw new Error("This tree no longer exists.");
+        if (response.status === 413) throw new Error("This photo is too large.");
+        if (response.status === 400) throw new Error("The WebP photo is invalid.");
+        throw new Error("Could not save this photo. Please try again.");
+      }
+
+      function markTreeHasPhoto(feature) {
+        feature.properties.has_photo = true;
+        orchardFeatures
+          .filter((orchardFeature) => orchardFeature.id === feature.id)
+          .forEach((orchardFeature) => {
+            orchardFeature.properties.has_photo = true;
+          });
+      }
+
       function createTreeEditor(feature) {
         const form = document.createElement("form");
         form.className = "tree-editor";
@@ -2341,6 +2645,32 @@
 
         const actions = document.createElement("div");
         actions.className = "tree-editor-actions";
+        const photoActions = document.createElement("div");
+        photoActions.className = "tree-editor-photo-actions";
+        const libraryPhotoInput = document.createElement("input");
+        libraryPhotoInput.type = "file";
+        libraryPhotoInput.accept = "image/*";
+        libraryPhotoInput.className =
+          "visually-hidden tree-editor-photo-library-input";
+        const libraryPhotoButton = document.createElement("button");
+        libraryPhotoButton.type = "button";
+        libraryPhotoButton.textContent = "🖼 Photo library";
+        libraryPhotoButton.addEventListener("click", () =>
+          libraryPhotoInput.click(),
+        );
+        const cameraPhotoInput = document.createElement("input");
+        cameraPhotoInput.type = "file";
+        cameraPhotoInput.accept = "image/*";
+        cameraPhotoInput.setAttribute("capture", "environment");
+        cameraPhotoInput.className =
+          "visually-hidden tree-editor-photo-camera-input";
+        const cameraPhotoButton = document.createElement("button");
+        cameraPhotoButton.type = "button";
+        cameraPhotoButton.textContent = "📷 Take photo";
+        cameraPhotoButton.addEventListener("click", () =>
+          cameraPhotoInput.click(),
+        );
+        photoActions.append(libraryPhotoButton, cameraPhotoButton);
         const cancelButton = document.createElement("button");
         cancelButton.type = "button";
         cancelButton.textContent = "Cancel";
@@ -2351,13 +2681,62 @@
         actions.append(cancelButton, saveButton);
 
         form.append(title, dangerField, deadField, note);
-        form.append(error, actions);
+        form.append(
+          libraryPhotoInput,
+          cameraPhotoInput,
+          photoActions,
+          error,
+          actions,
+        );
+
+        async function addSelectedPhoto(photoInput, busyButton) {
+          const file = photoInput.files?.[0];
+          if (!file) return;
+          error.hidden = true;
+          dangerCheckbox.disabled = true;
+          deadCheckbox.disabled = true;
+          libraryPhotoButton.disabled = true;
+          cameraPhotoButton.disabled = true;
+          cancelButton.disabled = true;
+          saveButton.disabled = true;
+          busyButton.textContent = "Preparing…";
+          try {
+            const photo = await prepareTreePhoto(file);
+            busyButton.textContent = "Uploading…";
+            await uploadTreePhoto(feature.id, photo);
+            markTreeHasPhoto(feature);
+            closeTreeEditor();
+            openTreeHoverPopup(feature);
+          } catch (requestError) {
+            error.textContent = requestError.message;
+            error.hidden = false;
+            deadCheckbox.disabled = false;
+            syncConditionControls();
+            libraryPhotoButton.disabled = false;
+            cameraPhotoButton.disabled = false;
+            cancelButton.disabled = false;
+            saveButton.disabled = false;
+          } finally {
+            photoInput.value = "";
+            libraryPhotoButton.textContent = "🖼 Photo library";
+            cameraPhotoButton.textContent = "📷 Take photo";
+          }
+        }
+
+        libraryPhotoInput.addEventListener("change", () =>
+          addSelectedPhoto(libraryPhotoInput, libraryPhotoButton),
+        );
+        cameraPhotoInput.addEventListener("change", () =>
+          addSelectedPhoto(cameraPhotoInput, cameraPhotoButton),
+        );
 
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           error.hidden = true;
           dangerCheckbox.disabled = true;
           deadCheckbox.disabled = true;
+          libraryPhotoButton.disabled = true;
+          cameraPhotoButton.disabled = true;
           cancelButton.disabled = true;
           saveButton.disabled = true;
           saveButton.textContent = "Saving…";
@@ -2384,6 +2763,8 @@
             error.hidden = false;
             deadCheckbox.disabled = false;
             syncConditionControls();
+            libraryPhotoButton.disabled = false;
+            cameraPhotoButton.disabled = false;
             cancelButton.disabled = false;
             saveButton.disabled = false;
             saveButton.textContent = "OK";
@@ -3806,6 +4187,7 @@
 
       function clearOrchardPresentation() {
         closeMobileMenus();
+        closeTreePhotoViewer();
         closeTreeEditor();
         closeTreeTooltip();
         cancelManualRowOrder();

@@ -13,11 +13,12 @@ use crate::hexagon::models::{
     LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, Orchard, OrchardId,
     OrchardShareAccess, OrchardSharePermission, OrchardTree, PlantCultivar, PlantCultivarId,
     PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole,
-    Tree, TreeId, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
+    Tree, TreeId, TreePhoto, TreePhotoVariant, User, UserId, WateringRun, WateringRunId,
+    WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
-    OrchardStorage, OrchardStorageError,
+    OrchardStorage, OrchardStorageError, TreePhotoStorage, TreePhotoStorageError,
 };
 
 /// PostgreSQL/PostGIS implementation of orchard storage.
@@ -261,6 +262,67 @@ impl PostgresOrchardStorage {
         let client = Client::connect(database_url, NoTls)
             .map_err(|_| OrchardStorageError::AtomicOperationCouldNotBegin)?;
         Ok(Self { client })
+    }
+}
+
+impl TreePhotoStorage for PostgresOrchardStorage {
+    fn save_tree_photo(
+        &mut self,
+        orchard_id: OrchardId,
+        tree_id: TreeId,
+        photo: TreePhoto,
+    ) -> Result<bool, TreePhotoStorageError> {
+        let orchard_id =
+            i64::try_from(orchard_id.0).map_err(|_| TreePhotoStorageError::PhotoCouldNotBeSaved)?;
+        let tree_id =
+            i64::try_from(tree_id.0).map_err(|_| TreePhotoStorageError::PhotoCouldNotBeSaved)?;
+        self.client
+            .query_opt(
+                "INSERT INTO tree_photos (
+                    orchard_id, tree_id, image_webp, thumbnail_webp
+                 )
+                 SELECT $1, $2, $3, $4
+                 FROM trees
+                 WHERE id = $2 AND orchard_id = $1
+                 RETURNING id",
+                &[
+                    &orchard_id,
+                    &tree_id,
+                    &photo.full_webp,
+                    &photo.thumbnail_webp,
+                ],
+            )
+            .map(|row| row.is_some())
+            .map_err(|_| TreePhotoStorageError::PhotoCouldNotBeSaved)
+    }
+
+    fn latest_tree_photo(
+        &mut self,
+        orchard_id: OrchardId,
+        tree_id: TreeId,
+        variant: TreePhotoVariant,
+    ) -> Result<Option<Vec<u8>>, TreePhotoStorageError> {
+        let orchard_id =
+            i64::try_from(orchard_id.0).map_err(|_| TreePhotoStorageError::PhotoCouldNotBeRead)?;
+        let tree_id =
+            i64::try_from(tree_id.0).map_err(|_| TreePhotoStorageError::PhotoCouldNotBeRead)?;
+        let column = match variant {
+            TreePhotoVariant::Full => "image_webp",
+            TreePhotoVariant::Thumbnail => "thumbnail_webp",
+        };
+        self.client
+            .query_opt(
+                &format!(
+                    "SELECT {column}
+                     FROM tree_photos
+                     WHERE orchard_id = $1 AND tree_id = $2
+                     ORDER BY id DESC
+                     LIMIT 1"
+                ),
+                &[&orchard_id, &tree_id],
+            )
+            .map(|row| row.map(|row| row.get(0)))
+            .map_err(|_| TreePhotoStorageError::PhotoCouldNotBeRead)
     }
 }
 
@@ -512,7 +574,12 @@ impl OrchardStorage for PostgresOrchardStorage {
                     t.reproductive_role, t.adult_height_meters, t.adult_width_meters,
                     t.is_in_danger, t.cultivar_id, t.identification_status,
                     p.common_name, p.botanical_taxon::text, c.cultivar, c.trade_name,
-                    t.id, COALESCE(harvest.windows, '[]'), t.row_rank
+                    t.id, COALESCE(harvest.windows, '[]'), t.row_rank,
+                    EXISTS (
+                        SELECT 1 FROM tree_photos photo
+                        WHERE photo.tree_id = t.id
+                          AND photo.orchard_id = t.orchard_id
+                    )
                  FROM trees t
                  JOIN plant_identities p ON p.id = t.plant_identity_id
                  LEFT JOIN plant_cultivars c ON c.id = t.cultivar_id
@@ -559,7 +626,12 @@ impl OrchardStorage for PostgresOrchardStorage {
                     t.reproductive_role, t.adult_height_meters, t.adult_width_meters,
                     t.is_in_danger, t.cultivar_id, t.identification_status,
                     p.common_name, p.botanical_taxon::text, c.cultivar, c.trade_name,
-                    t.id, COALESCE(harvest.windows, '[]'), t.row_rank
+                    t.id, COALESCE(harvest.windows, '[]'), t.row_rank,
+                    EXISTS (
+                        SELECT 1 FROM tree_photos photo
+                        WHERE photo.tree_id = t.id
+                          AND photo.orchard_id = t.orchard_id
+                    )
                  FROM trees t
                  JOIN plant_identities p ON p.id = t.plant_identity_id
                  LEFT JOIN plant_cultivars c ON c.id = t.cultivar_id
@@ -1051,6 +1123,7 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
             .get::<_, Option<i32>>(25)
             .map(|rank| u32::try_from(rank).map_err(|_| OrchardStorageError::TreesCouldNotBeRead))
             .transpose()?,
+        has_photo: row.get(26),
         tree: Tree {
             legacy_source,
             plant_identity_id: PlantIdentityId(

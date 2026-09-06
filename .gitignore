@@ -1,5 +1,6 @@
 data/history
 data/qgis
+backups/
 
 .env
 ssh*
