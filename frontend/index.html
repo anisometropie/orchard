@@ -2647,30 +2647,15 @@
         actions.className = "tree-editor-actions";
         const photoActions = document.createElement("div");
         photoActions.className = "tree-editor-photo-actions";
-        const libraryPhotoInput = document.createElement("input");
-        libraryPhotoInput.type = "file";
-        libraryPhotoInput.accept = "image/*";
-        libraryPhotoInput.className =
-          "visually-hidden tree-editor-photo-library-input";
-        const libraryPhotoButton = document.createElement("button");
-        libraryPhotoButton.type = "button";
-        libraryPhotoButton.textContent = "🖼 Photo library";
-        libraryPhotoButton.addEventListener("click", () =>
-          libraryPhotoInput.click(),
-        );
-        const cameraPhotoInput = document.createElement("input");
-        cameraPhotoInput.type = "file";
-        cameraPhotoInput.accept = "image/*";
-        cameraPhotoInput.setAttribute("capture", "environment");
-        cameraPhotoInput.className =
-          "visually-hidden tree-editor-photo-camera-input";
-        const cameraPhotoButton = document.createElement("button");
-        cameraPhotoButton.type = "button";
-        cameraPhotoButton.textContent = "📷 Take photo";
-        cameraPhotoButton.addEventListener("click", () =>
-          cameraPhotoInput.click(),
-        );
-        photoActions.append(libraryPhotoButton, cameraPhotoButton);
+        const photoInput = document.createElement("input");
+        photoInput.type = "file";
+        photoInput.accept = "image/*";
+        photoInput.className = "visually-hidden tree-editor-photo-input";
+        const photoButton = document.createElement("button");
+        photoButton.type = "button";
+        photoButton.textContent = "📷 Add photo";
+        photoButton.addEventListener("click", () => photoInput.click());
+        photoActions.append(photoButton);
         const cancelButton = document.createElement("button");
         cancelButton.type = "button";
         cancelButton.textContent = "Cancel";
@@ -2681,13 +2666,7 @@
         actions.append(cancelButton, saveButton);
 
         form.append(title, dangerField, deadField, note);
-        form.append(
-          libraryPhotoInput,
-          cameraPhotoInput,
-          photoActions,
-          error,
-          actions,
-        );
+        form.append(photoInput, photoActions, error, actions);
 
         async function addSelectedPhoto(photoInput, busyButton) {
           const file = photoInput.files?.[0];
@@ -2695,8 +2674,7 @@
           error.hidden = true;
           dangerCheckbox.disabled = true;
           deadCheckbox.disabled = true;
-          libraryPhotoButton.disabled = true;
-          cameraPhotoButton.disabled = true;
+          photoButton.disabled = true;
           cancelButton.disabled = true;
           saveButton.disabled = true;
           busyButton.textContent = "Preparing…";
@@ -2712,22 +2690,17 @@
             error.hidden = false;
             deadCheckbox.disabled = false;
             syncConditionControls();
-            libraryPhotoButton.disabled = false;
-            cameraPhotoButton.disabled = false;
+            photoButton.disabled = false;
             cancelButton.disabled = false;
             saveButton.disabled = false;
           } finally {
             photoInput.value = "";
-            libraryPhotoButton.textContent = "🖼 Photo library";
-            cameraPhotoButton.textContent = "📷 Take photo";
+            photoButton.textContent = "📷 Add photo";
           }
         }
 
-        libraryPhotoInput.addEventListener("change", () =>
-          addSelectedPhoto(libraryPhotoInput, libraryPhotoButton),
-        );
-        cameraPhotoInput.addEventListener("change", () =>
-          addSelectedPhoto(cameraPhotoInput, cameraPhotoButton),
+        photoInput.addEventListener("change", () =>
+          addSelectedPhoto(photoInput, photoButton),
         );
 
         form.addEventListener("submit", async (event) => {
@@ -2735,8 +2708,7 @@
           error.hidden = true;
           dangerCheckbox.disabled = true;
           deadCheckbox.disabled = true;
-          libraryPhotoButton.disabled = true;
-          cameraPhotoButton.disabled = true;
+          photoButton.disabled = true;
           cancelButton.disabled = true;
           saveButton.disabled = true;
           saveButton.textContent = "Saving…";
@@ -2763,8 +2735,7 @@
             error.hidden = false;
             deadCheckbox.disabled = false;
             syncConditionControls();
-            libraryPhotoButton.disabled = false;
-            cameraPhotoButton.disabled = false;
+            photoButton.disabled = false;
             cancelButton.disabled = false;
             saveButton.disabled = false;
             saveButton.textContent = "OK";
