@@ -3,9 +3,16 @@ import test from "node:test";
 
 import {
   HARVEST_PIN_ICONS,
+  harvestPartSelectedByDefault,
   harvestPinImageName,
   selectHarvestParts,
 } from "./harvest-marker.mjs";
+
+test("leave pod and seed out of the default harvest filter", () => {
+  assert.equal(harvestPartSelectedByDefault("fruit"), true);
+  assert.equal(harvestPartSelectedByDefault("pod"), false);
+  assert.equal(harvestPartSelectedByDefault("seed"), false);
+});
 
 test("select a representative pin icon for the harvestable parts", () => {
   assert.deepEqual(Object.keys(HARVEST_PIN_ICONS), [

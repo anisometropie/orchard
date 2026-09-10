@@ -9,6 +9,10 @@ export const HARVEST_PIN_ICONS = Object.freeze({
   multiple: "🧺",
 });
 
+export function harvestPartSelectedByDefault(part) {
+  return part !== "pod" && part !== "seed";
+}
+
 export function harvestPinImageName(parts) {
   const knownParts = [
     ...new Set(
