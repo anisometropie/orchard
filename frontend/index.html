@@ -1572,9 +1572,10 @@
     <script type="module">
       import {
         HARVEST_PIN_ICONS,
+        harvestPartSelectedByDefault,
         harvestPinImageName,
         selectHarvestParts,
-      } from "./harvest-marker.mjs?v=2";
+      } from "./harvest-marker.mjs?v=3";
       import { mapModePresentation } from "./map-mode.mjs?v=3";
       import {
         filterTreeFeatures,
@@ -2014,7 +2015,7 @@
             const input = document.createElement("input");
             input.type = "checkbox";
             input.value = part;
-            input.checked = true;
+            input.checked = harvestPartSelectedByDefault(part);
             input.addEventListener("change", applyHarvestWindow);
             const icon = document.createElement("span");
             icon.className = "harvest-part-filter-icon";
