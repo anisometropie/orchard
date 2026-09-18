@@ -557,6 +557,387 @@ async fn a_watering_link_can_cancel_an_active_run_but_a_view_link_cannot() {
     );
 }
 
+#[tokio::test]
+async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let watering_token = create_watering_share_token(&client, server.url(), &cookie).await;
+    let harvest_runs_url = format!("{}/orchards/7/harvest-runs", server.url());
+
+    let schedule = client
+        .put(format!(
+            "{}/orchards/7/plant-identities/1/harvest-windows",
+            server.url()
+        ))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "reference_region": "Example Region, France",
+            "windows": [{
+                "start": { "month": 9, "day": 1 },
+                "end": { "month": 9, "day": 30 },
+                "harvested_part": "fruit"
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(schedule.status(), StatusCode::NO_CONTENT);
+
+    let candidates_url = format!("{}/orchards/7/harvest-candidates", server.url());
+    assert_eq!(
+        client
+            .get(&candidates_url)
+            .header("x-orchard-share-token", &watering_token)
+            .query(&[("on_date", "2026-09-17")])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let candidates = client
+        .get(&candidates_url)
+        .header(header::COOKIE, &cookie)
+        .query(&[("on_date", "2026-09-17")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(candidates.status(), StatusCode::OK);
+    assert_eq!(
+        candidates.json::<serde_json::Value>().await.unwrap()["candidates"],
+        serde_json::json!([{"tree_id": 1, "plant_identity_id": 1}])
+    );
+
+    assert_eq!(
+        client
+            .post(&harvest_runs_url)
+            .header("x-orchard-share-token", &watering_token)
+            .json(&serde_json::json!({
+                "target": "all",
+                "plant_identity_id": null,
+                "on_date": "2026-09-17"
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let started = client
+        .post(&harvest_runs_url)
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "target": "all",
+            "plant_identity_id": null,
+            "on_date": "2026-09-17"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(started.status(), StatusCode::OK);
+    let progress = started.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(progress["next_tree"]["id"], 1);
+    assert_eq!(progress["handled_tree_count"], 0);
+    let run_id = progress["run_id"].as_u64().unwrap();
+
+    let outside_period = client
+        .post(format!(
+            "{}/orchards/7/harvest-runs/{run_id}/harvested",
+            server.url()
+        ))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "tree_id": 1,
+            "action_date": "2026-09-16"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(outside_period.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        outside_period.json::<serde_json::Value>().await.unwrap()["code"],
+        "harvest_action_date_outside_run_period"
+    );
+
+    let restored = client
+        .get(format!(
+            "{}/orchards/7/harvest-run?on_date=2026-09-17",
+            server.url()
+        ))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(restored.status(), StatusCode::OK);
+    assert_eq!(
+        restored.json::<serde_json::Value>().await.unwrap()["run_id"],
+        run_id
+    );
+
+    let defer_url = format!("{}/orchards/7/harvest-runs/{run_id}/deferred", server.url());
+    let changed_schedule = client
+        .put(format!(
+            "{}/orchards/7/plant-identities/1/harvest-windows",
+            server.url()
+        ))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "reference_region": "Example Region, France",
+            "windows": [{
+                "start": { "month": 9, "day": 2 },
+                "end": { "month": 9, "day": 30 },
+                "harvested_part": "fruit"
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed_schedule.status(), StatusCode::NO_CONTENT);
+    let changed_harvest_window = client
+        .post(format!(
+            "{}/orchards/7/harvest-runs/{run_id}/harvested",
+            server.url()
+        ))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "tree_id": 1,
+            "action_date": "2026-09-25"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed_harvest_window.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        changed_harvest_window
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["code"],
+        "harvest_window_changed"
+    );
+    let changed_window = client
+        .post(&defer_url)
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "tree_id": 1,
+            "action_date": "2026-09-25",
+            "extend_window": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed_window.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        changed_window.json::<serde_json::Value>().await.unwrap()["code"],
+        "harvest_window_changed"
+    );
+    let restored_schedule = client
+        .put(format!(
+            "{}/orchards/7/plant-identities/1/harvest-windows",
+            server.url()
+        ))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "reference_region": "Example Region, France",
+            "windows": [{
+                "start": { "month": 9, "day": 1 },
+                "end": { "month": 9, "day": 30 },
+                "harvested_part": "fruit"
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(restored_schedule.status(), StatusCode::NO_CONTENT);
+
+    let proposal = client
+        .post(&defer_url)
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "tree_id": 1,
+            "action_date": "2026-09-25",
+            "extend_window": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(proposal.status(), StatusCode::CONFLICT);
+    let proposal = proposal.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(proposal["code"], "harvest_window_extension_required");
+    assert_eq!(proposal["current_end"], "2026-09-30");
+    assert_eq!(proposal["proposed_end"], "2026-10-07");
+    assert_eq!(proposal["retry_on"], "2026-10-02");
+
+    let deferred = client
+        .post(&defer_url)
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "tree_id": 1,
+            "action_date": "2026-09-25",
+            "extend_window": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deferred.status(), StatusCode::OK);
+    assert!(deferred.json::<serde_json::Value>().await.unwrap()["next_tree"].is_null());
+
+    let before_retry = client
+        .post(&harvest_runs_url)
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "target": "all",
+            "plant_identity_id": null,
+            "on_date": "2026-10-01"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(before_retry.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        client
+            .get(&candidates_url)
+            .header(header::COOKIE, &cookie)
+            .query(&[("on_date", "2026-10-01")])
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["candidates"],
+        serde_json::json!([])
+    );
+
+    let retry_candidates = client
+        .get(&candidates_url)
+        .header(header::COOKIE, &cookie)
+        .query(&[("on_date", "2026-10-02")])
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        retry_candidates["candidates"],
+        serde_json::json!([{"tree_id": 1, "plant_identity_id": 1}])
+    );
+
+    let retried = client
+        .post(&harvest_runs_url)
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "target": "all",
+            "plant_identity_id": null,
+            "on_date": "2026-10-02"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(retried.status(), StatusCode::OK);
+    let retried = retried.json::<serde_json::Value>().await.unwrap();
+    let retry_run_id = retried["run_id"].as_u64().unwrap();
+    let harvested = client
+        .post(format!(
+            "{}/orchards/7/harvest-runs/{retry_run_id}/harvested",
+            server.url()
+        ))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "tree_id": 1,
+            "action_date": "2026-10-02"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(harvested.status(), StatusCode::OK);
+    assert!(harvested.json::<serde_json::Value>().await.unwrap()["next_tree"].is_null());
+    assert_eq!(
+        client
+            .post(&harvest_runs_url)
+            .header(header::COOKIE, &cookie)
+            .json(&serde_json::json!({
+                "target": "all",
+                "plant_identity_id": null,
+                "on_date": "2026-10-03"
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        client
+            .get(&candidates_url)
+            .header(header::COOKIE, &cookie)
+            .query(&[("on_date", "2026-10-03")])
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["candidates"],
+        serde_json::json!([])
+    );
+
+    let cancellable = client
+        .post(&harvest_runs_url)
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "target": "all",
+            "plant_identity_id": null,
+            "on_date": "2027-09-17"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancellable.status(), StatusCode::OK);
+    let cancellable_run_id = cancellable.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_u64()
+        .unwrap();
+    let cancel_url = format!(
+        "{}/orchards/7/harvest-runs/{cancellable_run_id}",
+        server.url()
+    );
+    assert_eq!(
+        client
+            .delete(&cancel_url)
+            .header("x-orchard-share-token", &watering_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .delete(&cancel_url)
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        client
+            .get(format!(
+                "{}/orchards/7/harvest-run?on_date=2027-09-17",
+                server.url()
+            ))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
 async fn login_cookie(client: &Client, server_url: &str) -> String {
     client
         .post(format!("{server_url}/session"))

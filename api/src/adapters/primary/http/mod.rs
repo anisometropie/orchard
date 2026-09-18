@@ -6,7 +6,7 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
+    extract::{DefaultBodyLimit, Path, Query, State, rejection::JsonRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
@@ -17,10 +17,10 @@ use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::hexagon::models::{
-    AerialOverlayId, AnnualDate, BotanicalTaxon, GeoPoint, HarvestScheduleOwner, HarvestedPart,
-    InfraspecificRank, MapConfiguration, NamedTaxon, OrchardId, OrchardSharePermission,
-    OrchardTree, PlantCultivarId, PlantIdentity, PlantIdentityId, Tree, TreeId, TreePhotoVariant,
-    WateringRunId, WateringRunTarget,
+    AerialOverlayId, AnnualDate, BotanicalTaxon, GeoPoint, HarvestDate, HarvestRunId,
+    HarvestRunTarget, HarvestScheduleOwner, HarvestedPart, InfraspecificRank, MapConfiguration,
+    NamedTaxon, OrchardId, OrchardSharePermission, OrchardTree, PlantCultivarId, PlantIdentity,
+    PlantIdentityId, Tree, TreeId, TreePhotoVariant, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, MapConfigurationStorage, OrchardStorage, TreePhotoStorage,
@@ -39,13 +39,25 @@ use crate::hexagon::use_cases::authorize_orchard_waterer::{
     OrchardWateringAccessError, OrchardWateringAccessRequested, OrchardWateringCredential,
     authorize_orchard_waterer,
 };
+use crate::hexagon::use_cases::cancel_harvest_run::{
+    HarvestRunCancellationError, HarvestRunCancellationRequested, cancel_harvest_run,
+};
 use crate::hexagon::use_cases::cancel_watering_run::{
     WateringRunCancellationError, WateringRunCancellationRequested, cancel_watering_run,
 };
 use crate::hexagon::use_cases::change_tree_condition::{
     OrchardTreeConditionChanged, TreeConditionChangeError, change_orchard_tree_condition,
 };
+use crate::hexagon::use_cases::defer_harvest_tree::{
+    HarvestTreeDeferralError, HarvestTreeDeferred, defer_harvest_tree,
+};
+use crate::hexagon::use_cases::list_harvest_candidates::{
+    HarvestCandidatesError, HarvestCandidatesRequested, list_harvest_candidates,
+};
 use crate::hexagon::use_cases::list_orchard_trees::list_trees_for_orchard;
+use crate::hexagon::use_cases::load_active_harvest_run::{
+    ActiveHarvestRunError, load_active_harvest_run,
+};
 use crate::hexagon::use_cases::load_active_watering_run::{
     ActiveWateringRunError, load_active_watering_run,
 };
@@ -63,6 +75,9 @@ use crate::hexagon::use_cases::log_out_user::log_out_user;
 use crate::hexagon::use_cases::order_orchard_row::{
     OrchardRowOrderError, OrchardRowOrderRequested, RowOrder, order_orchard_row,
 };
+use crate::hexagon::use_cases::record_tree_harvested::{
+    TreeHarvestedEverything, TreeHarvestedEverythingError, record_tree_harvested,
+};
 use crate::hexagon::use_cases::record_tree_watered::{
     TreeWatered, TreeWateredError, record_tree_watered,
 };
@@ -78,6 +93,9 @@ use crate::hexagon::use_cases::share_orchard::{
 };
 use crate::hexagon::use_cases::start_danger_watering_run::{
     DangerWateringRunStartError, DangerWateringRunStartRequested, start_danger_watering_run,
+};
+use crate::hexagon::use_cases::start_harvest_run::{
+    HarvestProgress, HarvestRunStartError, HarvestRunStartRequested, start_harvest_run,
 };
 use crate::hexagon::use_cases::start_watering_run::{
     WateringProgress, WateringRunStartError, WateringRunStartRequested, start_watering_run,
@@ -170,6 +188,30 @@ where
         .route(
             "/orchards/{orchard_id}/watering-runs/{watering_run_id}/watered",
             post(record_tree_watered_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-run",
+            get(active_harvest_run_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-candidates",
+            get(harvest_candidates_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-runs",
+            post(start_harvest_run_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-runs/{harvest_run_id}",
+            delete(cancel_harvest_run_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-runs/{harvest_run_id}/harvested",
+            post(record_tree_harvested_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-runs/{harvest_run_id}/deferred",
+            post(defer_harvest_tree_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/plant-identities/{plant_identity_id}/harvest-windows",
@@ -646,6 +688,365 @@ fn watering_tree_json(tree: crate::hexagon::use_cases::start_watering_run::Water
         "longitude": tree.longitude,
         "latitude": tree.latitude,
         "row_rank": tree.row_rank,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RequestedHarvestTarget {
+    All,
+    Species,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartHarvestRunRequest {
+    target: RequestedHarvestTarget,
+    plant_identity_id: Option<u64>,
+    on_date: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HarvestCandidatesQuery {
+    on_date: String,
+}
+
+async fn harvest_candidates_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    Query(query): Query<HarvestCandidatesQuery>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        list_harvest_candidates(
+            HarvestCandidatesRequested {
+                orchard_id,
+                action_date: query.on_date,
+            },
+            &mut *storage,
+        )
+        .map(|candidates| {
+            Json(json!({
+                "candidates": candidates.into_iter().map(|candidate| json!({
+                    "tree_id": candidate.tree_id.0,
+                    "plant_identity_id": candidate.plant_identity_id.0,
+                })).collect::<Vec<_>>(),
+            }))
+        })
+        .map_err(|error| match error {
+            HarvestCandidatesError::InvalidActionDate => StatusCode::BAD_REQUEST,
+            HarvestCandidatesError::HarvestCandidatesCouldNotBeListed => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn start_harvest_run_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+    request: Result<Json<StartHarvestRunRequest>, JsonRejection>,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    let target = match (request.target, request.plant_identity_id) {
+        (RequestedHarvestTarget::All, None) => HarvestRunTarget::All,
+        (RequestedHarvestTarget::Species, Some(plant_identity_id)) if plant_identity_id > 0 => {
+            HarvestRunTarget::Species(PlantIdentityId(plant_identity_id))
+        }
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        start_harvest_run(
+            HarvestRunStartRequested {
+                orchard_id,
+                target,
+                action_date: request.on_date,
+            },
+            &mut *storage,
+        )
+        .map(|progress| Json(harvest_progress_json(progress)))
+        .map_err(|error| match error {
+            HarvestRunStartError::InvalidActionDate => StatusCode::BAD_REQUEST,
+            HarvestRunStartError::NoTreesCurrentlyInFruit => StatusCode::NOT_FOUND,
+            HarvestRunStartError::AnotherHarvestRunIsActive => StatusCode::CONFLICT,
+            HarvestRunStartError::HarvestRunCouldNotBeStarted => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn active_harvest_run_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    Query(query): Query<HarvestCandidatesQuery>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        load_active_harvest_run(orchard_id, &query.on_date, &mut *storage)
+            .map(|progress| match progress {
+                Some(progress) => Json(harvest_progress_json(progress)).into_response(),
+                None => StatusCode::NO_CONTENT.into_response(),
+            })
+            .map_err(|error| match error {
+                ActiveHarvestRunError::InvalidActionDate => StatusCode::BAD_REQUEST,
+                ActiveHarvestRunError::HarvestRunCouldNotBeLoaded => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordHarvestTreeRequest {
+    tree_id: u64,
+    action_date: String,
+    #[serde(default)]
+    extend_window: bool,
+}
+
+async fn record_tree_harvested_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, harvest_run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<RecordHarvestTreeRequest>, JsonRejection>,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    if request.extend_window {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let response = tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        if let Err(status) = authorize_owner_access(&mut *storage, orchard_id, session_token) {
+            return status.into_response();
+        }
+        match record_tree_harvested(
+            TreeHarvestedEverything {
+                orchard_id,
+                harvest_run_id: HarvestRunId(harvest_run_id),
+                tree_id: TreeId(request.tree_id),
+                action_date: request.action_date,
+            },
+            &mut *storage,
+        ) {
+            Ok(progress) => Json(harvest_progress_json(progress)).into_response(),
+            Err(error) => match error {
+                TreeHarvestedEverythingError::InvalidActionDate => {
+                    StatusCode::BAD_REQUEST.into_response()
+                }
+                TreeHarvestedEverythingError::HarvestRunNotFound => {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+                TreeHarvestedEverythingError::HarvestRunAlreadyCompleted
+                | TreeHarvestedEverythingError::TreeIsNotCurrent => {
+                    StatusCode::CONFLICT.into_response()
+                }
+                TreeHarvestedEverythingError::ActionDateOutsideRunPeriod => {
+                    harvest_conflict_response(
+                        "harvest_action_date_outside_run_period",
+                        "The action date is outside the harvest period captured by this tour.",
+                    )
+                }
+                TreeHarvestedEverythingError::HarvestWindowChanged => harvest_conflict_response(
+                    "harvest_window_changed",
+                    "The live fruit harvest window changed after this tour started.",
+                ),
+                TreeHarvestedEverythingError::TreeCouldNotBeRecorded => {
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            },
+        }
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(response)
+}
+
+async fn cancel_harvest_run_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, harvest_run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        cancel_harvest_run(
+            HarvestRunCancellationRequested {
+                orchard_id,
+                harvest_run_id: HarvestRunId(harvest_run_id),
+            },
+            &mut *storage,
+        )
+        .map(|()| StatusCode::NO_CONTENT)
+        .map_err(|error| match error {
+            HarvestRunCancellationError::HarvestRunNotFound => StatusCode::NOT_FOUND,
+            HarvestRunCancellationError::HarvestRunAlreadyCompleted => StatusCode::CONFLICT,
+            HarvestRunCancellationError::HarvestRunCouldNotBeCancelled => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn defer_harvest_tree_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, harvest_run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<RecordHarvestTreeRequest>, JsonRejection>,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    let action_date = request.action_date.clone();
+    let response = tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        if let Err(status) = authorize_owner_access(&mut *storage, orchard_id, session_token) {
+            return status.into_response();
+        }
+        match defer_harvest_tree(
+            HarvestTreeDeferred {
+                orchard_id,
+                harvest_run_id: HarvestRunId(harvest_run_id),
+                tree_id: TreeId(request.tree_id),
+                action_date,
+                extend_window: request.extend_window,
+            },
+            &mut *storage,
+        ) {
+            Ok(progress) => Json(harvest_progress_json(progress)).into_response(),
+            Err(error) => match error {
+                HarvestTreeDeferralError::InvalidActionDate => {
+                    StatusCode::BAD_REQUEST.into_response()
+                }
+                HarvestTreeDeferralError::HarvestRunNotFound => {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+                HarvestTreeDeferralError::HarvestRunAlreadyCompleted
+                | HarvestTreeDeferralError::TreeIsNotCurrent => {
+                    StatusCode::CONFLICT.into_response()
+                }
+                HarvestTreeDeferralError::ActionDateOutsideRunPeriod => harvest_conflict_response(
+                    "harvest_action_date_outside_run_period",
+                    "The action date is outside the harvest period captured by this tour.",
+                ),
+                HarvestTreeDeferralError::HarvestWindowChanged => harvest_conflict_response(
+                    "harvest_window_changed",
+                    "The live fruit harvest window changed after this tour started.",
+                ),
+                HarvestTreeDeferralError::WindowExtensionRequired(proposal) => {
+                    let retry_on = HarvestDate::parse_iso(&request.action_date)
+                        .and_then(|date| date.add_days(7));
+                    (
+                        StatusCode::CONFLICT,
+                        Json(json!({
+                            "code": "harvest_window_extension_required",
+                            "current_end": proposal.current_end.to_string(),
+                            "proposed_end": proposal.proposed_end.to_string(),
+                            "retry_on": retry_on.map(|date| date.to_string()),
+                            "schedule_label": "species/cultivar harvest",
+                        })),
+                    )
+                        .into_response()
+                }
+                HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended
+                | HarvestTreeDeferralError::TreeCouldNotBeDeferred => {
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            },
+        }
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(response)
+}
+
+fn harvest_conflict_response(code: &str, message: &str) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "code": code,
+            "message": message,
+        })),
+    )
+        .into_response()
+}
+
+fn harvest_progress_json(progress: HarvestProgress) -> Value {
+    let (target, plant_identity_id, target_label) = match progress.target {
+        HarvestRunTarget::All => ("all", None, "All currently available".to_owned()),
+        HarvestRunTarget::Species(plant_identity_id) => (
+            "species",
+            Some(plant_identity_id.0),
+            "Selected species".to_owned(),
+        ),
+    };
+    json!({
+        "run_id": progress.run_id.0,
+        "target": target,
+        "target_label": target_label,
+        "plant_identity_id": plant_identity_id,
+        "route": progress.route.into_iter().map(harvest_tree_json).collect::<Vec<_>>(),
+        "handled_tree_count": progress.handled_tree_count,
+        "harvested_tree_count": progress.harvested_tree_count,
+        "deferred_tree_count": progress.deferred_tree_count,
+        "total_tree_count": progress.total_tree_count,
+        "next_tree": progress.current_tree.map(harvest_tree_json),
+    })
+}
+
+fn harvest_tree_json(tree: crate::hexagon::use_cases::start_harvest_run::HarvestTree) -> Value {
+    json!({
+        "id": tree.id.0,
+        "name": tree.name,
+        "plant_identity_id": tree.plant_identity_id.0,
+        "longitude": tree.longitude,
+        "latitude": tree.latitude,
+        "route_rank": tree.route_rank,
+        "window_start": tree.period.start.to_string(),
+        "window_end": tree.period.end.to_string(),
     })
 }
 

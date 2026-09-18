@@ -1,3 +1,4 @@
+mod harvest;
 mod legacy_tree_source;
 mod map_configuration;
 mod orchard_access;
@@ -6,6 +7,14 @@ mod tree;
 mod tree_photo;
 mod watering;
 
+pub(crate) use harvest::{
+    EligibleHarvestTree, concrete_harvest_period, current_contiguous_fruit_period,
+    eligible_harvest_trees,
+};
+pub use harvest::{
+    HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree,
+    HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension,
+};
 pub use legacy_tree_source::{LegacyPlantIdentification, LegacyTreeSource};
 pub use map_configuration::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, GeoPoint, MapConfiguration,

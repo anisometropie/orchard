@@ -85,6 +85,30 @@ name = "cancel_watering_run_unit"
 path = "src/hexagon/use_cases/cancel_watering_run/cancel_watering_run_unit_test.rs"
 
 [[test]]
+name = "start_harvest_run_unit"
+path = "src/hexagon/use_cases/start_harvest_run/start_harvest_run_unit_test.rs"
+
+[[test]]
+name = "list_harvest_candidates_unit"
+path = "src/hexagon/use_cases/list_harvest_candidates/list_harvest_candidates_unit_test.rs"
+
+[[test]]
+name = "load_active_harvest_run_unit"
+path = "src/hexagon/use_cases/load_active_harvest_run/load_active_harvest_run_unit_test.rs"
+
+[[test]]
+name = "record_tree_harvested_unit"
+path = "src/hexagon/use_cases/record_tree_harvested/record_tree_harvested_unit_test.rs"
+
+[[test]]
+name = "defer_harvest_tree_unit"
+path = "src/hexagon/use_cases/defer_harvest_tree/defer_harvest_tree_unit_test.rs"
+
+[[test]]
+name = "cancel_harvest_run_unit"
+path = "src/hexagon/use_cases/cancel_harvest_run/cancel_harvest_run_unit_test.rs"
+
+[[test]]
 name = "add_tree_photo_unit"
 path = "src/hexagon/use_cases/add_tree_photo/add_tree_photo_unit_test.rs"
 

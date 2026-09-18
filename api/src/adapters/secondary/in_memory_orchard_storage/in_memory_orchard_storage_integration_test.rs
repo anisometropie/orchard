@@ -1,8 +1,9 @@
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
-    BotanicalTaxon, IdentificationStatus, LegacyTreeSource, NamedTaxon, PlantCultivar,
-    PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
-    Tree,
+    BotanicalTaxon, HarvestDate, HarvestPeriod, HarvestRunTarget, HarvestRunTree,
+    HarvestTreeOutcome, IdentificationStatus, LegacyTreeSource, NamedTaxon, OrchardId,
+    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
+    PlantIdentityReference, Tree, TreeId,
 };
 use orchard_api::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
@@ -91,6 +92,243 @@ fn staged_tree_is_visible_inside_transaction_but_not_to_observers() {
             cultivar: "Boskoop".into(),
             trade_name: None,
         })
+    );
+}
+
+#[test]
+fn keep_completed_and_resolved_harvest_history_immutable() {
+    let (mut orchard_storage, _) = InMemoryOrchardStorage::new();
+    let started_on = HarvestDate::new(2026, 9, 17).unwrap();
+    let period = HarvestPeriod {
+        start: HarvestDate::new(2026, 9, 1).unwrap(),
+        end: HarvestDate::new(2026, 9, 24).unwrap(),
+    };
+    let run_id = orchard_storage
+        .transaction(|orchard| {
+            orchard.create_harvest_run(
+                OrchardId(1),
+                HarvestRunTarget::All,
+                started_on,
+                &[
+                    HarvestRunTree {
+                        tree_id: TreeId(1),
+                        period,
+                        outcome: None,
+                    },
+                    HarvestRunTree {
+                        tree_id: TreeId(2),
+                        period,
+                        outcome: None,
+                    },
+                ],
+            )
+        })
+        .unwrap();
+
+    assert_eq!(
+        orchard_storage.transaction(|orchard| {
+            orchard.extend_harvest_run_tree_period(
+                run_id,
+                TreeId(1),
+                HarvestDate::new(2026, 9, 23).unwrap(),
+                started_on,
+            )
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+
+    let outside_window = HarvestTreeOutcome::HarvestedEverything {
+        harvested_on: HarvestDate::new(2026, 8, 31).unwrap(),
+    };
+    assert_eq!(
+        orchard_storage.transaction(|orchard| {
+            orchard.record_harvest_tree_outcome(run_id, TreeId(1), outside_window)
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+    let retry_after_window = HarvestTreeOutcome::Deferred {
+        deferred_on: started_on,
+        retry_on: HarvestDate::new(2026, 10, 1).unwrap(),
+    };
+    assert_eq!(
+        orchard_storage.transaction(|orchard| {
+            orchard.record_harvest_tree_outcome(run_id, TreeId(1), retry_after_window)
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+
+    let harvested = HarvestTreeOutcome::HarvestedEverything {
+        harvested_on: started_on,
+    };
+    orchard_storage
+        .transaction(|orchard| orchard.record_harvest_tree_outcome(run_id, TreeId(1), harvested))
+        .unwrap();
+    assert_eq!(
+        orchard_storage.transaction(|orchard| orchard.delete_harvest_run(run_id)),
+        Err(OrchardStorageError::HarvestRunCouldNotBeDeleted)
+    );
+
+    orchard_storage
+        .transaction(|orchard| orchard.complete_harvest_run(run_id))
+        .unwrap();
+    assert_eq!(
+        orchard_storage.transaction(|orchard| {
+            orchard.record_harvest_tree_outcome(run_id, TreeId(2), harvested)
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+    assert_eq!(
+        orchard_storage.transaction(|orchard| {
+            orchard.extend_harvest_run_tree_period(
+                run_id,
+                TreeId(2),
+                HarvestDate::new(2026, 10, 1).unwrap(),
+                started_on,
+            )
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+    assert_eq!(
+        orchard_storage.transaction(|orchard| orchard.delete_harvest_run(run_id)),
+        Err(OrchardStorageError::HarvestRunCouldNotBeDeleted)
+    );
+
+    let stored = orchard_storage.harvest_run(run_id).unwrap().unwrap();
+    assert!(stored.completed);
+    assert_eq!(stored.ordered_trees[0].outcome, Some(harvested));
+    assert_eq!(stored.ordered_trees[1].outcome, None);
+    assert_eq!(stored.ordered_trees[0].period, period);
+    assert_eq!(stored.ordered_trees[1].period, period);
+}
+
+#[test]
+fn allocate_harvest_run_ids_above_surviving_runs_after_deletion() {
+    let (mut orchard_storage, _) = InMemoryOrchardStorage::new();
+    let started_on = HarvestDate::new(2026, 9, 17).unwrap();
+    let first_run_id = orchard_storage
+        .transaction(|orchard| {
+            orchard.create_harvest_run(OrchardId(1), HarvestRunTarget::All, started_on, &[])
+        })
+        .unwrap();
+    let surviving_run_id = orchard_storage
+        .transaction(|orchard| {
+            orchard.create_harvest_run(OrchardId(2), HarvestRunTarget::All, started_on, &[])
+        })
+        .unwrap();
+    orchard_storage
+        .transaction(|orchard| orchard.complete_harvest_run(surviving_run_id))
+        .unwrap();
+    orchard_storage
+        .transaction(|orchard| orchard.delete_harvest_run(first_run_id))
+        .unwrap();
+
+    let replacement_run_id = orchard_storage
+        .transaction(|orchard| {
+            orchard.create_harvest_run(OrchardId(1), HarvestRunTarget::All, started_on, &[])
+        })
+        .unwrap();
+
+    assert_eq!(first_run_id.0, 1);
+    assert_eq!(surviving_run_id.0, 2);
+    assert_eq!(replacement_run_id.0, 3);
+    assert_eq!(
+        orchard_storage
+            .harvest_run(surviving_run_id)
+            .unwrap()
+            .unwrap()
+            .orchard_id,
+        OrchardId(2)
+    );
+    assert_eq!(
+        orchard_storage
+            .harvest_run(replacement_run_id)
+            .unwrap()
+            .unwrap()
+            .orchard_id,
+        OrchardId(1)
+    );
+}
+
+#[test]
+fn use_the_latest_staged_period_extension_for_outcome_validation() {
+    let (mut orchard_storage, _) = InMemoryOrchardStorage::new();
+    let started_on = HarvestDate::new(2026, 9, 25).unwrap();
+    let original_period = HarvestPeriod {
+        start: HarvestDate::new(2026, 9, 1).unwrap(),
+        end: HarvestDate::new(2026, 9, 30).unwrap(),
+    };
+    let extended_end = HarvestDate::new(2026, 10, 7).unwrap();
+    let run_id = orchard_storage
+        .transaction(|orchard| {
+            orchard.create_harvest_run(
+                OrchardId(1),
+                HarvestRunTarget::All,
+                started_on,
+                &[HarvestRunTree {
+                    tree_id: TreeId(1),
+                    period: original_period,
+                    outcome: None,
+                }],
+            )
+        })
+        .unwrap();
+
+    assert_eq!(
+        orchard_storage.transaction(|orchard| {
+            orchard.extend_harvest_run_tree_period(run_id, TreeId(1), extended_end, started_on)?;
+            orchard.extend_harvest_run_tree_period(
+                run_id,
+                TreeId(1),
+                HarvestDate::new(2026, 10, 6).unwrap(),
+                started_on,
+            )
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+    assert_eq!(
+        orchard_storage
+            .harvest_run(run_id)
+            .unwrap()
+            .unwrap()
+            .ordered_trees[0]
+            .period,
+        original_period
+    );
+
+    let deferred = HarvestTreeOutcome::Deferred {
+        deferred_on: started_on,
+        retry_on: HarvestDate::new(2026, 10, 2).unwrap(),
+    };
+    orchard_storage
+        .transaction(|orchard| {
+            orchard.extend_harvest_run_tree_period(run_id, TreeId(1), extended_end, started_on)?;
+            orchard.record_harvest_tree_outcome(run_id, TreeId(1), deferred)
+        })
+        .unwrap();
+
+    let stored_tree = orchard_storage
+        .harvest_run(run_id)
+        .unwrap()
+        .unwrap()
+        .ordered_trees[0]
+        .clone();
+    assert_eq!(stored_tree.period.end, extended_end);
+    assert_eq!(stored_tree.outcome, Some(deferred));
+
+    let revisited = HarvestTreeOutcome::HarvestedEverything {
+        harvested_on: HarvestDate::new(2026, 10, 2).unwrap(),
+    };
+    orchard_storage
+        .transaction(|orchard| orchard.record_harvest_tree_outcome(run_id, TreeId(1), revisited))
+        .unwrap();
+    assert_eq!(
+        orchard_storage
+            .harvest_run(run_id)
+            .unwrap()
+            .unwrap()
+            .ordered_trees[0]
+            .outcome,
+        Some(revisited)
     );
 }
 

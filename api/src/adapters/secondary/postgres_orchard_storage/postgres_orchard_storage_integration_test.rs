@@ -1,12 +1,13 @@
 use orchard_api::adapters::secondary::PostgresOrchardStorage;
 use orchard_api::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
-    BotanicalTaxon, GeoPoint, HarvestDataOrigin, HarvestScheduleOwner, HarvestedPart,
-    IdentificationStatus, InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification,
-    LegacyTreeSource, MapConfiguration, NamedTaxon, OrchardId, OrchardSharePermission, OrchardTree,
-    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
-    PlantIdentityReference, ReproductiveRole, Tree, TreeId, TreePhoto, TreePhotoVariant, UserId,
-    WateringRunTarget,
+    BotanicalTaxon, GeoPoint, HarvestDataOrigin, HarvestDate, HarvestPeriod, HarvestRun,
+    HarvestRunTarget, HarvestRunTree, HarvestScheduleOwner, HarvestTreeOutcome,
+    HarvestTreeOutcomeRecord, HarvestWindowExtension, HarvestedPart, IdentificationStatus,
+    InfraspecificRank, InfraspecificTaxon, LegacyPlantIdentification, LegacyTreeSource,
+    MapConfiguration, NamedTaxon, OrchardId, OrchardSharePermission, OrchardTree, PlantCultivar,
+    PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
+    ReproductiveRole, Tree, TreeId, TreePhoto, TreePhotoVariant, UserId, WateringRunTarget,
 };
 use orchard_api::hexagon::ports::{
     AccessControl, MapConfigurationStorage, OrchardStorage, OrchardStorageError, TreePhotoStorage,
@@ -232,6 +233,419 @@ fn persist_row_ranks_and_resumable_watering_progress() {
         .unwrap()
         .get(0);
     assert_eq!(remaining_run_trees, 0);
+}
+
+#[test]
+fn persist_resumable_harvest_progress_history_and_exact_window_extension() {
+    let _database_lock = database_lock();
+    let (database_url, mut verification_connection) = empty_orchard_database();
+    verification_connection
+        .batch_execute(
+            r#"
+            INSERT INTO users (username, default_center, is_default)
+            VALUES ('owner', ST_SetSRID(ST_MakePoint(-73.5, 12.25), 4326), TRUE);
+            INSERT INTO orchards (owner_user_id, name, center, reference_region)
+            VALUES
+                (1, 'North orchard', ST_SetSRID(ST_MakePoint(-73.5, 12.25), 4326), 'Example Region'),
+                (1, 'South orchard', ST_SetSRID(ST_MakePoint(-72.59, 13.38), 4326), 'Example Region');
+            INSERT INTO plant_identities (common_name, botanical_taxon)
+            VALUES (
+                'Apple',
+                '{"Named":{"genus":"Malus","species":null,"species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}'
+            );
+            INSERT INTO trees (
+                orchard_id, plant_identity_id, location, roles, is_alive,
+                identification_status
+            ) VALUES
+                (1, 1, ST_SetSRID(ST_MakePoint(-73.409, 12.25), 4326), '{fruit}', TRUE, 'confirmed'),
+                (1, 1, ST_SetSRID(ST_MakePoint(-73.318, 12.25), 4326), '{fruit}', TRUE, 'confirmed');
+            INSERT INTO plant_harvest_windows (
+                orchard_id, plant_identity_id, cultivar_id,
+                start_month, start_day, end_month, end_day,
+                reference_region, harvested_part, data_origin, source_url
+            ) VALUES
+                (1, 1, NULL, 9, 1, 9, 24, 'Example Region', 'fruit', 'external_reference',
+                 'https://example.com/current'),
+                (1, 1, NULL, 10, 1, 10, 15, 'Example Region', 'fruit', 'external_reference',
+                 'https://example.com/later'),
+                (2, 1, NULL, 9, 1, 9, 24, 'Example Region', 'fruit', 'external_reference',
+                 'https://example.com/other-orchard');
+            "#,
+        )
+        .unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let started_on = HarvestDate::new(2026, 9, 17).unwrap();
+    let original_period = HarvestPeriod {
+        start: HarvestDate::new(2026, 9, 1).unwrap(),
+        end: HarvestDate::new(2026, 9, 24).unwrap(),
+    };
+    let mut ordered_trees = vec![
+        HarvestRunTree {
+            tree_id: TreeId(2),
+            period: original_period,
+            outcome: None,
+        },
+        HarvestRunTree {
+            tree_id: TreeId(1),
+            period: original_period,
+            outcome: None,
+        },
+    ];
+    let target = HarvestRunTarget::Species(PlantIdentityId(1));
+
+    let run_id = storage
+        .transaction(|orchard| {
+            orchard.create_harvest_run(OrchardId(1), target, started_on, &ordered_trees)
+        })
+        .unwrap();
+    assert_eq!(
+        storage.active_harvest_run(OrchardId(1)).unwrap(),
+        Some(HarvestRun {
+            id: run_id,
+            orchard_id: OrchardId(1),
+            target,
+            started_on,
+            ordered_trees: ordered_trees.clone(),
+            completed: false,
+        })
+    );
+
+    let current_window = AnnualHarvestWindow {
+        start: AnnualDate { month: 9, day: 1 },
+        end: AnnualDate { month: 9, day: 24 },
+        reference_region: Some("Example Region".into()),
+        harvested_part: HarvestedPart::Fruit,
+        data_origin: HarvestDataOrigin::ExternalReference,
+        source_url: Some("https://example.com/current".into()),
+    };
+    let extended_end = HarvestDate::new(2026, 10, 1).unwrap();
+    storage
+        .transaction(|orchard| {
+            assert!(orchard.extend_orchard_harvest_window(
+                OrchardId(1),
+                &HarvestWindowExtension {
+                    owner: HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
+                    current_window,
+                    new_end: extended_end.annual_date(),
+                },
+            )?);
+            orchard.extend_harvest_run_tree_period(run_id, TreeId(2), extended_end, started_on)
+        })
+        .unwrap();
+    ordered_trees[0].period.end = extended_end;
+
+    let deferred = HarvestTreeOutcome::Deferred {
+        deferred_on: started_on,
+        retry_on: HarvestDate::new(2026, 9, 24).unwrap(),
+    };
+    let harvested = HarvestTreeOutcome::HarvestedEverything {
+        harvested_on: started_on,
+    };
+    storage
+        .transaction(|orchard| {
+            orchard.record_harvest_tree_outcome(run_id, TreeId(2), deferred)?;
+            orchard.record_harvest_tree_outcome(run_id, TreeId(1), harvested)
+        })
+        .unwrap();
+    ordered_trees[0].outcome = Some(deferred);
+    ordered_trees[1].outcome = Some(harvested);
+
+    assert_eq!(
+        storage.harvest_run(run_id).unwrap().unwrap().ordered_trees,
+        ordered_trees
+    );
+    assert_eq!(
+        storage.harvest_tree_outcomes(OrchardId(1)).unwrap(),
+        vec![
+            HarvestTreeOutcomeRecord {
+                tree_id: TreeId(2),
+                period: HarvestPeriod {
+                    end: extended_end,
+                    ..original_period
+                },
+                outcome: deferred,
+            },
+            HarvestTreeOutcomeRecord {
+                tree_id: TreeId(1),
+                period: original_period,
+                outcome: harvested,
+            },
+        ]
+    );
+
+    let changed_window = verification_connection
+        .query_one(
+            "SELECT end_month, end_day, reference_region, harvested_part::text,
+                    data_origin::text, source_url
+             FROM plant_harvest_windows
+             WHERE orchard_id = 1 AND start_month = 9 AND start_day = 1",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(changed_window.get::<_, i16>(0), 10);
+    assert_eq!(changed_window.get::<_, i16>(1), 1);
+    assert_eq!(
+        changed_window.get::<_, Option<String>>(2),
+        Some("Example Region".into())
+    );
+    assert_eq!(changed_window.get::<_, String>(3), "fruit");
+    assert_eq!(changed_window.get::<_, String>(4), "field_observation");
+    assert_eq!(changed_window.get::<_, Option<String>>(5), None);
+    let untouched_windows = verification_connection
+        .query(
+            "SELECT orchard_id, start_month, end_month, end_day,
+                    data_origin::text, source_url
+             FROM plant_harvest_windows
+             WHERE NOT (orchard_id = 1 AND start_month = 9 AND start_day = 1)
+             ORDER BY orchard_id, start_month",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(untouched_windows.len(), 2);
+    assert_eq!(untouched_windows[0].get::<_, i64>(0), 1);
+    assert_eq!(untouched_windows[0].get::<_, i16>(1), 10);
+    assert_eq!(untouched_windows[0].get::<_, i16>(2), 10);
+    assert_eq!(untouched_windows[0].get::<_, i16>(3), 15);
+    assert_eq!(
+        untouched_windows[0].get::<_, String>(4),
+        "external_reference"
+    );
+    assert_eq!(
+        untouched_windows[0].get::<_, Option<String>>(5),
+        Some("https://example.com/later".into())
+    );
+    assert_eq!(untouched_windows[1].get::<_, i64>(0), 2);
+    assert_eq!(untouched_windows[1].get::<_, i16>(1), 9);
+    assert_eq!(untouched_windows[1].get::<_, i16>(2), 9);
+    assert_eq!(untouched_windows[1].get::<_, i16>(3), 24);
+    assert_eq!(
+        untouched_windows[1].get::<_, Option<String>>(5),
+        Some("https://example.com/other-orchard".into())
+    );
+
+    let revisited = HarvestTreeOutcome::HarvestedEverything {
+        harvested_on: HarvestDate::new(2026, 9, 24).unwrap(),
+    };
+    storage
+        .transaction(|orchard| orchard.record_harvest_tree_outcome(run_id, TreeId(2), revisited))
+        .unwrap();
+    assert_eq!(
+        storage.harvest_run(run_id).unwrap().unwrap().ordered_trees[0].outcome,
+        Some(revisited)
+    );
+
+    storage
+        .transaction(|orchard| orchard.complete_harvest_run(run_id))
+        .unwrap();
+    assert_eq!(storage.active_harvest_run(OrchardId(1)).unwrap(), None);
+    assert!(storage.harvest_run(run_id).unwrap().unwrap().completed);
+
+    let disposable_run_id = storage
+        .transaction(|orchard| {
+            orchard.create_harvest_run(
+                OrchardId(1),
+                HarvestRunTarget::All,
+                HarvestDate::new(2026, 10, 2).unwrap(),
+                &[HarvestRunTree {
+                    tree_id: TreeId(1),
+                    period: HarvestPeriod {
+                        start: HarvestDate::new(2026, 10, 1).unwrap(),
+                        end: HarvestDate::new(2026, 10, 15).unwrap(),
+                    },
+                    outcome: None,
+                }],
+            )
+        })
+        .unwrap();
+    storage
+        .transaction(|orchard| orchard.delete_harvest_run(disposable_run_id))
+        .unwrap();
+    assert_eq!(storage.harvest_run(disposable_run_id).unwrap(), None);
+}
+
+#[test]
+fn reject_a_harvest_run_tree_from_another_orchard() {
+    let _database_lock = database_lock();
+    let (database_url, mut verification_connection) = empty_orchard_database();
+    verification_connection
+        .batch_execute(
+            r#"
+            INSERT INTO users (username, default_center, is_default)
+            VALUES ('owner', ST_SetSRID(ST_MakePoint(-73.5, 12.25), 4326), TRUE);
+            INSERT INTO orchards (owner_user_id, name, center, reference_region)
+            VALUES
+                (1, 'North orchard', ST_SetSRID(ST_MakePoint(-73.5, 12.25), 4326), 'Example Region'),
+                (1, 'South orchard', ST_SetSRID(ST_MakePoint(-72.59, 13.38), 4326), 'Example Region');
+            INSERT INTO plant_identities (common_name, botanical_taxon)
+            VALUES (
+                'Apple',
+                '{"Named":{"genus":"Malus","species":null,"species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}'
+            );
+            INSERT INTO trees (
+                orchard_id, plant_identity_id, location, roles, is_alive,
+                identification_status
+            ) VALUES (
+                2, 1, ST_SetSRID(ST_MakePoint(-72.499, 13.38), 4326),
+                '{fruit}', TRUE, 'confirmed'
+            );
+            "#,
+        )
+        .unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let period = HarvestPeriod {
+        start: HarvestDate::new(2026, 9, 1).unwrap(),
+        end: HarvestDate::new(2026, 9, 24).unwrap(),
+    };
+
+    assert_eq!(
+        storage.transaction(|orchard| {
+            orchard.create_harvest_run(
+                OrchardId(1),
+                HarvestRunTarget::All,
+                HarvestDate::new(2026, 9, 17).unwrap(),
+                &[HarvestRunTree {
+                    tree_id: TreeId(1),
+                    period,
+                    outcome: None,
+                }],
+            )
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeCreated)
+    );
+    let persisted_runs: i64 = verification_connection
+        .query_one("SELECT count(*) FROM harvest_runs", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(persisted_runs, 0);
+}
+
+#[test]
+fn keep_completed_and_resolved_harvest_history_immutable_in_postgres() {
+    let _database_lock = database_lock();
+    let (database_url, mut verification_connection) = empty_orchard_database();
+    verification_connection
+        .batch_execute(
+            r#"
+            INSERT INTO users (username, default_center, is_default)
+            VALUES ('owner', ST_SetSRID(ST_MakePoint(-73.5, 12.25), 4326), TRUE);
+            INSERT INTO orchards (owner_user_id, name, center, reference_region)
+            VALUES (1, 'Orchard', ST_SetSRID(ST_MakePoint(-73.5, 12.25), 4326), 'Example Region');
+            INSERT INTO plant_identities (common_name, botanical_taxon)
+            VALUES (
+                'Apple',
+                '{"Named":{"genus":"Malus","species":null,"species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}'
+            );
+            INSERT INTO trees (
+                orchard_id, plant_identity_id, location, roles, is_alive,
+                identification_status
+            ) VALUES
+                (1, 1, ST_SetSRID(ST_MakePoint(-73.409, 12.25), 4326), '{fruit}', TRUE, 'confirmed'),
+                (1, 1, ST_SetSRID(ST_MakePoint(-73.318, 12.25), 4326), '{fruit}', TRUE, 'confirmed');
+            "#,
+        )
+        .unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let started_on = HarvestDate::new(2026, 9, 17).unwrap();
+    let period = HarvestPeriod {
+        start: HarvestDate::new(2026, 9, 1).unwrap(),
+        end: HarvestDate::new(2026, 9, 24).unwrap(),
+    };
+    let run_id = storage
+        .transaction(|orchard| {
+            orchard.create_harvest_run(
+                OrchardId(1),
+                HarvestRunTarget::All,
+                started_on,
+                &[
+                    HarvestRunTree {
+                        tree_id: TreeId(1),
+                        period,
+                        outcome: None,
+                    },
+                    HarvestRunTree {
+                        tree_id: TreeId(2),
+                        period,
+                        outcome: None,
+                    },
+                ],
+            )
+        })
+        .unwrap();
+
+    assert_eq!(
+        storage.transaction(|orchard| {
+            orchard.extend_harvest_run_tree_period(
+                run_id,
+                TreeId(1),
+                HarvestDate::new(2026, 9, 23).unwrap(),
+                started_on,
+            )
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+
+    let outside_window = HarvestTreeOutcome::HarvestedEverything {
+        harvested_on: HarvestDate::new(2026, 8, 31).unwrap(),
+    };
+    assert_eq!(
+        storage.transaction(|orchard| {
+            orchard.record_harvest_tree_outcome(run_id, TreeId(1), outside_window)
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+    let retry_after_window = HarvestTreeOutcome::Deferred {
+        deferred_on: started_on,
+        retry_on: HarvestDate::new(2026, 10, 1).unwrap(),
+    };
+    assert_eq!(
+        storage.transaction(|orchard| {
+            orchard.record_harvest_tree_outcome(run_id, TreeId(1), retry_after_window)
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+
+    let harvested = HarvestTreeOutcome::HarvestedEverything {
+        harvested_on: started_on,
+    };
+    storage
+        .transaction(|orchard| orchard.record_harvest_tree_outcome(run_id, TreeId(1), harvested))
+        .unwrap();
+    assert_eq!(
+        storage.transaction(|orchard| orchard.delete_harvest_run(run_id)),
+        Err(OrchardStorageError::HarvestRunCouldNotBeDeleted)
+    );
+
+    storage
+        .transaction(|orchard| orchard.complete_harvest_run(run_id))
+        .unwrap();
+    assert_eq!(
+        storage.transaction(|orchard| {
+            orchard.record_harvest_tree_outcome(run_id, TreeId(2), harvested)
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+    assert_eq!(
+        storage.transaction(|orchard| {
+            orchard.extend_harvest_run_tree_period(
+                run_id,
+                TreeId(2),
+                HarvestDate::new(2026, 10, 1).unwrap(),
+                started_on,
+            )
+        }),
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    );
+    assert_eq!(
+        storage.transaction(|orchard| orchard.delete_harvest_run(run_id)),
+        Err(OrchardStorageError::HarvestRunCouldNotBeDeleted)
+    );
+
+    let stored = storage.harvest_run(run_id).unwrap().unwrap();
+    assert!(stored.completed);
+    assert_eq!(stored.ordered_trees[0].outcome, Some(harvested));
+    assert_eq!(stored.ordered_trees[1].outcome, None);
+    assert_eq!(stored.ordered_trees[0].period, period);
+    assert_eq!(stored.ordered_trees[1].period, period);
 }
 
 #[test]
@@ -1464,10 +1878,59 @@ fn empty_orchard_database() -> (String, Client) {
             ))
             .unwrap();
     }
+    let harvest_runs_were_applied: bool = verification_connection
+        .query_one("SELECT to_regclass('harvest_runs') IS NOT NULL", &[])
+        .unwrap()
+        .get(0);
+    let harvest_run_tree_orchard_constraint_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'harvest_run_trees'
+                  AND column_name = 'orchard_id'
+             )",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    let harvest_outcome_dates_constraint_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM pg_constraint constraint_definition
+                JOIN pg_class table_definition
+                  ON table_definition.oid = constraint_definition.conrelid
+                JOIN pg_namespace schema_definition
+                  ON schema_definition.oid = table_definition.relnamespace
+                WHERE schema_definition.nspname = current_schema()
+                  AND table_definition.relname = 'harvest_run_trees'
+                  AND constraint_definition.conname =
+                      'harvest_run_trees_outcome_dates_check'
+             )",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    let current_harvest_schema_was_applied = harvest_run_tree_orchard_constraint_was_applied
+        && harvest_outcome_dates_constraint_was_applied;
+    if harvest_runs_were_applied && !current_harvest_schema_was_applied {
+        verification_connection
+            .batch_execute("DROP TABLE harvest_run_trees; DROP TABLE harvest_runs;")
+            .unwrap();
+    }
+    if !harvest_runs_were_applied || !current_harvest_schema_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/020_add_harvest_runs.sql"
+            ))
+            .unwrap();
+    }
     verification_connection
         .batch_execute(
-            "TRUNCATE TABLE watering_runs, user_sessions, orchards, plant_harvest_windows,
-                            aerial_overlays, users, trees, plant_cultivars, plant_identities
+            "TRUNCATE TABLE harvest_runs, watering_runs, user_sessions, orchards,
+                            plant_harvest_windows, aerial_overlays, users, trees,
+                            plant_cultivars, plant_identities
              RESTART IDENTITY CASCADE",
         )
         .unwrap();

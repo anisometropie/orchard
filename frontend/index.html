@@ -233,9 +233,13 @@
       }
       .workflow-panel[hidden],
       #watering-tree-banner[hidden],
+      #harvest-tree-banner[hidden],
       #watering-row-field[hidden],
       #watering-source-controls[hidden],
       #watering-cancel[hidden],
+      #harvest-cancel[hidden],
+      #harvest-species-field[hidden],
+      #harvest-job-controls[hidden],
       .manual-order-actions[hidden] {
         display: none;
       }
@@ -334,12 +338,14 @@
         pointer-events: none;
         width: 24px;
       }
-      #watering-tree-banner {
+      #watering-tree-banner,
+      #harvest-tree-banner {
         align-items: center;
         background: rgba(255, 255, 255, 0.98);
         border: 2px solid #245c2a;
         border-radius: 10px;
         box-shadow: 0 3px 16px rgba(0, 0, 0, 0.3);
+        box-sizing: border-box;
         display: flex;
         font: 13px sans-serif;
         gap: 14px;
@@ -352,15 +358,19 @@
         transform: translateX(-50%);
         z-index: 40;
       }
-      #watering-tree-name {
+      #watering-tree-name,
+      #harvest-tree-name {
         font-size: 16px;
         font-weight: 700;
       }
-      #watering-tree-progress {
+      #watering-tree-progress,
+      #harvest-tree-progress {
         color: #555;
         margin-top: 2px;
       }
-      #watering-done {
+      #watering-done,
+      #harvest-complete-tree,
+      #harvest-defer-tree {
         background: #245c2a;
         border: 1px solid #245c2a;
         border-radius: 6px;
@@ -368,6 +378,14 @@
         cursor: pointer;
         font: 700 14px sans-serif;
         padding: 9px 14px;
+      }
+      #harvest-defer-tree {
+        background: white;
+        color: #245c2a;
+      }
+      .harvest-tree-actions {
+        display: flex;
+        gap: 7px;
       }
       #watering-zoom-controls {
         display: none;
@@ -805,6 +823,66 @@
         font-size: 13px;
         margin-top: 7px;
       }
+      #harvest-job-controls {
+        border-top: 1px solid #d6d6d6;
+        margin-top: 12px;
+        padding-top: 10px;
+      }
+      #harvest-job-controls h3 {
+        font-size: 14px;
+        margin: 0;
+      }
+      #harvest-job-controls select,
+      #harvest-job-controls button {
+        border: 1px solid #777;
+        border-radius: 5px;
+        box-sizing: border-box;
+        font: inherit;
+        padding: 7px 9px;
+        width: 100%;
+      }
+      #harvest-job-controls select {
+        background: white;
+        display: block;
+        margin-top: 4px;
+      }
+      #harvest-job-controls button {
+        background: #245c2a;
+        border-color: #245c2a;
+        color: white;
+        cursor: pointer;
+        font-weight: 600;
+        margin-top: 10px;
+      }
+      #harvest-job-controls #harvest-cancel {
+        background: white;
+        border-color: #8f2f26;
+        color: #8f2f26;
+      }
+      #harvest-job-controls button:disabled,
+      #harvest-tree-banner button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+      #harvest-job-status,
+      #harvest-job-error {
+        font-size: 12px;
+        margin: 8px 0 0;
+      }
+      #harvest-job-status {
+        color: #555;
+      }
+      #harvest-job-error {
+        color: #b42318;
+      }
+      #harvest-tree-error {
+        color: #b42318;
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      #harvest-tree-error[hidden] {
+        display: none;
+      }
       @media (max-width: 620px) {
         #map-toolbar {
           left: 10px;
@@ -1154,18 +1232,30 @@
         .harvest-schedule {
           grid-template-columns: minmax(0, 1fr) auto 88px;
         }
-        #watering-tree-banner {
+        #watering-tree-banner,
+        #harvest-tree-banner {
           font-size: 15px;
           gap: 10px;
           padding: 10px 12px;
         }
-        #watering-tree-name {
+        #watering-tree-name,
+        #harvest-tree-name {
           font-size: 18px;
         }
-        #watering-done {
+        #watering-done,
+        #harvest-complete-tree,
+        #harvest-defer-tree {
           font-size: 16px;
           min-height: 50px;
           min-width: 78px;
+        }
+        #harvest-tree-banner {
+          align-items: stretch;
+          flex-direction: column;
+          width: min(390px, calc(100vw - 20px));
+        }
+        .harvest-tree-actions button {
+          flex: 1 1 0;
         }
         #watering-zoom-controls:not([hidden]) {
           bottom: max(18px, env(safe-area-inset-bottom));
@@ -1338,6 +1428,17 @@
       </div>
       <button id="watering-done" type="button">Done</button>
     </section>
+    <section id="harvest-tree-banner" aria-live="polite" hidden>
+      <div>
+        <div id="harvest-tree-name"></div>
+        <div id="harvest-tree-progress"></div>
+        <div id="harvest-tree-error" role="alert" hidden></div>
+      </div>
+      <div class="harvest-tree-actions">
+        <button id="harvest-complete-tree" type="button">Harvested everything</button>
+        <button id="harvest-defer-tree" type="button">Done for now</button>
+      </div>
+    </section>
     <div id="watering-zoom-controls" role="group" aria-label="Watering map zoom" hidden>
       <button
         id="watering-zoom-close"
@@ -1425,6 +1526,31 @@
           Width: <span id="harvest-weeks-label">1 week</span>
           <input type="range" id="harvest-weeks" min="1" max="12" value="1" />
         </label>
+        <div id="harvest-job-controls" hidden>
+          <h3>Harvest tour</h3>
+          <label>
+            Harvest
+            <select id="harvest-target-scope">
+              <option value="all">All currently available</option>
+              <option value="species">One species</option>
+            </select>
+          </label>
+          <label id="harvest-species-field" hidden>
+            Species
+            <select id="harvest-species"></select>
+          </label>
+          <label>
+            Route display
+            <select id="harvest-route-display">
+              <option value="next">Next tree only</option>
+              <option value="four">Next 4 trees</option>
+            </select>
+          </label>
+          <button id="harvest-start" type="button">Start harvesting</button>
+          <button id="harvest-cancel" type="button" hidden>Cancel harvest tour</button>
+          <p id="harvest-job-status" hidden></p>
+          <p id="harvest-job-error" role="alert" hidden></p>
+        </div>
       </section>
       <section id="normal-map-filters" class="map-mode-filters">
         <label
@@ -1593,6 +1719,16 @@
         harvestAvailabilitySummary,
         parseAnnualDate,
       } from "./harvest-window.mjs?v=4";
+      import {
+        availableHarvestSpecies,
+        harvestConflictMessage,
+        harvestRouteNumberGeoJson,
+        harvestRoutePathGeoJson,
+        harvestRouteWindow,
+        harvestStartRequest,
+        harvestTargetGeoJson,
+        localIsoDate,
+      } from "./harvest-job.mjs?v=2";
       import {
         accessHeaders,
         canWaterOrchard,
@@ -1768,6 +1904,12 @@
       let wateringCameraMode = "wide";
       let wateringWideZoomLevel = null;
       let wateringCameraFrame = null;
+      let harvestProgress = null;
+      let harvestRoute = [];
+      let harvestCandidateTreeIds = new Set();
+      let harvestCandidatesLoaded = false;
+      let harvestCandidatesOnDate = null;
+      let harvestCandidatesError = null;
       const inventoryToggle = document.getElementById("inventory-toggle");
       const inventoryPanel = document.getElementById("inventory-panel");
       const inventoryClose = document.getElementById("inventory-close");
@@ -1803,6 +1945,23 @@
       const harvestPartFilters = document.getElementById(
         "harvest-part-filters",
       );
+      const harvestJobControls = document.getElementById(
+        "harvest-job-controls",
+      );
+      const harvestTargetScope = document.getElementById(
+        "harvest-target-scope",
+      );
+      const harvestSpeciesField = document.getElementById(
+        "harvest-species-field",
+      );
+      const harvestSpecies = document.getElementById("harvest-species");
+      const harvestRouteDisplay = document.getElementById(
+        "harvest-route-display",
+      );
+      const harvestStart = document.getElementById("harvest-start");
+      const harvestCancel = document.getElementById("harvest-cancel");
+      const harvestJobStatus = document.getElementById("harvest-job-status");
+      const harvestJobError = document.getElementById("harvest-job-error");
       const mapModeButtons = [...document.querySelectorAll(".map-mode-button")];
       const mapFilterPanel = document.getElementById("map-filter-panel");
       const normalMapFilters = document.getElementById("normal-map-filters");
@@ -1877,6 +2036,18 @@
       );
       const wateringZoomClose = document.getElementById("watering-zoom-close");
       const wateringZoomWide = document.getElementById("watering-zoom-wide");
+      const harvestTreeBanner = document.getElementById(
+        "harvest-tree-banner",
+      );
+      const harvestTreeName = document.getElementById("harvest-tree-name");
+      const harvestTreeProgress = document.getElementById(
+        "harvest-tree-progress",
+      );
+      const harvestTreeError = document.getElementById("harvest-tree-error");
+      const harvestCompleteTree = document.getElementById(
+        "harvest-complete-tree",
+      );
+      const harvestDeferTree = document.getElementById("harvest-defer-tree");
       const compactMobileLayout = window.matchMedia("(max-width: 430px)");
 
       function setMobileMenuOpen(container, toggle, isOpen) {
@@ -1910,7 +2081,7 @@
         if (!mapFilterPanel.hidden) {
           mapFilterPanel.style.top = `${top}px`;
           const filterBounds = mapFilterPanel.getBoundingClientRect();
-          const blockers = [mapToolbar, wateringTreeBanner].filter(
+          const blockers = [mapToolbar, wateringTreeBanner, harvestTreeBanner].filter(
             (element) => !element.hidden,
           );
           blockers.forEach((blocker) => {
@@ -1942,8 +2113,7 @@
         }
       }
 
-      function placeWateringBannerBelowTopControls() {
-        if (wateringTreeBanner.hidden) return;
+      function placeJobBannersBelowTopControls() {
         if (compactMobileLayout.matches) {
           const controlBottom = Math.max(
             mobileTopRightMenuToggle.getBoundingClientRect().bottom,
@@ -1951,16 +2121,26 @@
               ? 0
               : mobileMapMenuToggle.getBoundingClientRect().bottom,
           );
-          wateringTreeBanner.style.top = `${Math.ceil(controlBottom + 8)}px`;
+          let top = Math.ceil(controlBottom + 8);
+          [wateringTreeBanner, harvestTreeBanner]
+            .filter((banner) => !banner.hidden)
+            .forEach((banner) => {
+              banner.style.top = `${top}px`;
+              top = Math.ceil(banner.getBoundingClientRect().bottom + 8);
+            });
           return;
         }
         const accessBottom = accessPanel.getBoundingClientRect().bottom;
         const toolbarBottom = mapToolbar.hidden
           ? 0
           : mapToolbar.getBoundingClientRect().bottom;
-        wateringTreeBanner.style.top = `${Math.ceil(
-          Math.max(accessBottom, toolbarBottom) + 12,
-        )}px`;
+        let top = Math.ceil(Math.max(accessBottom, toolbarBottom) + 12);
+        [wateringTreeBanner, harvestTreeBanner]
+          .filter((banner) => !banner.hidden)
+          .forEach((banner) => {
+            banner.style.top = `${top}px`;
+            top = Math.ceil(banner.getBoundingClientRect().bottom + 8);
+          });
       }
 
       function placeWorkflowPanelsBelowToolbar() {
@@ -1973,9 +2153,12 @@
           return;
         }
         const viewportInset = window.innerWidth <= 760 ? 10 : 20;
-        const bannerBottom = wateringTreeBanner.hidden
-          ? 0
-          : wateringTreeBanner.getBoundingClientRect().bottom;
+        const bannerBottom = Math.max(
+          ...[wateringTreeBanner, harvestTreeBanner]
+            .filter((banner) => !banner.hidden)
+            .map((banner) => banner.getBoundingClientRect().bottom),
+          0,
+        );
         const top = Math.ceil(
           Math.max(mapToolbar.getBoundingClientRect().bottom, bannerBottom) + 12,
         );
@@ -1990,7 +2173,7 @@
 
       function layoutMapControls() {
         placeToolbarAroundAccessMenu();
-        placeWateringBannerBelowTopControls();
+        placeJobBannersBelowTopControls();
         placeMapFiltersBelowAccessMenu();
         placeWorkflowPanelsBelowToolbar();
       }
@@ -1999,6 +2182,7 @@
       mapControlsObserver.observe(accessPanel);
       mapControlsObserver.observe(mapToolbar);
       mapControlsObserver.observe(wateringTreeBanner);
+      mapControlsObserver.observe(harvestTreeBanner);
       window.addEventListener("resize", layoutMapControls);
       compactMobileLayout.addEventListener("change", (event) => {
         if (!event.matches) closeMobileMenus();
@@ -3514,6 +3698,489 @@
         }
       }
 
+      function refreshHarvestJobControls() {
+        const species = availableHarvestSpecies(
+          orchardFeatures,
+          localIsoDate(),
+          harvestCandidatesLoaded ? harvestCandidateTreeIds : [],
+        );
+        const previousSpecies = harvestSpecies.value;
+        const options = species.map(({ plantIdentityId, label, treeCount }) =>
+          new Option(
+            `${label} · ${treeCount} tree${treeCount === 1 ? "" : "s"}`,
+            String(plantIdentityId),
+          ),
+        );
+        harvestSpecies.replaceChildren(...options);
+        if (species.some(({ plantIdentityId }) =>
+          String(plantIdentityId) === previousSpecies
+        )) {
+          harvestSpecies.value = previousSpecies;
+        }
+
+        const targetsSpecies = harvestTargetScope.value === "species";
+        const active = harvestProgress != null;
+        harvestJobControls.hidden = !isEditable();
+        harvestSpeciesField.hidden = !targetsSpecies;
+        harvestTargetScope.disabled = active;
+        harvestSpecies.disabled = active;
+        harvestStart.hidden = active;
+        harvestCancel.hidden = !active;
+        harvestCancel.disabled = !active;
+        harvestStart.disabled =
+          active ||
+          !harvestCandidatesLoaded ||
+          harvestCandidatesError != null ||
+          species.length === 0 ||
+          (targetsSpecies && !harvestSpecies.value);
+        if (harvestCandidatesError) {
+          harvestJobError.textContent = harvestCandidatesError;
+          harvestJobError.hidden = false;
+          harvestJobError.dataset.candidates = "true";
+        } else if (harvestJobError.dataset.candidates === "true") {
+          harvestJobError.textContent = "";
+          harvestJobError.hidden = true;
+          delete harvestJobError.dataset.candidates;
+        }
+        const preservesProgress =
+          !active && harvestJobStatus.dataset.progress === "true";
+        if (!preservesProgress && !active && harvestCandidatesError) {
+          harvestJobStatus.textContent = "Harvest availability unavailable.";
+          harvestJobStatus.hidden = false;
+        } else if (!preservesProgress && !active && !harvestCandidatesLoaded) {
+          harvestJobStatus.textContent = "Checking today's harvest availability…";
+          harvestJobStatus.hidden = false;
+        } else if (!preservesProgress && !active && species.length === 0) {
+          harvestJobStatus.textContent = "No trees are in a fruit harvest window today.";
+          harvestJobStatus.hidden = false;
+        } else if (!preservesProgress && !active) {
+          harvestJobStatus.textContent = "";
+          harvestJobStatus.hidden = true;
+          delete harvestJobStatus.dataset.progress;
+        }
+      }
+
+      async function loadHarvestCandidates(onDate = localIsoDate()) {
+        if (!isEditable()) return false;
+        harvestCandidateTreeIds = new Set();
+        harvestCandidatesLoaded = false;
+        harvestCandidatesOnDate = onDate;
+        harvestCandidatesError = null;
+        refreshHarvestJobControls();
+        try {
+          const response = await fetch(
+            orchardResourceUrl(
+              currentAccess,
+              `harvest-candidates?on_date=${encodeURIComponent(onDate)}`,
+            ),
+            { headers: accessHeaders(currentAccess), cache: "no-store" },
+          );
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const result = await response.json();
+          if (!Array.isArray(result.candidates)) {
+            throw new Error("Invalid harvest candidate response.");
+          }
+          harvestCandidateTreeIds = new Set(
+            result.candidates
+              .map(({ tree_id: treeId }) => treeId)
+              .filter((treeId) => treeId != null)
+              .map(String),
+          );
+          harvestCandidatesLoaded = true;
+        } catch (error) {
+          console.error("Could not load current harvest availability", error);
+          harvestCandidatesError =
+            "Could not load current harvest availability. Try reloading the page.";
+        }
+        refreshHarvestJobControls();
+        return harvestCandidatesLoaded;
+      }
+
+      function clearHarvestRouteSources() {
+        map
+          .getSource("harvest-job-target")
+          ?.setData(harvestTargetGeoJson(null));
+        map
+          .getSource("harvest-job-route")
+          ?.setData(harvestRoutePathGeoJson([]));
+        map
+          .getSource("harvest-job-route-numbers")
+          ?.setData(harvestRouteNumberGeoJson([]));
+      }
+
+      function currentHarvestRouteWindow() {
+        const currentTreeId = harvestProgress?.next_tree?.id;
+        return harvestProgress?.next_tree
+          ? harvestRouteWindow(
+              harvestRoute,
+              currentTreeId,
+              harvestRouteDisplay.value,
+            )
+          : { trees: [], startIndex: 0 };
+      }
+
+      function updateHarvestRoutePresentation(
+        { refocus = false, cameraDuration = 450 } = {},
+      ) {
+        const currentTreeId = harvestProgress?.next_tree?.id;
+        const window = currentHarvestRouteWindow();
+        const showsFour = harvestRouteDisplay.value === "four";
+        if (showsFour) {
+          window.trees.forEach((tree, index) => {
+            const routeIndex = window.startIndex + index;
+            const marker = dangerWateringNumberMarker(
+              routeIndex,
+              String(tree.id) === String(currentTreeId),
+              1,
+            );
+            if (!map.hasImage(marker.imageName)) {
+              map.addImage(
+                marker.imageName,
+                createRouteNumberImage(routeIndex + 1, marker.fillColor),
+                { pixelRatio: 2 },
+              );
+            }
+          });
+        }
+        map
+          .getSource("harvest-job-target")
+          ?.setData(
+            harvestTargetGeoJson(
+              showsFour ? null : harvestProgress?.next_tree || null,
+            ),
+          );
+        map
+          .getSource("harvest-job-route")
+          ?.setData(harvestRoutePathGeoJson(showsFour ? window.trees : []));
+        map
+          .getSource("harvest-job-route-numbers")
+          ?.setData(
+            harvestRouteNumberGeoJson(
+              showsFour ? window.trees : [],
+              currentTreeId,
+              window.startIndex,
+            ),
+          );
+        renderMapMode();
+        if (refocus && harvestProgress?.next_tree) {
+          requestAnimationFrame(() => focusCurrentHarvestTree(cameraDuration));
+        }
+      }
+
+      function focusCurrentHarvestTree(duration = 650) {
+        const tree = harvestProgress?.next_tree;
+        if (!tree) return;
+        const top = Math.max(
+          0,
+          Math.min(
+            window.innerHeight - 120,
+            Math.ceil(harvestTreeBanner.getBoundingClientRect().bottom + 70),
+          ),
+        );
+        const padding = { top, right: 30, bottom: 30, left: 30 };
+        const visibleRoute = currentHarvestRouteWindow().trees;
+        if (harvestRouteDisplay.value === "four" && visibleRoute.length > 1) {
+          const coordinates = visibleRoute.map(({ longitude, latitude }) => [
+            longitude,
+            latitude,
+          ]);
+          const bounds = coordinates.slice(1).reduce(
+            (currentBounds, coordinate) => currentBounds.extend(coordinate),
+            new maplibregl.LngLatBounds(coordinates[0], coordinates[0]),
+          );
+          map.fitBounds(bounds, {
+            padding,
+            duration,
+            maxZoom: 20,
+            retainPadding: false,
+          });
+          return;
+        }
+        map.easeTo({
+          center: [tree.longitude, tree.latitude],
+          zoom: Math.max(map.getZoom(), 20),
+          duration,
+          padding,
+          retainPadding: false,
+        });
+      }
+
+      function resetCompletedHarvestPresentation(message = "") {
+        harvestProgress = null;
+        harvestRoute = [];
+        harvestTreeBanner.hidden = true;
+        harvestTreeName.textContent = "";
+        harvestTreeProgress.textContent = "";
+        harvestTreeError.textContent = "";
+        harvestTreeError.hidden = true;
+        harvestJobError.textContent = "";
+        harvestJobError.hidden = true;
+        clearHarvestRouteSources();
+        harvestJobStatus.textContent = message;
+        harvestJobStatus.hidden = !message;
+        if (message) {
+          harvestJobStatus.dataset.progress = "true";
+        } else {
+          delete harvestJobStatus.dataset.progress;
+        }
+        refreshHarvestJobControls();
+        renderMapMode();
+        layoutMapControls();
+      }
+
+      function showHarvestProgress(progress, { cameraDuration = 650 } = {}) {
+        harvestProgress = progress?.next_tree ? progress : null;
+        harvestRoute = progress?.route || [];
+        if (!progress?.next_tree) {
+          resetCompletedHarvestPresentation("Harvest tour complete.");
+          return;
+        }
+        harvestTargetScope.value = progress.target || "all";
+        if (progress.plant_identity_id != null) {
+          harvestSpecies.value = String(progress.plant_identity_id);
+        }
+        closeTreeEditor();
+        treeTooltip?.remove();
+        treeTooltip = undefined;
+        harvestTreeName.textContent = progress.next_tree.name;
+        const resolvedCount =
+          progress.resolved_tree_count ?? progress.handled_tree_count ?? 0;
+        const routeRank =
+          progress.next_tree.route_rank ?? progress.next_tree.row_rank ?? resolvedCount + 1;
+        harvestTreeProgress.textContent = `${progress.target_label || "Harvest"} · tree ${routeRank} of ${progress.total_tree_count} · ${resolvedCount} done`;
+        harvestTreeBanner.hidden = false;
+        harvestTreeError.textContent = "";
+        harvestTreeError.hidden = true;
+        harvestJobStatus.textContent = `${resolvedCount} of ${progress.total_tree_count} trees handled.`;
+        harvestJobStatus.hidden = false;
+        harvestJobStatus.dataset.progress = "true";
+        harvestJobError.hidden = true;
+        closeMobileMenus();
+        setMapMode("harvest");
+        refreshHarvestJobControls();
+        updateHarvestRoutePresentation({ refocus: true, cameraDuration });
+        layoutMapControls();
+      }
+
+      async function restoreActiveHarvestRun() {
+        resetCompletedHarvestPresentation();
+        if (!isEditable()) return;
+        const response = await fetch(
+          orchardResourceUrl(
+            currentAccess,
+            `harvest-run?on_date=${encodeURIComponent(localIsoDate())}`,
+          ),
+          { headers: accessHeaders(currentAccess), cache: "no-store" },
+        );
+        if (response.status === 204) return;
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        showHarvestProgress(await response.json(), { cameraDuration: 0 });
+      }
+
+      async function startHarvesting() {
+        if (harvestProgress) return;
+        harvestJobError.hidden = true;
+        harvestStart.disabled = true;
+        try {
+          const onDate = localIsoDate();
+          const selectedPlantIdentityId = harvestSpecies.value;
+          if (
+            harvestCandidatesOnDate !== onDate ||
+            !harvestCandidatesLoaded
+          ) {
+            const loaded = await loadHarvestCandidates(onDate);
+            if (!loaded) return;
+            if (
+              harvestTargetScope.value === "species" &&
+              harvestSpecies.value !== selectedPlantIdentityId
+            ) {
+              throw new Error(
+                "Today's harvest availability changed. Choose a species again.",
+              );
+            }
+          }
+          if (
+            harvestTargetScope.value === "species" &&
+            !harvestSpecies.value
+          ) {
+            throw new Error("Choose a species that is available to harvest today.");
+          }
+          harvestStart.disabled = true;
+          const response = await fetch(
+            orchardResourceUrl(currentAccess, "harvest-runs"),
+            {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                ...accessHeaders(currentAccess),
+              },
+              body: JSON.stringify(
+                harvestStartRequest(
+                  harvestTargetScope.value,
+                  harvestSpecies.value,
+                  onDate,
+                ),
+              ),
+            },
+          );
+          if (response.status === 404) {
+            throw new Error("No trees are currently available for that harvest tour.");
+          }
+          if (response.status === 409) {
+            throw new Error("Finish the active harvest tour first.");
+          }
+          if (response.status === 400) {
+            throw new Error("The harvest date or species is invalid.");
+          }
+          if (!response.ok) {
+            throw new Error("Could not start harvesting. Please try again.");
+          }
+          const progress = await response.json();
+          showHarvestProgress(progress, { cameraDuration: 0 });
+          try {
+            await loadHarvestCandidates(onDate);
+          } catch (error) {
+            console.error("Could not refresh harvest availability", error);
+          }
+        } catch (error) {
+          harvestJobError.textContent = error.message;
+          harvestJobError.hidden = false;
+          refreshHarvestJobControls();
+        }
+      }
+
+      async function recordCurrentHarvestTree(outcome) {
+        if (!harvestProgress?.next_tree) return;
+        harvestCompleteTree.disabled = true;
+        harvestDeferTree.disabled = true;
+        harvestCancel.disabled = true;
+        harvestJobError.hidden = true;
+        harvestTreeError.hidden = true;
+        const actionDate = localIsoDate();
+        let extendWindow = false;
+        try {
+          while (true) {
+            const response = await fetch(
+              orchardResourceUrl(
+                currentAccess,
+                `harvest-runs/${encodeURIComponent(harvestProgress.run_id)}/${outcome}`,
+              ),
+              {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  ...accessHeaders(currentAccess),
+                },
+                body: JSON.stringify({
+                  tree_id: harvestProgress.next_tree.id,
+                  action_date: actionDate,
+                  extend_window: extendWindow,
+                }),
+              },
+            );
+            if (response.status === 409) {
+              const conflict = await response.json().catch(() => ({}));
+              if (
+                outcome === "deferred" &&
+                conflict.code === "harvest_window_extension_required" &&
+                !extendWindow
+              ) {
+                const schedule = conflict.schedule_label || "shared harvest";
+                const accepted = window.confirm(
+                  `This tree should return on ${conflict.retry_on}, but the ${schedule} window ends ${conflict.current_end}. Extend that shared species/cultivar window to ${conflict.proposed_end}?`,
+                );
+                if (!accepted) return;
+                extendWindow = true;
+                continue;
+              }
+              throw new Error(harvestConflictMessage(conflict.code));
+            }
+            if (response.status === 404) {
+              throw new Error("This harvest tour or tree no longer exists.");
+            }
+            if (!response.ok) {
+              throw new Error("Could not record this tree. Please try again.");
+            }
+            const progress = await response.json();
+            showHarvestProgress(progress);
+            harvestCancel.disabled = true;
+            if (extendWindow) {
+              try {
+                await fetchOrchardTrees();
+              } catch (error) {
+                console.error("Could not refresh trees after extending harvest window", error);
+              }
+            }
+            try {
+              await loadHarvestCandidates();
+            } catch (error) {
+              console.error("Could not refresh harvest availability", error);
+            }
+            break;
+          }
+        } catch (error) {
+          harvestJobError.textContent = error.message;
+          harvestJobError.hidden = false;
+          harvestTreeError.textContent = error.message;
+          harvestTreeError.hidden = false;
+        } finally {
+          harvestCompleteTree.disabled = false;
+          harvestDeferTree.disabled = false;
+          harvestCancel.disabled = harvestProgress == null;
+        }
+      }
+
+      async function cancelHarvestRun() {
+        const activeRun = harvestProgress;
+        if (!activeRun) return;
+        if (
+          !window.confirm(
+            "Cancel this harvest tour? Any trees already marked harvested or deferred will stay in harvest history. Unhandled trees will be available for a new tour.",
+          )
+        ) return;
+        harvestCancel.disabled = true;
+        harvestCompleteTree.disabled = true;
+        harvestDeferTree.disabled = true;
+        harvestJobError.hidden = true;
+        harvestTreeError.hidden = true;
+        try {
+          const response = await fetch(
+            orchardResourceUrl(
+              currentAccess,
+              `harvest-runs/${encodeURIComponent(activeRun.run_id)}`,
+            ),
+            {
+              method: "DELETE",
+              headers: accessHeaders(currentAccess),
+            },
+          );
+          if (response.status === 404) {
+            throw new Error("This harvest tour no longer exists. Reload the page.");
+          }
+          if (response.status === 409) {
+            throw new Error("This harvest tour has already finished.");
+          }
+          if (!response.ok) {
+            throw new Error("Could not cancel this harvest tour. Please try again.");
+          }
+          resetCompletedHarvestPresentation("Harvest tour cancelled.");
+          try {
+            await loadHarvestCandidates();
+          } catch (error) {
+            console.error("Could not refresh harvest availability", error);
+          }
+        } catch (error) {
+          harvestJobError.textContent = error.message;
+          harvestJobError.hidden = false;
+          harvestTreeError.textContent = error.message;
+          harvestTreeError.hidden = false;
+        } finally {
+          harvestCancel.disabled = harvestProgress == null;
+          harvestCompleteTree.disabled = false;
+          harvestDeferTree.disabled = false;
+        }
+      }
+
       function selectInventoryView(view) {
         const showsTrees = view === "trees";
         treesTab.setAttribute("aria-selected", String(showsTrees));
@@ -4049,6 +4716,18 @@
           type: "geojson",
           data: dangerWateringNumberGeoJson([]),
         });
+        map.addSource("harvest-job-target", {
+          type: "geojson",
+          data: harvestTargetGeoJson(null),
+        });
+        map.addSource("harvest-job-route", {
+          type: "geojson",
+          data: harvestRoutePathGeoJson([]),
+        });
+        map.addSource("harvest-job-route-numbers", {
+          type: "geojson",
+          data: harvestRouteNumberGeoJson([]),
+        });
         map.addLayer({
           id: "watering-route-line",
           type: "line",
@@ -4100,6 +4779,42 @@
             "icon-size": ["get", "route_number_scale"],
           },
         });
+        map.addLayer({
+          id: "harvest-job-route-line",
+          type: "line",
+          source: "harvest-job-route",
+          layout: { visibility: "none" },
+          paint: {
+            "line-color": "#d67b00",
+            "line-opacity": 0.9,
+            "line-width": 3,
+          },
+        });
+        map.addLayer({
+          id: "harvest-job-target-pin",
+          type: "symbol",
+          source: "harvest-job-target",
+          layout: {
+            "icon-allow-overlap": true,
+            "icon-anchor": "bottom",
+            "icon-ignore-placement": true,
+            "icon-image": "harvest-fruit",
+            "icon-size": 1.35,
+            visibility: "none",
+          },
+        });
+        map.addLayer({
+          id: "harvest-job-route-number-labels",
+          type: "symbol",
+          source: "harvest-job-route-numbers",
+          layout: {
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
+            "icon-image": ["get", "route_number_image"],
+            "icon-size": ["get", "route_number_scale"],
+            visibility: "none",
+          },
+        });
 
         applyDateFilter();
         initializeMap();
@@ -4142,7 +4857,9 @@
         try {
           await loadMapConfiguration();
           await fetchOrchardTrees();
+          if (isEditable()) await loadHarvestCandidates();
           await restoreActiveWateringRun();
+          await restoreActiveHarvestRun();
           status.hidden = true;
         } catch (error) {
           console.error("Could not initialize the orchard map", error);
@@ -4167,6 +4884,12 @@
         wateringProgress = null;
         wateringSource = null;
         wateringRoute = [];
+        harvestProgress = null;
+        harvestRoute = [];
+        harvestCandidateTreeIds = new Set();
+        harvestCandidatesLoaded = false;
+        harvestCandidatesOnDate = null;
+        harvestCandidatesError = null;
         placingWaterSource = false;
         reopenWateringPanelAfterSourcePlacement = false;
         wateringCameraMode = "wide";
@@ -4193,9 +4916,17 @@
           ?.setData(dangerWateringNumberGeoJson([]));
         wateringTreeBanner.hidden = true;
         wateringZoomControls.hidden = true;
+        harvestTreeBanner.hidden = true;
+        clearHarvestRouteSources();
         renderWateringCameraMode();
         wateringMenuStatus.hidden = true;
         wateringError.hidden = true;
+        harvestJobError.textContent = "";
+        harvestJobError.hidden = true;
+        delete harvestJobError.dataset.candidates;
+        harvestJobStatus.textContent = "";
+        harvestJobStatus.hidden = true;
+        delete harvestJobStatus.dataset.progress;
         rowOrderError.hidden = true;
         setInventoryOpen(false);
         orchardFeatures = [];
@@ -4277,6 +5008,13 @@
         const status = document.getElementById("map-status");
         try {
           await fetchOrchardTrees();
+          if (isEditable()) {
+            try {
+              await loadHarvestCandidates();
+            } catch (error) {
+              console.error("Could not refresh harvest availability", error);
+            }
+          }
           status.hidden = true;
         } catch (error) {
           console.error("Could not load orchard trees", error);
@@ -4292,11 +5030,18 @@
         mapFilterPanel.hidden = !orchardIsOpen;
         wateringToggle.hidden = !canWaterOrchard(currentAccess);
         rowOrderToggle.hidden = !isEditable();
+        harvestJobControls.hidden = !isEditable();
         if (!canWaterOrchard(currentAccess)) {
           cancelManualRowOrder();
           setWorkflowPanel(null);
           wateringTreeBanner.hidden = true;
           wateringZoomControls.hidden = true;
+        }
+        if (!isEditable()) {
+          harvestProgress = null;
+          harvestRoute = [];
+          harvestTreeBanner.hidden = true;
+          clearHarvestRouteSources();
         }
         loginToggle.hidden = loggedIn;
         orchardSelect.hidden = !loggedIn;
@@ -4453,9 +5198,26 @@
           map.setLayoutProperty(
             "harvest-pins",
             "visibility",
-            presentation.harvestPinsVisible ? "visible" : "none",
+            presentation.harvestPinsVisible && !harvestProgress
+              ? "visible"
+              : "none",
           );
         }
+        const showsHarvestJob =
+          presentation.mode === "harvest" && harvestProgress != null;
+        [
+          "harvest-job-route-line",
+          "harvest-job-target-pin",
+          "harvest-job-route-number-labels",
+        ].forEach((layerId) => {
+          if (map.getLayer(layerId)) {
+            map.setLayoutProperty(
+              layerId,
+              "visibility",
+              showsHarvestJob ? "visible" : "none",
+            );
+          }
+        });
       }
 
       function setMapMode(nextMode) {
@@ -4520,6 +5282,7 @@
             features: visibleFeatures,
           });
         }
+        refreshHarvestJobControls();
         renderMapMode();
       }
 
@@ -4591,6 +5354,20 @@
       harvestFilterEnabled.addEventListener("change", applyHarvestWindow);
       harvestOffset.addEventListener("input", applyHarvestWindow);
       harvestWeeks.addEventListener("input", applyHarvestWindow);
+      harvestTargetScope.addEventListener("change", refreshHarvestJobControls);
+      harvestSpecies.addEventListener("change", refreshHarvestJobControls);
+      harvestRouteDisplay.addEventListener(
+        "change",
+        () => updateHarvestRoutePresentation({ refocus: true }),
+      );
+      harvestStart.addEventListener("click", startHarvesting);
+      harvestCancel.addEventListener("click", cancelHarvestRun);
+      harvestCompleteTree.addEventListener("click", () =>
+        recordCurrentHarvestTree("harvested"),
+      );
+      harvestDeferTree.addEventListener("click", () =>
+        recordCurrentHarvestTree("deferred"),
+      );
       mapModeButtons.forEach((button) => {
         button.addEventListener("click", () => {
           setMapMode(button.dataset.mapMode);

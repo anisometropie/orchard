@@ -1,7 +1,8 @@
 use crate::hexagon::models::{
-    AnnualHarvestWindow, GeoPoint, HarvestScheduleOwner, OrchardId, OrchardTree,
-    PlantIdentification, PlantIdentityReference, Tree, TreeId, WateringRun, WateringRunId,
-    WateringRunTarget,
+    AnnualHarvestWindow, GeoPoint, HarvestDate, HarvestRun, HarvestRunId, HarvestRunTarget,
+    HarvestRunTree, HarvestScheduleOwner, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
+    HarvestWindowExtension, OrchardId, OrchardTree, PlantIdentification, PlantIdentityReference,
+    Tree, TreeId, WateringRun, WateringRunId, WateringRunTarget,
 };
 
 #[derive(Debug, PartialEq)]
@@ -19,6 +20,12 @@ pub enum OrchardStorageError {
     WateringRunCouldNotBeCreated,
     WateringRunCouldNotBeChanged,
     WateringRunCouldNotBeDeleted,
+    HarvestRunCouldNotBeRead,
+    HarvestRunCouldNotBeCreated,
+    HarvestRunCouldNotBeChanged,
+    HarvestRunCouldNotBeDeleted,
+    HarvestHistoryCouldNotBeRead,
+    HarvestWindowCouldNotBeExtended,
     AtomicOperationCouldNotCommit,
     TreesCouldNotBeRead,
 }
@@ -106,5 +113,50 @@ pub trait OrchardStorage {
     fn delete_watering_run(
         &mut self,
         watering_run_id: WateringRunId,
+    ) -> Result<(), OrchardStorageError>;
+    fn harvest_tree_outcomes(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<HarvestTreeOutcomeRecord>, OrchardStorageError>;
+    fn active_harvest_run(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Option<HarvestRun>, OrchardStorageError>;
+    fn harvest_run(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+    ) -> Result<Option<HarvestRun>, OrchardStorageError>;
+    fn create_harvest_run(
+        &mut self,
+        orchard_id: OrchardId,
+        target: HarvestRunTarget,
+        started_on: HarvestDate,
+        ordered_trees: &[HarvestRunTree],
+    ) -> Result<HarvestRunId, OrchardStorageError>;
+    fn record_harvest_tree_outcome(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+        tree_id: TreeId,
+        outcome: HarvestTreeOutcome,
+    ) -> Result<(), OrchardStorageError>;
+    fn extend_harvest_run_tree_period(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+        tree_id: TreeId,
+        new_end: HarvestDate,
+        action_date: HarvestDate,
+    ) -> Result<(), OrchardStorageError>;
+    fn extend_orchard_harvest_window(
+        &mut self,
+        orchard_id: OrchardId,
+        extension: &HarvestWindowExtension,
+    ) -> Result<bool, OrchardStorageError>;
+    fn complete_harvest_run(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+    ) -> Result<(), OrchardStorageError>;
+    fn delete_harvest_run(
+        &mut self,
+        harvest_run_id: HarvestRunId,
     ) -> Result<(), OrchardStorageError>;
 }
