@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
 import {
   availableHarvestSpecies,
@@ -11,6 +13,51 @@ import {
   harvestTargetGeoJson,
   localIsoDate,
 } from "./harvest-job.mjs";
+
+const indexHtml = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+
+function harvestPartFiltersDisabledAfterCompletion(harvestFilterEnabled) {
+  const functionStart = indexHtml.indexOf(
+    "function resetCompletedHarvestPresentation",
+  );
+  const functionEnd = indexHtml.indexOf(
+    "function showHarvestProgress",
+    functionStart,
+  );
+  assert.notEqual(functionStart, -1);
+  assert.notEqual(functionEnd, -1);
+
+  const harvestPartFilters = { disabled: true };
+  const context = {
+    harvestProgress: { next_tree: { id: 1 } },
+    harvestRoute: [{ id: 1 }],
+    harvestTreeBanner: { hidden: false },
+    harvestTreeName: { textContent: "Lavatère" },
+    harvestTreeProgress: { textContent: "1 of 1" },
+    harvestTreeError: { textContent: "", hidden: false },
+    harvestJobError: { textContent: "", hidden: false },
+    harvestJobStatus: { textContent: "", hidden: false, dataset: {} },
+    harvestPartFilters,
+    harvestFilterEnabled: { checked: harvestFilterEnabled },
+    clearHarvestRouteSources() {},
+    refreshHarvestJobControls() {},
+    renderMapMode() {},
+    layoutMapControls() {},
+  };
+  vm.runInNewContext(
+    `${indexHtml.slice(functionStart, functionEnd)}\nresetCompletedHarvestPresentation("Harvest tour complete.");`,
+    context,
+  );
+  return harvestPartFilters.disabled;
+}
+
+test("re-enable harvested-part checkboxes when a harvest tour completes", () => {
+  assert.equal(harvestPartFiltersDisabledAfterCompletion(true), false);
+});
+
+test("keep harvested-part checkboxes disabled when their main filter is off", () => {
+  assert.equal(harvestPartFiltersDisabledAfterCompletion(false), true);
+});
 
 test("format the calendar date in the browser's local timezone", () => {
   assert.equal(localIsoDate(new Date(2026, 8, 17, 23, 45)), "2026-09-17");

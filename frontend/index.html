@@ -3933,6 +3933,7 @@
       function resetCompletedHarvestPresentation(message = "") {
         harvestProgress = null;
         harvestRoute = [];
+        harvestPartFilters.disabled = !harvestFilterEnabled.checked;
         harvestTreeBanner.hidden = true;
         harvestTreeName.textContent = "";
         harvestTreeProgress.textContent = "";
