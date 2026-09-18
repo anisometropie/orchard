@@ -210,8 +210,23 @@ export function dangerWateringPathGeoJson(
   totalRouteLength = route?.length || 0,
   carryCapacity = 2,
 ) {
-  if (!source || !Array.isArray(route)) {
+  if (!Array.isArray(route)) {
     return { type: "FeatureCollection", features: [] };
+  }
+  if (!source) {
+    const coordinates = route.map((tree) => [tree.longitude, tree.latitude]);
+    return {
+      type: "FeatureCollection",
+      features: coordinates.length < 2
+        ? []
+        : [
+            {
+              type: "Feature",
+              properties: { trip_parity: "even" },
+              geometry: { type: "LineString", coordinates },
+            },
+          ],
+    };
   }
   const capacity = wateringCarryCapacity(carryCapacity) || 2;
   const sourceCoordinate = [source.longitude, source.latitude];

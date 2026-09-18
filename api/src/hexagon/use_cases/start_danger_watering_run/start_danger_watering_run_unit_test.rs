@@ -1,10 +1,17 @@
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
-    BotanicalTaxon, GeoPoint, IdentificationStatus, NamedTaxon, Orchard, OrchardId, PlantIdentity,
-    PlantIdentityId, Tree, TreeId, WateringRunTarget,
+    BotanicalTaxon, GeoPoint, HarvestRunTarget, HarvestScheduleOwner, HarvestedPart,
+    IdentificationStatus, NamedTaxon, Orchard, OrchardId, PlantIdentity, PlantIdentityId, Tree,
+    TreeId, WateringRunTarget,
+};
+use orchard_api::hexagon::use_cases::replace_plant_harvest_windows::{
+    AnnualHarvestWindowChanged, OrchardHarvestWindowsReplaced, replace_orchard_harvest_windows,
 };
 use orchard_api::hexagon::use_cases::start_danger_watering_run::{
     DangerWateringRunStartError, DangerWateringRunStartRequested, start_danger_watering_run,
+};
+use orchard_api::hexagon::use_cases::start_harvest_run::{
+    HarvestRunStartRequested, start_harvest_run,
 };
 
 #[test]
@@ -131,6 +138,63 @@ fn refuse_a_zero_carry_capacity_before_creating_a_run() {
     assert_eq!(
         result,
         Err(DangerWateringRunStartError::InvalidCarryCapacity)
+    );
+    assert!(
+        observer
+            .active_watering_run_tree_ids(OrchardId(7))
+            .is_empty()
+    );
+}
+
+#[test]
+fn refuse_to_start_danger_watering_while_a_harvest_tour_is_active() {
+    let (mut storage, observer) = InMemoryOrchardStorage::with_user_owned_orchard(
+        "owner",
+        "password",
+        orchard(),
+        vec![apple_identity()],
+        vec![tree(-73.5, 12.25, true, true)],
+    );
+    replace_orchard_harvest_windows(
+        OrchardHarvestWindowsReplaced {
+            orchard_id: OrchardId(7),
+            owner: HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
+            reference_region: "Example Region, France".into(),
+            windows: vec![AnnualHarvestWindowChanged {
+                start_month: 8,
+                start_day: 1,
+                end_month: 9,
+                end_day: 30,
+                harvested_part: HarvestedPart::Fruit,
+            }],
+        },
+        &mut storage,
+    )
+    .unwrap();
+    start_harvest_run(
+        HarvestRunStartRequested {
+            orchard_id: OrchardId(7),
+            target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
+            action_date: "2026-09-18".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+
+    assert_eq!(
+        start_danger_watering_run(
+            DangerWateringRunStartRequested {
+                orchard_id: OrchardId(7),
+                water_source: GeoPoint {
+                    longitude: -73.5,
+                    latitude: 12.2613,
+                },
+                carry_capacity: 2,
+            },
+            &mut storage,
+        ),
+        Err(DangerWateringRunStartError::HarvestRunIsActive)
     );
     assert!(
         observer

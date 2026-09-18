@@ -34,6 +34,7 @@ pub enum WateringRunStartError {
     RowNotFound,
     RowNotOrdered,
     AnotherWateringRunIsActive,
+    HarvestRunIsActive,
     WateringRunCouldNotBeStarted,
 }
 
@@ -42,6 +43,13 @@ pub fn start_watering_run(
     storage: &mut impl OrchardStorage,
 ) -> Result<WateringProgress, WateringRunStartError> {
     storage.transaction(|orchard| {
+        if orchard
+            .active_harvest_run(event.orchard_id)
+            .map_err(|_| WateringRunStartError::WateringRunCouldNotBeStarted)?
+            .is_some()
+        {
+            return Err(WateringRunStartError::HarvestRunIsActive);
+        }
         let orchard_trees = orchard
             .trees_in_orchard(event.orchard_id)
             .map_err(|_| WateringRunStartError::WateringRunCouldNotBeStarted)?;

@@ -116,6 +116,9 @@ function normalizeTreeIds(treeIds) {
 }
 
 export function harvestRouteWindow(route, currentTreeId, mode = "next") {
+  if (mode === "route") {
+    return { trees: Array.isArray(route) ? route : [], startIndex: 0 };
+  }
   const maximumTrees = HARVEST_ROUTE_WINDOW_SIZES[mode];
   if (maximumTrees == null) throw new Error(`Unknown harvest route mode: ${mode}`);
   return wateringRouteWindow(route, currentTreeId, maximumTrees);

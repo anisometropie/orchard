@@ -1,13 +1,20 @@
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
-    BotanicalTaxon, IdentificationStatus, NamedTaxon, Orchard, OrchardId, PlantIdentity,
-    PlantIdentityId, Tree, TreeId, WateringRunId, WateringRunTarget,
+    BotanicalTaxon, HarvestRunTarget, HarvestScheduleOwner, HarvestedPart, IdentificationStatus,
+    NamedTaxon, Orchard, OrchardId, PlantIdentity, PlantIdentityId, Tree, TreeId, WateringRunId,
+    WateringRunTarget,
 };
 use orchard_api::hexagon::use_cases::load_active_watering_run::load_active_watering_run;
 use orchard_api::hexagon::use_cases::order_orchard_row::{
     OrchardRowOrderRequested, RowOrder, order_orchard_row,
 };
 use orchard_api::hexagon::use_cases::record_tree_watered::{TreeWatered, record_tree_watered};
+use orchard_api::hexagon::use_cases::replace_plant_harvest_windows::{
+    AnnualHarvestWindowChanged, OrchardHarvestWindowsReplaced, replace_orchard_harvest_windows,
+};
+use orchard_api::hexagon::use_cases::start_harvest_run::{
+    HarvestRunStartRequested, start_harvest_run,
+};
 use orchard_api::hexagon::use_cases::start_watering_run::{
     WateringRunStartError, WateringRunStartRequested, start_watering_run,
 };
@@ -130,6 +137,72 @@ fn restore_an_active_run_at_its_first_unwatered_tree() {
 
     assert_eq!(restored.watered_tree_count, 1);
     assert_eq!(restored.next_tree.unwrap().id, TreeId(1));
+}
+
+#[test]
+fn refuse_to_start_while_a_harvest_tour_is_active() {
+    let (mut storage, observer) = InMemoryOrchardStorage::with_user_owned_orchard(
+        "owner",
+        "password",
+        orchard(),
+        vec![apple_identity()],
+        vec![apple_tree("North", -73.409, true)],
+    );
+    order_orchard_row(
+        OrchardRowOrderRequested {
+            orchard_id: OrchardId(7),
+            row_name: "North".into(),
+            order: RowOrder::Manual(vec![TreeId(1)]),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    configure_fruit_harvest(&mut storage);
+    start_harvest_run(
+        HarvestRunStartRequested {
+            orchard_id: OrchardId(7),
+            target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
+            action_date: "2026-09-18".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+
+    assert_eq!(
+        start_watering_run(
+            WateringRunStartRequested {
+                orchard_id: OrchardId(7),
+                row_name: "North".into(),
+            },
+            &mut storage,
+        ),
+        Err(WateringRunStartError::HarvestRunIsActive)
+    );
+    assert!(
+        observer
+            .active_watering_run_tree_ids(OrchardId(7))
+            .is_empty()
+    );
+}
+
+fn configure_fruit_harvest(storage: &mut InMemoryOrchardStorage) {
+    replace_orchard_harvest_windows(
+        OrchardHarvestWindowsReplaced {
+            orchard_id: OrchardId(7),
+            owner: HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
+            reference_region: "Example Region, France".into(),
+            windows: vec![AnnualHarvestWindowChanged {
+                start_month: 8,
+                start_day: 1,
+                end_month: 9,
+                end_day: 30,
+                harvested_part: HarvestedPart::Fruit,
+            }],
+        },
+        storage,
+    )
+    .unwrap();
 }
 
 fn orchard() -> Orchard {

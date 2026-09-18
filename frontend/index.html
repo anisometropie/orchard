@@ -234,6 +234,7 @@
       .workflow-panel[hidden],
       #watering-tree-banner[hidden],
       #harvest-tree-banner[hidden],
+      #tour-route-display-control[hidden],
       #watering-row-field[hidden],
       #watering-source-controls[hidden],
       #watering-cancel[hidden],
@@ -389,6 +390,28 @@
       }
       #watering-zoom-controls {
         display: none;
+      }
+      #tour-route-display-control {
+        background: rgba(255, 255, 255, 0.98);
+        border: 1px solid #777;
+        border-radius: 8px;
+        box-shadow: 0 2px 9px rgba(0, 0, 0, 0.3);
+        box-sizing: border-box;
+        font: 600 13px sans-serif;
+        left: 50%;
+        padding: 7px 9px;
+        position: absolute;
+        top: 88px;
+        transform: translateX(-50%);
+        z-index: 39;
+      }
+      #tour-route-display-control select {
+        background: white;
+        border: 1px solid #777;
+        border-radius: 5px;
+        font: inherit;
+        margin-left: 6px;
+        padding: 5px 7px;
       }
       .map-mode-switch {
         display: flex;
@@ -1383,10 +1406,6 @@
           Watering cans carried at once
           <input id="watering-carry-capacity" type="number" min="1" max="2147483647" step="1" inputmode="numeric" value="2" />
         </label>
-        <label class="workflow-checkbox">
-          <input id="watering-show-route" type="checkbox" checked />
-          Show complete route and numbers
-        </label>
       </div>
       <button id="watering-start" type="button">Start</button>
       <button id="watering-cancel" class="danger" type="button" hidden>Cancel run</button>
@@ -1439,6 +1458,16 @@
         <button id="harvest-defer-tree" type="button">Done for now</button>
       </div>
     </section>
+    <div id="tour-route-display-control" hidden>
+      <label>
+        Route display
+        <select id="tour-route-display">
+          <option value="next">Next tree only</option>
+          <option value="four" selected>Next 4 trees</option>
+          <option value="route">Whole path</option>
+        </select>
+      </label>
+    </div>
     <div id="watering-zoom-controls" role="group" aria-label="Watering map zoom" hidden>
       <button
         id="watering-zoom-close"
@@ -1538,13 +1567,6 @@
           <label id="harvest-species-field" hidden>
             Species
             <select id="harvest-species"></select>
-          </label>
-          <label>
-            Route display
-            <select id="harvest-route-display">
-              <option value="next">Next tree only</option>
-              <option value="four">Next 4 trees</option>
-            </select>
           </label>
           <button id="harvest-start" type="button">Start harvesting</button>
           <button id="harvest-cancel" type="button" hidden>Cancel harvest tour</button>
@@ -1702,7 +1724,7 @@
         harvestPinImageName,
         selectHarvestParts,
       } from "./harvest-marker.mjs?v=3";
-      import { mapModePresentation } from "./map-mode.mjs?v=3";
+      import { mapModePresentation, tourPresentation } from "./map-mode.mjs?v=4";
       import {
         filterTreeFeatures,
         filterTreeFeaturesByIdentity,
@@ -1728,7 +1750,7 @@
         harvestStartRequest,
         harvestTargetGeoJson,
         localIsoDate,
-      } from "./harvest-job.mjs?v=2";
+      } from "./harvest-job.mjs?v=4";
       import {
         accessHeaders,
         canWaterOrchard,
@@ -1754,7 +1776,7 @@
         wateringTargetGeoJson,
         wateringWideCenter,
         waterSourceGeoJson,
-      } from "./watering.mjs?v=12";
+      } from "./watering.mjs?v=13";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -1956,9 +1978,6 @@
         "harvest-species-field",
       );
       const harvestSpecies = document.getElementById("harvest-species");
-      const harvestRouteDisplay = document.getElementById(
-        "harvest-route-display",
-      );
       const harvestStart = document.getElementById("harvest-start");
       const harvestCancel = document.getElementById("harvest-cancel");
       const harvestJobStatus = document.getElementById("harvest-job-status");
@@ -2010,7 +2029,6 @@
       const wateringCarryCapacityInput = document.getElementById(
         "watering-carry-capacity",
       );
-      const wateringShowRoute = document.getElementById("watering-show-route");
       const wateringStart = document.getElementById("watering-start");
       const wateringCancel = document.getElementById("watering-cancel");
       const wateringMenuStatus = document.getElementById("watering-menu-status");
@@ -2049,6 +2067,10 @@
         "harvest-complete-tree",
       );
       const harvestDeferTree = document.getElementById("harvest-defer-tree");
+      const tourRouteDisplayControl = document.getElementById(
+        "tour-route-display-control",
+      );
+      const tourRouteDisplay = document.getElementById("tour-route-display");
       const compactMobileLayout = window.matchMedia("(max-width: 430px)");
 
       function setMobileMenuOpen(container, toggle, isOpen) {
@@ -2082,9 +2104,12 @@
         if (!mapFilterPanel.hidden) {
           mapFilterPanel.style.top = `${top}px`;
           const filterBounds = mapFilterPanel.getBoundingClientRect();
-          const blockers = [mapToolbar, wateringTreeBanner, harvestTreeBanner].filter(
-            (element) => !element.hidden,
-          );
+          const blockers = [
+            mapToolbar,
+            wateringTreeBanner,
+            harvestTreeBanner,
+            tourRouteDisplayControl,
+          ].filter((element) => !element.hidden);
           blockers.forEach((blocker) => {
             const bounds = blocker.getBoundingClientRect();
             const overlapsHorizontally =
@@ -2123,7 +2148,7 @@
               : mobileMapMenuToggle.getBoundingClientRect().bottom,
           );
           let top = Math.ceil(controlBottom + 8);
-          [wateringTreeBanner, harvestTreeBanner]
+          [wateringTreeBanner, harvestTreeBanner, tourRouteDisplayControl]
             .filter((banner) => !banner.hidden)
             .forEach((banner) => {
               banner.style.top = `${top}px`;
@@ -2136,7 +2161,7 @@
           ? 0
           : mapToolbar.getBoundingClientRect().bottom;
         let top = Math.ceil(Math.max(accessBottom, toolbarBottom) + 12);
-        [wateringTreeBanner, harvestTreeBanner]
+        [wateringTreeBanner, harvestTreeBanner, tourRouteDisplayControl]
           .filter((banner) => !banner.hidden)
           .forEach((banner) => {
             banner.style.top = `${top}px`;
@@ -2155,7 +2180,7 @@
         }
         const viewportInset = window.innerWidth <= 760 ? 10 : 20;
         const bannerBottom = Math.max(
-          ...[wateringTreeBanner, harvestTreeBanner]
+          ...[wateringTreeBanner, harvestTreeBanner, tourRouteDisplayControl]
             .filter((banner) => !banner.hidden)
             .map((banner) => banner.getBoundingClientRect().bottom),
           0,
@@ -2184,6 +2209,7 @@
       mapControlsObserver.observe(mapToolbar);
       mapControlsObserver.observe(wateringTreeBanner);
       mapControlsObserver.observe(harvestTreeBanner);
+      mapControlsObserver.observe(tourRouteDisplayControl);
       window.addEventListener("resize", layoutMapControls);
       compactMobileLayout.addEventListener("change", (event) => {
         if (!event.matches) closeMobileMenus();
@@ -2993,6 +3019,19 @@
         layoutMapControls();
       }
 
+      function refreshTourPresentation() {
+        const presentation = tourPresentation({
+          canWater: canWaterOrchard(currentAccess),
+          canHarvest: isEditable(),
+          wateringActive: wateringProgress != null,
+          harvestActive: harvestProgress != null,
+        });
+        wateringToggle.hidden = !presentation.wateringLauncherVisible;
+        harvestJobControls.hidden = !presentation.harvestLauncherVisible;
+        tourRouteDisplayControl.hidden = !presentation.routeDisplayVisible;
+        if (harvestProgress && !wateringPanel.hidden) setWorkflowPanel(null);
+      }
+
       function replaceRowOptions(select, rows) {
         const previous = select.value;
         const options = rows.map((row) => {
@@ -3008,15 +3047,18 @@
 
       function updateWaterSourcePin() {
         const currentTreeId = wateringProgress?.next_tree?.id;
-        const carryCapacity =
-          wateringCarryCapacity(
-            wateringProgress?.carry_capacity ?? wateringCarryCapacityInput.value,
-          ) || 2;
-        const routeWindow = !wateringShowRoute.checked
+        const carryCapacity = wateringProgress?.target === "danger"
+          ? wateringCarryCapacity(
+              wateringProgress?.carry_capacity ?? wateringCarryCapacityInput.value,
+            ) || 2
+          : 1;
+        const routeWindow = !wateringProgress
           ? { trees: [], startIndex: 0 }
-          : compactMobileLayout.matches
-            ? wateringRouteWindow(wateringRoute, currentTreeId, 4)
-            : { trees: wateringRoute, startIndex: 0 };
+          : tourRouteDisplay.value === "route"
+            ? { trees: wateringRoute, startIndex: 0 }
+            : tourRouteDisplay.value === "four"
+              ? wateringRouteWindow(wateringRoute, currentTreeId, 4)
+              : { trees: [], startIndex: 0 };
         const visibleRoute = routeWindow.trees;
         visibleRoute.forEach((tree, index) => {
           const routeIndex = routeWindow.startIndex + index;
@@ -3154,6 +3196,7 @@
           : "Trees are visited in their saved order. Dead trees are skipped.";
         wateringStart.disabled =
           wateringProgress != null ||
+          harvestProgress != null ||
           (watersDangerTrees
             ? currentDangerTreeCount === 0 || !wateringSource || carryCapacity == null
             : !wateringRow.value);
@@ -3161,6 +3204,7 @@
         wateringCancel.hidden = wateringProgress == null;
         rowOrderAutomatic.disabled = rows.length === 0;
         rowOrderManual.disabled = rows.length === 0;
+        refreshTourPresentation();
       }
 
       async function saveRowOrder(rowName, order) {
@@ -3478,7 +3522,7 @@
         { cameraMode = wateringCameraMode, cameraDuration = 700 } = {},
       ) {
         wateringCameraMode = cameraMode;
-        wateringRoute = progress?.target === "danger" ? progress.route || [] : [];
+        wateringRoute = progress?.route || [];
         if (progress?.target === "danger") {
           wateringTargetScope.value = "danger";
           const restoredCarryCapacity = wateringCarryCapacity(
@@ -3569,7 +3613,8 @@
         if (
           (target === "row" && !wateringRow.value) ||
           (target === "danger" && (!wateringSource || carryCapacity == null)) ||
-          wateringProgress
+          wateringProgress ||
+          harvestProgress
         ) return;
         wateringError.hidden = true;
         wateringStart.disabled = true;
@@ -3596,11 +3641,7 @@
             },
           );
           if (response.status === 409) {
-            throw new Error(
-              target === "danger"
-                ? "Finish the active watering run first."
-                : "Save an order for this row first, or finish the active watering run.",
-            );
+            throw new Error("Finish the active watering or harvest tour first.");
           }
           if (response.status === 404) {
             throw new Error(
@@ -3725,7 +3766,6 @@
 
         const targetsSpecies = harvestTargetScope.value === "species";
         const active = harvestProgress != null;
-        harvestJobControls.hidden = !isEditable();
         harvestSpeciesField.hidden = !targetsSpecies;
         harvestTargetScope.disabled = active;
         harvestSpecies.disabled = active;
@@ -3734,6 +3774,7 @@
         harvestCancel.disabled = !active;
         harvestStart.disabled =
           active ||
+          wateringProgress != null ||
           !harvestCandidatesLoaded ||
           harvestCandidatesError != null ||
           species.length === 0 ||
@@ -3765,6 +3806,7 @@
           harvestJobStatus.hidden = true;
           delete harvestJobStatus.dataset.progress;
         }
+        refreshTourPresentation();
       }
 
       async function loadHarvestCandidates(
@@ -3839,7 +3881,7 @@
           ? harvestRouteWindow(
               harvestRoute,
               currentTreeId,
-              harvestRouteDisplay.value,
+              tourRouteDisplay.value,
             )
           : { trees: [], startIndex: 0 };
       }
@@ -3849,8 +3891,8 @@
       ) {
         const currentTreeId = harvestProgress?.next_tree?.id;
         const window = currentHarvestRouteWindow();
-        const showsFour = harvestRouteDisplay.value === "four";
-        if (showsFour) {
+        const showsRoute = tourRouteDisplay.value !== "next";
+        if (showsRoute) {
           window.trees.forEach((tree, index) => {
             const routeIndex = window.startIndex + index;
             const marker = dangerWateringNumberMarker(
@@ -3871,17 +3913,17 @@
           .getSource("harvest-job-target")
           ?.setData(
             harvestTargetGeoJson(
-              showsFour ? null : harvestProgress?.next_tree || null,
+              showsRoute ? null : harvestProgress?.next_tree || null,
             ),
           );
         map
           .getSource("harvest-job-route")
-          ?.setData(harvestRoutePathGeoJson(showsFour ? window.trees : []));
+          ?.setData(harvestRoutePathGeoJson(showsRoute ? window.trees : []));
         map
           .getSource("harvest-job-route-numbers")
           ?.setData(
             harvestRouteNumberGeoJson(
-              showsFour ? window.trees : [],
+              showsRoute ? window.trees : [],
               currentTreeId,
               window.startIndex,
             ),
@@ -3904,7 +3946,7 @@
         );
         const padding = { top, right: 30, bottom: 30, left: 30 };
         const visibleRoute = currentHarvestRouteWindow().trees;
-        if (harvestRouteDisplay.value === "four" && visibleRoute.length > 1) {
+        if (tourRouteDisplay.value !== "next" && visibleRoute.length > 1) {
           const coordinates = visibleRoute.map(({ longitude, latitude }) => [
             longitude,
             latitude,
@@ -4012,7 +4054,7 @@
       }
 
       async function startHarvesting() {
-        if (harvestProgress) return;
+        if (harvestProgress || wateringProgress) return;
         harvestJobError.hidden = true;
         harvestStart.disabled = true;
         try {
@@ -4065,7 +4107,7 @@
             throw new Error("No trees are currently available for that harvest tour.");
           }
           if (response.status === 409) {
-            throw new Error("Finish the active harvest tour first.");
+            throw new Error("Finish the active watering or harvest tour first.");
           }
           if (response.status === 400) {
             throw new Error("The harvest date or species is invalid.");
@@ -5067,9 +5109,7 @@
         const loggedIn = session != null;
         mapToolbar.hidden = !orchardIsOpen;
         mapFilterPanel.hidden = !orchardIsOpen;
-        wateringToggle.hidden = !canWaterOrchard(currentAccess);
         rowOrderToggle.hidden = !isEditable();
-        harvestJobControls.hidden = !isEditable();
         if (!canWaterOrchard(currentAccess)) {
           cancelManualRowOrder();
           setWorkflowPanel(null);
@@ -5088,6 +5128,7 @@
         shareViewOrchard.hidden = !isEditable();
         shareWateringOrchard.hidden = !isEditable();
         shareResult.hidden = true;
+        refreshTourPresentation();
 
         if (currentAccess.mode === "read-only") {
           accessMode.textContent = "Shared orchard · view only";
@@ -5396,10 +5437,10 @@
       harvestWeeks.addEventListener("input", applyHarvestWindow);
       harvestTargetScope.addEventListener("change", refreshHarvestJobControls);
       harvestSpecies.addEventListener("change", refreshHarvestJobControls);
-      harvestRouteDisplay.addEventListener(
-        "change",
-        () => updateHarvestRoutePresentation({ refocus: true }),
-      );
+      tourRouteDisplay.addEventListener("change", () => {
+        updateWaterSourcePin();
+        updateHarvestRoutePresentation({ refocus: true });
+      });
       harvestStart.addEventListener("click", startHarvesting);
       harvestCancel.addEventListener("click", cancelHarvestRun);
       harvestCompleteTree.addEventListener("click", () =>
@@ -5442,7 +5483,6 @@
       wateringTargetScope.addEventListener("change", refreshWorkflowRows);
       wateringPlaceSource.addEventListener("click", beginWaterSourcePlacement);
       wateringCarryCapacityInput.addEventListener("input", refreshWorkflowRows);
-      wateringShowRoute.addEventListener("change", updateWaterSourcePin);
       wateringStart.addEventListener("click", startWatering);
       wateringCancel.addEventListener("click", cancelWateringRun);
       wateringDone.addEventListener("click", markCurrentTreeWatered);

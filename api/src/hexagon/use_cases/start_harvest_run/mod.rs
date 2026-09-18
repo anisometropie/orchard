@@ -43,6 +43,7 @@ pub enum HarvestRunStartError {
     NoHarvestPartsSelected,
     NoTreesCurrentlyAvailable,
     AnotherHarvestRunIsActive,
+    WateringRunIsActive,
     HarvestRunCouldNotBeStarted,
 }
 
@@ -55,6 +56,13 @@ pub fn start_harvest_run(
     let harvested_parts = normalized_harvested_parts(event.harvested_parts)
         .ok_or(HarvestRunStartError::NoHarvestPartsSelected)?;
     storage.transaction(|orchard| {
+        if orchard
+            .active_watering_run(event.orchard_id)
+            .map_err(|_| HarvestRunStartError::HarvestRunCouldNotBeStarted)?
+            .is_some()
+        {
+            return Err(HarvestRunStartError::WateringRunIsActive);
+        }
         if let Some(active_run) = orchard
             .active_harvest_run(event.orchard_id)
             .map_err(|_| HarvestRunStartError::HarvestRunCouldNotBeStarted)?

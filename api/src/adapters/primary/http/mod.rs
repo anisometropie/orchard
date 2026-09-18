@@ -521,7 +521,8 @@ where
             .map_err(|error| match error {
                 WateringRunStartError::RowNotFound => StatusCode::NOT_FOUND,
                 WateringRunStartError::RowNotOrdered
-                | WateringRunStartError::AnotherWateringRunIsActive => StatusCode::CONFLICT,
+                | WateringRunStartError::AnotherWateringRunIsActive
+                | WateringRunStartError::HarvestRunIsActive => StatusCode::CONFLICT,
                 WateringRunStartError::WateringRunCouldNotBeStarted => {
                     StatusCode::INTERNAL_SERVER_ERROR
                 }
@@ -542,7 +543,8 @@ where
                     DangerWateringRunStartError::InvalidWaterSource => StatusCode::BAD_REQUEST,
                     DangerWateringRunStartError::InvalidCarryCapacity => StatusCode::BAD_REQUEST,
                     DangerWateringRunStartError::NoDangerTrees => StatusCode::NOT_FOUND,
-                    DangerWateringRunStartError::AnotherWateringRunIsActive => StatusCode::CONFLICT,
+                    DangerWateringRunStartError::AnotherWateringRunIsActive
+                    | DangerWateringRunStartError::HarvestRunIsActive => StatusCode::CONFLICT,
                     DangerWateringRunStartError::WateringRunCouldNotBeStarted => {
                         StatusCode::INTERNAL_SERVER_ERROR
                     }
@@ -802,7 +804,8 @@ where
             HarvestRunStartError::InvalidActionDate
             | HarvestRunStartError::NoHarvestPartsSelected => StatusCode::BAD_REQUEST,
             HarvestRunStartError::NoTreesCurrentlyAvailable => StatusCode::NOT_FOUND,
-            HarvestRunStartError::AnotherHarvestRunIsActive => StatusCode::CONFLICT,
+            HarvestRunStartError::AnotherHarvestRunIsActive
+            | HarvestRunStartError::WateringRunIsActive => StatusCode::CONFLICT,
             HarvestRunStartError::HarvestRunCouldNotBeStarted => StatusCode::INTERNAL_SERVER_ERROR,
         })
     })

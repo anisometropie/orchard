@@ -3,11 +3,17 @@ use orchard_api::hexagon::models::{
     BotanicalTaxon, HarvestRunTarget, HarvestScheduleOwner, HarvestedPart, IdentificationStatus,
     NamedTaxon, Orchard, OrchardId, PlantIdentity, PlantIdentityId, Tree, TreeId,
 };
+use orchard_api::hexagon::use_cases::order_orchard_row::{
+    OrchardRowOrderRequested, RowOrder, order_orchard_row,
+};
 use orchard_api::hexagon::use_cases::replace_plant_harvest_windows::{
     AnnualHarvestWindowChanged, OrchardHarvestWindowsReplaced, replace_orchard_harvest_windows,
 };
 use orchard_api::hexagon::use_cases::start_harvest_run::{
     HarvestRunStartError, HarvestRunStartRequested, start_harvest_run,
+};
+use orchard_api::hexagon::use_cases::start_watering_run::{
+    WateringRunStartRequested, start_watering_run,
 };
 
 #[test]
@@ -313,6 +319,52 @@ fn resume_the_same_target_but_refuse_a_different_target_while_active() {
             &mut storage,
         ),
         Err(HarvestRunStartError::AnotherHarvestRunIsActive)
+    );
+}
+
+#[test]
+fn refuse_to_start_while_a_watering_tour_is_active() {
+    let mut harvest_tree = tree(PlantIdentityId(1), 5.0, true);
+    harvest_tree.row_name = Some("North".into());
+    let (mut storage, _) = harvest_storage(vec![harvest_tree]);
+    order_orchard_row(
+        OrchardRowOrderRequested {
+            orchard_id: OrchardId(7),
+            row_name: "North".into(),
+            order: RowOrder::Manual(vec![TreeId(1)]),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    start_watering_run(
+        WateringRunStartRequested {
+            orchard_id: OrchardId(7),
+            row_name: "North".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    configure_window(
+        &mut storage,
+        PlantIdentityId(1),
+        8,
+        1,
+        9,
+        30,
+        HarvestedPart::Fruit,
+    );
+
+    assert_eq!(
+        start_harvest_run(
+            HarvestRunStartRequested {
+                orchard_id: OrchardId(7),
+                target: HarvestRunTarget::All,
+                harvested_parts: vec![HarvestedPart::Fruit],
+                action_date: "2026-09-18".into(),
+            },
+            &mut storage,
+        ),
+        Err(HarvestRunStartError::WateringRunIsActive)
     );
 }
 

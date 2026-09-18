@@ -211,6 +211,30 @@ test("draw every two-can danger trip from the source and back", () => {
   });
 });
 
+test("draw one direct whole-path route for an ordered row without a source", () => {
+  const route = [
+    { longitude: -73.4909, latitude: 12.2613 },
+    { longitude: -73.4818, latitude: 12.2726 },
+  ];
+
+  assert.deepEqual(dangerWateringPathGeoJson(null, route), {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: { trip_parity: "even" },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [-73.4909, 12.2613],
+            [-73.4818, 12.2726],
+          ],
+        },
+      },
+    ],
+  });
+});
+
 test("draw danger trips using the selected arbitrary carry capacity", () => {
   const source = { longitude: -73.5, latitude: 12.25 };
   const route = [1, 2, 3, 4, 5].map((id) => ({

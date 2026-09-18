@@ -16,6 +16,19 @@ import {
 
 const indexHtml = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 
+test("offer one shared next-tree, next-four, or whole-path route display", () => {
+  assert.equal(indexHtml.match(/id="tour-route-display"/g)?.length, 1);
+  assert.equal(indexHtml.match(/id="tour-route-display-control"/g)?.length, 1);
+  assert.doesNotMatch(indexHtml, /id="watering-show-route"/);
+  assert.doesNotMatch(indexHtml, /id="harvest-route-display"/);
+  assert.match(indexHtml, /<option value="next">Next tree only<\/option>/);
+  assert.match(
+    indexHtml,
+    /<option value="four" selected>Next 4 trees<\/option>/,
+  );
+  assert.match(indexHtml, /<option value="route">Whole path<\/option>/);
+});
+
 function harvestPartFiltersDisabledAfterCompletion(harvestFilterEnabled) {
   const functionStart = indexHtml.indexOf(
     "function resetCompletedHarvestPresentation",
@@ -227,18 +240,19 @@ test("match February 29 only in a leap year", () => {
   assert.equal(availableHarvestSpecies(features, "2027-02-28").length, 0);
 });
 
-test("show only the current tree or a window of four including it", () => {
+test("show the current tree, the next four trees, or the whole tour route", () => {
   const route = [1, 2, 3, 4, 5, 6].map(routeTree);
 
   assert.deepEqual(harvestRouteWindow(route, 2, "next"), {
     trees: [route[1]],
     startIndex: 1,
   });
-  const visible = harvestRouteWindow(route, 2, "four");
-  assert.deepEqual(visible, {
+  assert.deepEqual(harvestRouteWindow(route, 2, "four"), {
     trees: route.slice(1, 5),
     startIndex: 1,
   });
+  const visible = harvestRouteWindow(route, 2, "route");
+  assert.deepEqual(visible, { trees: route, startIndex: 0 });
   assert.deepEqual(
     harvestRouteNumberGeoJson(
       visible.trees,
@@ -249,10 +263,12 @@ test("show only the current tree or a window of four including it", () => {
       current: properties.is_current,
     })),
     [
+      { number: 1, current: false },
       { number: 2, current: true },
       { number: 3, current: false },
       { number: 4, current: false },
       { number: 5, current: false },
+      { number: 6, current: false },
     ],
   );
   assert.equal(harvestTargetGeoJson(route[1]).features[0].id, 2);

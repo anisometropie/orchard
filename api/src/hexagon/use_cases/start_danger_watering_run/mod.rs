@@ -19,6 +19,7 @@ pub enum DangerWateringRunStartError {
     InvalidCarryCapacity,
     NoDangerTrees,
     AnotherWateringRunIsActive,
+    HarvestRunIsActive,
     WateringRunCouldNotBeStarted,
 }
 
@@ -43,6 +44,13 @@ pub fn start_danger_watering_run(
         return Err(DangerWateringRunStartError::InvalidCarryCapacity);
     }
     storage.transaction(|orchard| {
+        if orchard
+            .active_harvest_run(event.orchard_id)
+            .map_err(|_| DangerWateringRunStartError::WateringRunCouldNotBeStarted)?
+            .is_some()
+        {
+            return Err(DangerWateringRunStartError::HarvestRunIsActive);
+        }
         let orchard_trees = orchard
             .trees_in_orchard(event.orchard_id)
             .map_err(|_| DangerWateringRunStartError::WateringRunCouldNotBeStarted)?;

@@ -13,3 +13,16 @@ export function mapModePresentation(mode, { harvestEnabled = true } = {}) {
     harvestPinsVisible: mode === "harvest" && harvestEnabled,
   };
 }
+
+export function tourPresentation({
+  canWater = false,
+  canHarvest = false,
+  wateringActive = false,
+  harvestActive = false,
+} = {}) {
+  return {
+    wateringLauncherVisible: canWater && !harvestActive,
+    harvestLauncherVisible: canHarvest && !wateringActive,
+    routeDisplayVisible: wateringActive || harvestActive,
+  };
+}
