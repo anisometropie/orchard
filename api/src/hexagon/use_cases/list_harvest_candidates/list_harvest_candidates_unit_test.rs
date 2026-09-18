@@ -40,6 +40,7 @@ fn list_candidates_from_prior_outcomes_without_changing_the_active_run() {
         HarvestRunStartRequested {
             orchard_id: OrchardId(7),
             target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
             action_date: "2026-09-17".into(),
         },
         &mut storage,
@@ -128,13 +129,81 @@ fn list_only_living_trees_in_a_current_fruit_window_and_validate_the_date() {
     );
 }
 
+#[test]
+fn harvesting_selected_parts_leaves_unselected_parts_available() {
+    let mut storage = storage_with_trees(vec![tree(PlantIdentityId(1), 5.0, true)]);
+    replace_orchard_harvest_windows(
+        OrchardHarvestWindowsReplaced {
+            orchard_id: OrchardId(7),
+            owner: HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
+            reference_region: "Example Region, France".into(),
+            windows: vec![
+                AnnualHarvestWindowChanged {
+                    start_month: 9,
+                    start_day: 1,
+                    end_month: 9,
+                    end_day: 30,
+                    harvested_part: HarvestedPart::Flower,
+                },
+                AnnualHarvestWindowChanged {
+                    start_month: 9,
+                    start_day: 1,
+                    end_month: 9,
+                    end_day: 30,
+                    harvested_part: HarvestedPart::Fruit,
+                },
+            ],
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let started = start_harvest_run(
+        HarvestRunStartRequested {
+            orchard_id: OrchardId(7),
+            target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Flower],
+            action_date: "2026-09-17".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    record_tree_harvested(
+        TreeHarvestedEverything {
+            orchard_id: OrchardId(7),
+            harvest_run_id: started.run_id,
+            tree_id: TreeId(1),
+            action_date: "2026-09-17".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+
+    assert_eq!(
+        list_with_parts(&mut storage, "2026-09-17", vec![HarvestedPart::Flower]).unwrap(),
+        vec![]
+    );
+    assert_eq!(
+        list_with_parts(&mut storage, "2026-09-17", vec![HarvestedPart::Fruit]).unwrap(),
+        vec![candidate(1, 1)]
+    );
+}
+
 fn list(
     storage: &mut InMemoryOrchardStorage,
     action_date: &str,
 ) -> Result<Vec<HarvestCandidate>, HarvestCandidatesError> {
+    list_with_parts(storage, action_date, vec![HarvestedPart::Fruit])
+}
+
+fn list_with_parts(
+    storage: &mut InMemoryOrchardStorage,
+    action_date: &str,
+    harvested_parts: Vec<HarvestedPart>,
+) -> Result<Vec<HarvestCandidate>, HarvestCandidatesError> {
     list_harvest_candidates(
         HarvestCandidatesRequested {
             orchard_id: OrchardId(7),
+            harvested_parts,
             action_date: action_date.into(),
         },
         storage,

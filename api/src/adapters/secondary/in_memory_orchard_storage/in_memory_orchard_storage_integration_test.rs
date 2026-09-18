@@ -1,8 +1,8 @@
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
     BotanicalTaxon, HarvestDate, HarvestPeriod, HarvestRunTarget, HarvestRunTree,
-    HarvestTreeOutcome, IdentificationStatus, LegacyTreeSource, NamedTaxon, OrchardId,
-    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
+    HarvestTreeOutcome, HarvestedPart, IdentificationStatus, LegacyTreeSource, NamedTaxon,
+    OrchardId, PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
     PlantIdentityReference, Tree, TreeId,
 };
 use orchard_api::hexagon::ports::{OrchardStorage, OrchardStorageError};
@@ -108,15 +108,18 @@ fn keep_completed_and_resolved_harvest_history_immutable() {
             orchard.create_harvest_run(
                 OrchardId(1),
                 HarvestRunTarget::All,
+                &[HarvestedPart::Fruit],
                 started_on,
                 &[
                     HarvestRunTree {
                         tree_id: TreeId(1),
+                        harvested_parts: vec![HarvestedPart::Fruit],
                         period,
                         outcome: None,
                     },
                     HarvestRunTree {
                         tree_id: TreeId(2),
+                        harvested_parts: vec![HarvestedPart::Fruit],
                         period,
                         outcome: None,
                     },
@@ -207,12 +210,24 @@ fn allocate_harvest_run_ids_above_surviving_runs_after_deletion() {
     let started_on = HarvestDate::new(2026, 9, 17).unwrap();
     let first_run_id = orchard_storage
         .transaction(|orchard| {
-            orchard.create_harvest_run(OrchardId(1), HarvestRunTarget::All, started_on, &[])
+            orchard.create_harvest_run(
+                OrchardId(1),
+                HarvestRunTarget::All,
+                &[HarvestedPart::Fruit],
+                started_on,
+                &[],
+            )
         })
         .unwrap();
     let surviving_run_id = orchard_storage
         .transaction(|orchard| {
-            orchard.create_harvest_run(OrchardId(2), HarvestRunTarget::All, started_on, &[])
+            orchard.create_harvest_run(
+                OrchardId(2),
+                HarvestRunTarget::All,
+                &[HarvestedPart::Fruit],
+                started_on,
+                &[],
+            )
         })
         .unwrap();
     orchard_storage
@@ -224,7 +239,13 @@ fn allocate_harvest_run_ids_above_surviving_runs_after_deletion() {
 
     let replacement_run_id = orchard_storage
         .transaction(|orchard| {
-            orchard.create_harvest_run(OrchardId(1), HarvestRunTarget::All, started_on, &[])
+            orchard.create_harvest_run(
+                OrchardId(1),
+                HarvestRunTarget::All,
+                &[HarvestedPart::Fruit],
+                started_on,
+                &[],
+            )
         })
         .unwrap();
 
@@ -263,9 +284,11 @@ fn use_the_latest_staged_period_extension_for_outcome_validation() {
             orchard.create_harvest_run(
                 OrchardId(1),
                 HarvestRunTarget::All,
+                &[HarvestedPart::Fruit],
                 started_on,
                 &[HarvestRunTree {
                     tree_id: TreeId(1),
+                    harvested_parts: vec![HarvestedPart::Fruit],
                     period: original_period,
                     outcome: None,
                 }],

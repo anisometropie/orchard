@@ -23,6 +23,7 @@ fn restore_the_active_harvest_route() {
         HarvestRunStartRequested {
             orchard_id: OrchardId(7),
             target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
             action_date: "2026-09-17".into(),
         },
         &mut storage,

@@ -881,7 +881,8 @@ impl OrchardStorage for PostgresOrchardStorage {
         self.client
             .query(
                 "SELECT run_tree.tree_id, run_tree.window_start::text,
-                        run_tree.window_end::text, run_tree.outcome,
+                        run_tree.window_end::text, run_tree.harvested_parts,
+                        run_tree.outcome,
                         run_tree.resolved_on::text, run_tree.retry_on::text
                  FROM harvest_run_trees run_tree
                  JOIN harvest_runs run ON run.id = run_tree.harvest_run_id
@@ -900,12 +901,16 @@ impl OrchardStorage for PostgresOrchardStorage {
                     .map_err(|_| OrchardStorageError::HarvestHistoryCouldNotBeRead)?;
                 let period_end = parse_stored_harvest_date(&row.get::<_, String>(2))
                     .map_err(|_| OrchardStorageError::HarvestHistoryCouldNotBeRead)?;
+                let harvested_parts =
+                    harvested_parts_from_stored_values(row.get::<_, Vec<String>>(3))
+                        .map_err(|_| OrchardStorageError::HarvestHistoryCouldNotBeRead)?;
                 let outcome =
-                    harvest_tree_outcome_from_stored_values(row.get(3), row.get(4), row.get(5))
+                    harvest_tree_outcome_from_stored_values(row.get(4), row.get(5), row.get(6))
                         .map_err(|_| OrchardStorageError::HarvestHistoryCouldNotBeRead)?
                         .ok_or(OrchardStorageError::HarvestHistoryCouldNotBeRead)?;
                 Ok(HarvestTreeOutcomeRecord {
                     tree_id,
+                    harvested_parts,
                     period: HarvestPeriod {
                         start: period_start,
                         end: period_end,
@@ -926,7 +931,7 @@ impl OrchardStorage for PostgresOrchardStorage {
             .client
             .query_opt(
                 "SELECT id, orchard_id, target_kind, plant_identity_id,
-                        started_on::text, completed_at IS NOT NULL
+                        harvested_parts, started_on::text, completed_at IS NOT NULL
                  FROM harvest_runs
                  WHERE orchard_id = $1 AND completed_at IS NULL",
                 &[&orchard_id],
@@ -946,7 +951,7 @@ impl OrchardStorage for PostgresOrchardStorage {
             .client
             .query_opt(
                 "SELECT id, orchard_id, target_kind, plant_identity_id,
-                        started_on::text, completed_at IS NOT NULL
+                        harvested_parts, started_on::text, completed_at IS NOT NULL
                  FROM harvest_runs
                  WHERE id = $1",
                 &[&harvest_run_id],
@@ -960,6 +965,7 @@ impl OrchardStorage for PostgresOrchardStorage {
         &mut self,
         orchard_id: OrchardId,
         target: HarvestRunTarget,
+        harvested_parts: &[HarvestedPart],
         started_on: HarvestDate,
         ordered_trees: &[HarvestRunTree],
     ) -> Result<HarvestRunId, OrchardStorageError> {
@@ -975,15 +981,25 @@ impl OrchardStorage for PostgresOrchardStorage {
                 ),
             ),
         };
+        let harvested_parts = harvested_parts
+            .iter()
+            .map(|part| part.as_str())
+            .collect::<Vec<_>>();
         let started_on = started_on.to_string();
         let stored_run_id = self
             .client
             .query_one(
                 "INSERT INTO harvest_runs (
-                    orchard_id, target_kind, plant_identity_id, started_on
-                 ) VALUES ($1, $2, $3, $4::text::date)
+                    orchard_id, target_kind, plant_identity_id, harvested_parts, started_on
+                 ) VALUES ($1, $2, $3, $4, $5::text::date)
                  RETURNING id",
-                &[&orchard_id, &target_kind, &plant_identity_id, &started_on],
+                &[
+                    &orchard_id,
+                    &target_kind,
+                    &plant_identity_id,
+                    &harvested_parts,
+                    &started_on,
+                ],
             )
             .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeCreated)?
             .get::<_, i64>(0);
@@ -994,15 +1010,21 @@ impl OrchardStorage for PostgresOrchardStorage {
                 .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeCreated)?;
             let window_start = tree.period.start.to_string();
             let window_end = tree.period.end.to_string();
+            let tree_harvested_parts = tree
+                .harvested_parts
+                .iter()
+                .map(|part| part.as_str())
+                .collect::<Vec<_>>();
             let (outcome, resolved_on, retry_on) = harvest_tree_outcome_columns(tree.outcome);
             self.client
                 .execute(
                     "INSERT INTO harvest_run_trees (
                         harvest_run_id, orchard_id, tree_id, route_rank,
-                        window_start, window_end, outcome, resolved_on, retry_on
+                        window_start, window_end, harvested_parts,
+                        outcome, resolved_on, retry_on
                      ) VALUES (
                         $1, $2, $3, $4, $5::text::date, $6::text::date,
-                        $7, $8::text::date, $9::text::date
+                        $7, $8, $9::text::date, $10::text::date
                      )",
                     &[
                         &stored_run_id,
@@ -1011,6 +1033,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                         &route_rank,
                         &window_start,
                         &window_end,
+                        &tree_harvested_parts,
                         &outcome,
                         &resolved_on,
                         &retry_on,
@@ -1567,7 +1590,7 @@ fn harvest_run_from_row(client: &mut Client, row: &Row) -> Result<HarvestRun, Or
     let ordered_trees = client
         .query(
             "SELECT tree_id, window_start::text, window_end::text,
-                    outcome, resolved_on::text, retry_on::text
+                    harvested_parts, outcome, resolved_on::text, retry_on::text
              FROM harvest_run_trees
              WHERE harvest_run_id = $1
              ORDER BY route_rank",
@@ -1583,11 +1606,15 @@ fn harvest_run_from_row(client: &mut Client, row: &Row) -> Result<HarvestRun, Or
                 .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)?;
             let end = parse_stored_harvest_date(&entry.get::<_, String>(2))
                 .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)?;
+            let harvested_parts =
+                harvested_parts_from_stored_values(entry.get::<_, Vec<String>>(3))
+                    .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)?;
             let outcome =
-                harvest_tree_outcome_from_stored_values(entry.get(3), entry.get(4), entry.get(5))
+                harvest_tree_outcome_from_stored_values(entry.get(4), entry.get(5), entry.get(6))
                     .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)?;
             Ok(HarvestRunTree {
                 tree_id,
+                harvested_parts,
                 period: HarvestPeriod { start, end },
                 outcome,
             })
@@ -1611,10 +1638,12 @@ fn harvest_run_from_row(client: &mut Client, row: &Row) -> Result<HarvestRun, Or
                 .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)?,
         ),
         target,
-        started_on: parse_stored_harvest_date(&row.get::<_, String>(4))
+        harvested_parts: harvested_parts_from_stored_values(row.get::<_, Vec<String>>(4))
+            .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)?,
+        started_on: parse_stored_harvest_date(&row.get::<_, String>(5))
             .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)?,
         ordered_trees,
-        completed: row.get(5),
+        completed: row.get(6),
     })
 }
 
@@ -1635,6 +1664,27 @@ fn harvest_tree_outcome_columns(
             Some(retry_on.to_string()),
         ),
     }
+}
+
+fn harvested_parts_from_stored_values(values: Vec<String>) -> Result<Vec<HarvestedPart>, ()> {
+    let mut harvested_parts = values
+        .into_iter()
+        .map(|value| match value.as_str() {
+            "cone" => Ok(HarvestedPart::Cone),
+            "flower" => Ok(HarvestedPart::Flower),
+            "fruit" => Ok(HarvestedPart::Fruit),
+            "leaf" => Ok(HarvestedPart::Leaf),
+            "nut" => Ok(HarvestedPart::Nut),
+            "pod" => Ok(HarvestedPart::Pod),
+            "seed" => Ok(HarvestedPart::Seed),
+            _ => Err(()),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    harvested_parts.sort_unstable();
+    harvested_parts.dedup();
+    (!harvested_parts.is_empty())
+        .then_some(harvested_parts)
+        .ok_or(())
 }
 
 fn harvest_tree_outcome_from_stored_values(

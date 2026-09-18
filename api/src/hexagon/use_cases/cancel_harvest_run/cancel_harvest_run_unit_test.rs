@@ -74,6 +74,7 @@ fn start(
         HarvestRunStartRequested {
             orchard_id: OrchardId(7),
             target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
             action_date: "2026-09-17".into(),
         },
         storage,

@@ -703,12 +703,22 @@ enum RequestedHarvestTarget {
 struct StartHarvestRunRequest {
     target: RequestedHarvestTarget,
     plant_identity_id: Option<u64>,
+    #[serde(default = "default_harvested_parts")]
+    harvested_parts: Vec<HarvestedPart>,
     on_date: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HarvestCandidatesQuery {
+    on_date: String,
+    #[serde(default = "default_harvested_parts_query")]
+    harvested_parts: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActiveHarvestRunQuery {
     on_date: String,
 }
 
@@ -722,6 +732,8 @@ where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
     let session_token = owner_session_token(&headers)?;
+    let harvested_parts =
+        parse_harvested_parts(&query.harvested_parts).ok_or(StatusCode::BAD_REQUEST)?;
     tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
@@ -729,6 +741,7 @@ where
         list_harvest_candidates(
             HarvestCandidatesRequested {
                 orchard_id,
+                harvested_parts,
                 action_date: query.on_date,
             },
             &mut *storage,
@@ -743,6 +756,7 @@ where
         })
         .map_err(|error| match error {
             HarvestCandidatesError::InvalidActionDate => StatusCode::BAD_REQUEST,
+            HarvestCandidatesError::NoHarvestPartsSelected => StatusCode::BAD_REQUEST,
             HarvestCandidatesError::HarvestCandidatesCouldNotBeListed => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -778,14 +792,16 @@ where
             HarvestRunStartRequested {
                 orchard_id,
                 target,
+                harvested_parts: request.harvested_parts,
                 action_date: request.on_date,
             },
             &mut *storage,
         )
         .map(|progress| Json(harvest_progress_json(progress)))
         .map_err(|error| match error {
-            HarvestRunStartError::InvalidActionDate => StatusCode::BAD_REQUEST,
-            HarvestRunStartError::NoTreesCurrentlyInFruit => StatusCode::NOT_FOUND,
+            HarvestRunStartError::InvalidActionDate
+            | HarvestRunStartError::NoHarvestPartsSelected => StatusCode::BAD_REQUEST,
+            HarvestRunStartError::NoTreesCurrentlyAvailable => StatusCode::NOT_FOUND,
             HarvestRunStartError::AnotherHarvestRunIsActive => StatusCode::CONFLICT,
             HarvestRunStartError::HarvestRunCouldNotBeStarted => StatusCode::INTERNAL_SERVER_ERROR,
         })
@@ -797,7 +813,7 @@ where
 async fn active_harvest_run_handler<U>(
     State(storage): State<Arc<Mutex<U>>>,
     Path(orchard_id): Path<u64>,
-    Query(query): Query<HarvestCandidatesQuery>,
+    Query(query): Query<ActiveHarvestRunQuery>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode>
 where
@@ -882,7 +898,7 @@ where
                 }
                 TreeHarvestedEverythingError::HarvestWindowChanged => harvest_conflict_response(
                     "harvest_window_changed",
-                    "The live fruit harvest window changed after this tour started.",
+                    "The live harvest window changed after this tour started.",
                 ),
                 TreeHarvestedEverythingError::TreeCouldNotBeRecorded => {
                     StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -974,7 +990,7 @@ where
                 ),
                 HarvestTreeDeferralError::HarvestWindowChanged => harvest_conflict_response(
                     "harvest_window_changed",
-                    "The live fruit harvest window changed after this tour started.",
+                    "The live harvest window changed after this tour started.",
                 ),
                 HarvestTreeDeferralError::WindowExtensionRequired(proposal) => {
                     let retry_on = HarvestDate::parse_iso(&request.action_date)
@@ -1028,6 +1044,9 @@ fn harvest_progress_json(progress: HarvestProgress) -> Value {
         "target": target,
         "target_label": target_label,
         "plant_identity_id": plant_identity_id,
+        "harvested_parts": progress.harvested_parts.into_iter()
+            .map(HarvestedPart::as_str)
+            .collect::<Vec<_>>(),
         "route": progress.route.into_iter().map(harvest_tree_json).collect::<Vec<_>>(),
         "handled_tree_count": progress.handled_tree_count,
         "harvested_tree_count": progress.harvested_tree_count,
@@ -1042,12 +1061,42 @@ fn harvest_tree_json(tree: crate::hexagon::use_cases::start_harvest_run::Harvest
         "id": tree.id.0,
         "name": tree.name,
         "plant_identity_id": tree.plant_identity_id.0,
+        "harvested_parts": tree.harvested_parts.into_iter()
+            .map(HarvestedPart::as_str)
+            .collect::<Vec<_>>(),
         "longitude": tree.longitude,
         "latitude": tree.latitude,
         "route_rank": tree.route_rank,
         "window_start": tree.period.start.to_string(),
         "window_end": tree.period.end.to_string(),
     })
+}
+
+fn parse_harvested_parts(value: &str) -> Option<Vec<HarvestedPart>> {
+    let mut parts = value
+        .split(',')
+        .map(|part| match part {
+            "cone" => Some(HarvestedPart::Cone),
+            "flower" => Some(HarvestedPart::Flower),
+            "fruit" => Some(HarvestedPart::Fruit),
+            "leaf" => Some(HarvestedPart::Leaf),
+            "nut" => Some(HarvestedPart::Nut),
+            "pod" => Some(HarvestedPart::Pod),
+            "seed" => Some(HarvestedPart::Seed),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    parts.sort_unstable();
+    parts.dedup();
+    (!parts.is_empty()).then_some(parts)
+}
+
+fn default_harvested_parts() -> Vec<HarvestedPart> {
+    vec![HarvestedPart::Fruit]
+}
+
+fn default_harvested_parts_query() -> String {
+    HarvestedPart::Fruit.as_str().into()
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {

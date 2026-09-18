@@ -279,14 +279,17 @@ fn persist_resumable_harvest_progress_history_and_exact_window_extension() {
         start: HarvestDate::new(2026, 9, 1).unwrap(),
         end: HarvestDate::new(2026, 9, 24).unwrap(),
     };
+    let selected_parts = vec![HarvestedPart::Cone, HarvestedPart::Flower];
     let mut ordered_trees = vec![
         HarvestRunTree {
             tree_id: TreeId(2),
+            harvested_parts: selected_parts.clone(),
             period: original_period,
             outcome: None,
         },
         HarvestRunTree {
             tree_id: TreeId(1),
+            harvested_parts: selected_parts.clone(),
             period: original_period,
             outcome: None,
         },
@@ -295,7 +298,13 @@ fn persist_resumable_harvest_progress_history_and_exact_window_extension() {
 
     let run_id = storage
         .transaction(|orchard| {
-            orchard.create_harvest_run(OrchardId(1), target, started_on, &ordered_trees)
+            orchard.create_harvest_run(
+                OrchardId(1),
+                target,
+                &selected_parts,
+                started_on,
+                &ordered_trees,
+            )
         })
         .unwrap();
     assert_eq!(
@@ -304,6 +313,7 @@ fn persist_resumable_harvest_progress_history_and_exact_window_extension() {
             id: run_id,
             orchard_id: OrchardId(1),
             target,
+            harvested_parts: selected_parts.clone(),
             started_on,
             ordered_trees: ordered_trees.clone(),
             completed: false,
@@ -359,6 +369,7 @@ fn persist_resumable_harvest_progress_history_and_exact_window_extension() {
         vec![
             HarvestTreeOutcomeRecord {
                 tree_id: TreeId(2),
+                harvested_parts: selected_parts.clone(),
                 period: HarvestPeriod {
                     end: extended_end,
                     ..original_period
@@ -367,6 +378,7 @@ fn persist_resumable_harvest_progress_history_and_exact_window_extension() {
             },
             HarvestTreeOutcomeRecord {
                 tree_id: TreeId(1),
+                harvested_parts: selected_parts,
                 period: original_period,
                 outcome: harvested,
             },
@@ -445,9 +457,11 @@ fn persist_resumable_harvest_progress_history_and_exact_window_extension() {
             orchard.create_harvest_run(
                 OrchardId(1),
                 HarvestRunTarget::All,
+                &[HarvestedPart::Fruit],
                 HarvestDate::new(2026, 10, 2).unwrap(),
                 &[HarvestRunTree {
                     tree_id: TreeId(1),
+                    harvested_parts: vec![HarvestedPart::Fruit],
                     period: HarvestPeriod {
                         start: HarvestDate::new(2026, 10, 1).unwrap(),
                         end: HarvestDate::new(2026, 10, 15).unwrap(),
@@ -502,9 +516,11 @@ fn reject_a_harvest_run_tree_from_another_orchard() {
             orchard.create_harvest_run(
                 OrchardId(1),
                 HarvestRunTarget::All,
+                &[HarvestedPart::Fruit],
                 HarvestDate::new(2026, 9, 17).unwrap(),
                 &[HarvestRunTree {
                     tree_id: TreeId(1),
+                    harvested_parts: vec![HarvestedPart::Fruit],
                     period,
                     outcome: None,
                 }],
@@ -555,15 +571,18 @@ fn keep_completed_and_resolved_harvest_history_immutable_in_postgres() {
             orchard.create_harvest_run(
                 OrchardId(1),
                 HarvestRunTarget::All,
+                &[HarvestedPart::Fruit],
                 started_on,
                 &[
                     HarvestRunTree {
                         tree_id: TreeId(1),
+                        harvested_parts: vec![HarvestedPart::Fruit],
                         period,
                         outcome: None,
                     },
                     HarvestRunTree {
                         tree_id: TreeId(2),
+                        harvested_parts: vec![HarvestedPart::Fruit],
                         period,
                         outcome: None,
                     },
@@ -1923,6 +1942,25 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/020_add_harvest_runs.sql"
+            ))
+            .unwrap();
+    }
+    let part_scoped_harvest_runs_were_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'harvest_runs'
+                  AND column_name = 'harvested_parts'
+             )",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !part_scoped_harvest_runs_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/021_scope_harvest_runs_to_parts.sql"
             ))
             .unwrap();
     }

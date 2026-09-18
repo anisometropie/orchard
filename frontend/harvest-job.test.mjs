@@ -22,13 +22,27 @@ test("build all-species and one-species harvest start requests", () => {
   assert.deepEqual(harvestStartRequest("all", null, onDate), {
     target: "all",
     plant_identity_id: null,
+    harvested_parts: ["fruit"],
     on_date: "2026-09-17",
   });
   assert.deepEqual(harvestStartRequest("species", "12", onDate), {
     target: "species",
     plant_identity_id: 12,
+    harvested_parts: ["fruit"],
     on_date: "2026-09-17",
   });
+});
+
+test("include the selected harvested parts in a harvest start request", () => {
+  assert.deepEqual(
+    harvestStartRequest("all", null, "2026-09-17", ["cone", "flower"]),
+    {
+      target: "all",
+      plant_identity_id: null,
+      harvested_parts: ["cone", "flower"],
+      on_date: "2026-09-17",
+    },
+  );
 });
 
 test("explain harvest conflicts that require a fresh tour", () => {
@@ -38,7 +52,7 @@ test("explain harvest conflicts that require a fresh tour", () => {
   );
   assert.equal(
     harvestConflictMessage("harvest_window_changed"),
-    "This tree's fruit harvest window changed after the tour started. Cancel this tour and start a new one.",
+    "This tree's harvest window changed after the tour started. Cancel this tour and start a new one.",
   );
   assert.equal(
     harvestConflictMessage("tree_is_not_current"),
@@ -72,6 +86,31 @@ test("list species with a living tree in a fruit window on the exact date", () =
       treeCount: 2,
     },
   ]);
+});
+
+test("list species only for the selected harvested parts", () => {
+  const features = [
+    tree(1, 10, "Pine", "Pinus", [
+      { start: "09-10", end: "09-20", harvested_part: "cone" },
+      { start: "09-10", end: "09-20", harvested_part: "fruit" },
+    ]),
+    tree(2, 20, "Lime", "Tilia", [
+      { start: "09-10", end: "09-20", harvested_part: "flower" },
+    ]),
+    tree(3, 30, "Apple", "Malus", [
+      { start: "09-10", end: "09-20", harvested_part: "fruit" },
+    ]),
+  ];
+
+  assert.deepEqual(
+    availableHarvestSpecies(
+      features,
+      "2026-09-17",
+      null,
+      ["cone", "flower"],
+    ).map(({ plantIdentityId }) => plantIdentityId),
+    [20, 10],
+  );
 });
 
 test("list species from only the persisted eligible harvest trees", () => {

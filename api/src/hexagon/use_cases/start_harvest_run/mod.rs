@@ -1,13 +1,14 @@
 use crate::hexagon::models::{
     EligibleHarvestTree, HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget,
-    HarvestRunTree, HarvestTreeOutcome, OrchardId, OrchardTree, PlantIdentityId, TreeId,
-    eligible_harvest_trees,
+    HarvestRunTree, HarvestTreeOutcome, HarvestedPart, OrchardId, OrchardTree, PlantIdentityId,
+    TreeId, eligible_harvest_trees, normalized_harvested_parts,
 };
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
 pub struct HarvestRunStartRequested {
     pub orchard_id: OrchardId,
     pub target: HarvestRunTarget,
+    pub harvested_parts: Vec<HarvestedPart>,
     pub action_date: String,
 }
 
@@ -16,6 +17,7 @@ pub struct HarvestTree {
     pub id: TreeId,
     pub name: String,
     pub plant_identity_id: PlantIdentityId,
+    pub harvested_parts: Vec<HarvestedPart>,
     pub longitude: f64,
     pub latitude: f64,
     pub route_rank: u32,
@@ -26,6 +28,7 @@ pub struct HarvestTree {
 pub struct HarvestProgress {
     pub run_id: HarvestRunId,
     pub target: HarvestRunTarget,
+    pub harvested_parts: Vec<HarvestedPart>,
     pub route: Vec<HarvestTree>,
     pub handled_tree_count: usize,
     pub harvested_tree_count: usize,
@@ -37,7 +40,8 @@ pub struct HarvestProgress {
 #[derive(Debug, PartialEq)]
 pub enum HarvestRunStartError {
     InvalidActionDate,
-    NoTreesCurrentlyInFruit,
+    NoHarvestPartsSelected,
+    NoTreesCurrentlyAvailable,
     AnotherHarvestRunIsActive,
     HarvestRunCouldNotBeStarted,
 }
@@ -48,12 +52,14 @@ pub fn start_harvest_run(
 ) -> Result<HarvestProgress, HarvestRunStartError> {
     let action_date = HarvestDate::parse_iso(&event.action_date)
         .ok_or(HarvestRunStartError::InvalidActionDate)?;
+    let harvested_parts = normalized_harvested_parts(event.harvested_parts)
+        .ok_or(HarvestRunStartError::NoHarvestPartsSelected)?;
     storage.transaction(|orchard| {
         if let Some(active_run) = orchard
             .active_harvest_run(event.orchard_id)
             .map_err(|_| HarvestRunStartError::HarvestRunCouldNotBeStarted)?
         {
-            if active_run.target != event.target {
+            if active_run.target != event.target || active_run.harvested_parts != harvested_parts {
                 return Err(HarvestRunStartError::AnotherHarvestRunIsActive);
             }
             let orchard_trees = orchard
@@ -69,30 +75,42 @@ pub fn start_harvest_run(
         let previous_outcomes = orchard
             .harvest_tree_outcomes(event.orchard_id)
             .map_err(|_| HarvestRunStartError::HarvestRunCouldNotBeStarted)?;
-        let eligible_trees =
-            eligible_harvest_trees(&orchard_trees, &previous_outcomes, action_date)
-                .into_iter()
-                .filter(|candidate| target_includes(event.target, candidate.tree))
-                .collect::<Vec<_>>();
+        let eligible_trees = eligible_harvest_trees(
+            &orchard_trees,
+            &previous_outcomes,
+            action_date,
+            &harvested_parts,
+        )
+        .into_iter()
+        .filter(|candidate| target_includes(event.target, candidate.tree))
+        .collect::<Vec<_>>();
         if eligible_trees.is_empty() {
-            return Err(HarvestRunStartError::NoTreesCurrentlyInFruit);
+            return Err(HarvestRunStartError::NoTreesCurrentlyAvailable);
         }
 
         let ordered_trees = nearest_neighbour_route(eligible_trees)
             .into_iter()
             .map(|candidate| HarvestRunTree {
                 tree_id: candidate.tree.id,
+                harvested_parts: candidate.harvested_parts,
                 period: candidate.period,
                 outcome: None,
             })
             .collect::<Vec<_>>();
         let run_id = orchard
-            .create_harvest_run(event.orchard_id, event.target, action_date, &ordered_trees)
+            .create_harvest_run(
+                event.orchard_id,
+                event.target,
+                &harvested_parts,
+                action_date,
+                &ordered_trees,
+            )
             .map_err(|_| HarvestRunStartError::HarvestRunCouldNotBeStarted)?;
         let run = HarvestRun {
             id: run_id,
             orchard_id: event.orchard_id,
             target: event.target,
+            harvested_parts,
             started_on: action_date,
             ordered_trees,
             completed: false,
@@ -163,6 +181,7 @@ pub(crate) fn harvest_progress(
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| tree.plant_identity.common_name.clone()),
                 plant_identity_id: tree.tree.plant_identity_id,
+                harvested_parts: run_tree.harvested_parts.clone(),
                 longitude: tree.tree.longitude,
                 latitude: tree.tree.latitude,
                 route_rank: u32::try_from(index + 1).ok()?,
@@ -195,6 +214,7 @@ pub(crate) fn harvest_progress(
     Some(HarvestProgress {
         run_id: run.id,
         target: run.target,
+        harvested_parts: run.harvested_parts.clone(),
         route,
         handled_tree_count: harvested_tree_count + deferred_tree_count,
         harvested_tree_count,

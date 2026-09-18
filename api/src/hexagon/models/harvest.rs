@@ -119,6 +119,7 @@ pub enum HarvestTreeOutcome {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HarvestRunTree {
     pub tree_id: TreeId,
+    pub harvested_parts: Vec<HarvestedPart>,
     pub period: HarvestPeriod,
     pub outcome: Option<HarvestTreeOutcome>,
 }
@@ -128,14 +129,16 @@ pub struct HarvestRun {
     pub id: HarvestRunId,
     pub orchard_id: OrchardId,
     pub target: HarvestRunTarget,
+    pub harvested_parts: Vec<HarvestedPart>,
     pub started_on: HarvestDate,
     pub ordered_trees: Vec<HarvestRunTree>,
     pub completed: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HarvestTreeOutcomeRecord {
     pub tree_id: TreeId,
+    pub harvested_parts: Vec<HarvestedPart>,
     pub period: HarvestPeriod,
     pub outcome: HarvestTreeOutcome,
 }
@@ -149,13 +152,23 @@ pub struct HarvestWindowExtension {
 
 pub(crate) struct EligibleHarvestTree<'a> {
     pub tree: &'a OrchardTree,
+    pub harvested_parts: Vec<HarvestedPart>,
     pub period: HarvestPeriod,
+}
+
+pub(crate) fn normalized_harvested_parts(
+    mut harvested_parts: Vec<HarvestedPart>,
+) -> Option<Vec<HarvestedPart>> {
+    harvested_parts.sort_unstable();
+    harvested_parts.dedup();
+    (!harvested_parts.is_empty()).then_some(harvested_parts)
 }
 
 pub(crate) fn eligible_harvest_trees<'a>(
     orchard_trees: &'a [OrchardTree],
     outcomes: &[HarvestTreeOutcomeRecord],
     action_date: HarvestDate,
+    selected_parts: &[HarvestedPart],
 ) -> Vec<EligibleHarvestTree<'a>> {
     orchard_trees
         .iter()
@@ -163,16 +176,39 @@ pub(crate) fn eligible_harvest_trees<'a>(
             if !tree.tree.is_alive {
                 return None;
             }
-            let period = current_contiguous_fruit_period(&tree.harvest_windows, action_date)?;
-            let is_suppressed = outcomes.iter().any(|record| {
-                record.tree_id == tree.id
-                    && periods_overlap(record.period, period)
-                    && match record.outcome {
-                        HarvestTreeOutcome::HarvestedEverything { .. } => true,
-                        HarvestTreeOutcome::Deferred { retry_on, .. } => action_date < retry_on,
-                    }
-            });
-            (!is_suppressed).then_some(EligibleHarvestTree { tree, period })
+            let available_parts = selected_parts
+                .iter()
+                .filter_map(|harvested_part| {
+                    current_contiguous_harvest_period(
+                        &tree.harvest_windows,
+                        *harvested_part,
+                        action_date,
+                    )
+                    .map(|period| (*harvested_part, period))
+                })
+                .filter(|(harvested_part, period)| {
+                    !outcomes.iter().any(|record| {
+                        record.tree_id == tree.id
+                            && record.harvested_parts.contains(harvested_part)
+                            && periods_overlap(record.period, *period)
+                            && match record.outcome {
+                                HarvestTreeOutcome::HarvestedEverything { .. } => true,
+                                HarvestTreeOutcome::Deferred { retry_on, .. } => {
+                                    action_date < retry_on
+                                }
+                            }
+                    })
+                })
+                .collect::<Vec<_>>();
+            let period = combined_period(&available_parts)?;
+            Some(EligibleHarvestTree {
+                tree,
+                harvested_parts: available_parts
+                    .into_iter()
+                    .map(|(harvested_part, _)| harvested_part)
+                    .collect(),
+                period,
+            })
         })
         .collect()
 }
@@ -181,13 +217,14 @@ fn periods_overlap(left: HarvestPeriod, right: HarvestPeriod) -> bool {
     left.start <= right.end && right.start <= left.end
 }
 
-pub(crate) fn current_contiguous_fruit_period(
+pub(crate) fn current_contiguous_harvest_period(
     windows: &[AnnualHarvestWindow],
+    harvested_part: HarvestedPart,
     action_date: HarvestDate,
 ) -> Option<HarvestPeriod> {
     let mut periods = windows
         .iter()
-        .filter(|window| window.harvested_part == HarvestedPart::Fruit)
+        .filter(|window| window.harvested_part == harvested_part)
         .flat_map(|window| {
             (-1..=1).filter_map(move |offset| {
                 action_date
@@ -220,6 +257,43 @@ pub(crate) fn current_contiguous_fruit_period(
     contiguous
         .into_iter()
         .find(|period| period.start <= action_date && action_date <= period.end)
+}
+
+pub(crate) fn current_harvest_parts_and_period(
+    windows: &[AnnualHarvestWindow],
+    harvested_parts: &[HarvestedPart],
+    action_date: HarvestDate,
+) -> Option<(Vec<HarvestedPart>, HarvestPeriod)> {
+    let available_parts = current_harvest_part_periods(windows, harvested_parts, action_date);
+    let period = combined_period(&available_parts)?;
+    Some((
+        available_parts
+            .into_iter()
+            .map(|(harvested_part, _)| harvested_part)
+            .collect(),
+        period,
+    ))
+}
+
+pub(crate) fn current_harvest_part_periods(
+    windows: &[AnnualHarvestWindow],
+    harvested_parts: &[HarvestedPart],
+    action_date: HarvestDate,
+) -> Vec<(HarvestedPart, HarvestPeriod)> {
+    harvested_parts
+        .iter()
+        .filter_map(|harvested_part| {
+            current_contiguous_harvest_period(windows, *harvested_part, action_date)
+                .map(|period| (*harvested_part, period))
+        })
+        .collect()
+}
+
+fn combined_period(parts: &[(HarvestedPart, HarvestPeriod)]) -> Option<HarvestPeriod> {
+    Some(HarvestPeriod {
+        start: parts.iter().map(|(_, period)| period.start).min()?,
+        end: parts.iter().map(|(_, period)| period.end).max()?,
+    })
 }
 
 pub(crate) fn concrete_harvest_period(

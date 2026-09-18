@@ -8,8 +8,8 @@ mod tree_photo;
 mod watering;
 
 pub(crate) use harvest::{
-    EligibleHarvestTree, concrete_harvest_period, current_contiguous_fruit_period,
-    eligible_harvest_trees,
+    EligibleHarvestTree, concrete_harvest_period, current_harvest_part_periods,
+    current_harvest_parts_and_period, eligible_harvest_trees, normalized_harvested_parts,
 };
 pub use harvest::{
     HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree,

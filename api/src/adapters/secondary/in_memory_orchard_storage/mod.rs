@@ -4,10 +4,10 @@ use crate::hexagon::models::{
     AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, GeoPoint,
     HarvestDataOrigin, HarvestDate, HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree,
     HarvestScheduleOwner, HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension,
-    MapConfiguration, Orchard, OrchardId, OrchardShareAccess, OrchardSharePermission, OrchardTree,
-    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
-    PlantIdentityReference, Tree, TreeId, TreePhoto, TreePhotoVariant, User, UserId, WateringRun,
-    WateringRunId, WateringRunTarget,
+    HarvestedPart, MapConfiguration, Orchard, OrchardId, OrchardShareAccess,
+    OrchardSharePermission, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
+    PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId, TreePhoto,
+    TreePhotoVariant, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -1258,6 +1258,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
                 run.ordered_trees.iter().filter_map(|tree| {
                     tree.outcome.map(|outcome| HarvestTreeOutcomeRecord {
                         tree_id: tree.tree_id,
+                        harvested_parts: tree.harvested_parts.clone(),
                         period: tree.period,
                         outcome,
                     })
@@ -1298,6 +1299,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
         &mut self,
         orchard_id: OrchardId,
         target: HarvestRunTarget,
+        harvested_parts: &[HarvestedPart],
         started_on: HarvestDate,
         ordered_trees: &[HarvestRunTree],
     ) -> Result<HarvestRunId, OrchardStorageError> {
@@ -1343,6 +1345,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
             id: run_id,
             orchard_id,
             target,
+            harvested_parts: harvested_parts.to_vec(),
             started_on,
             ordered_trees: ordered_trees.to_vec(),
             completed: false,
@@ -1467,21 +1470,33 @@ impl OrchardStorage for InMemoryOrchardStorage {
         orchard_id: OrchardId,
         extension: &HarvestWindowExtension,
     ) -> Result<bool, OrchardStorageError> {
+        let staged_windows = self.transaction.as_ref().and_then(|transaction| {
+            transaction
+                .staged_orchard_harvest_schedule_replacements
+                .iter()
+                .rev()
+                .find(|(stored_orchard_id, owner, _)| {
+                    *stored_orchard_id == orchard_id && *owner == extension.owner
+                })
+                .map(|(_, _, windows)| windows.clone())
+        });
         let orchard = self.orchard.lock().unwrap();
-        let schedule = orchard
-            .orchard_harvest_schedules
-            .iter()
-            .find(|(stored_orchard_id, owner, _)| {
-                *stored_orchard_id == orchard_id && *owner == extension.owner
-            })
-            .map(|(_, _, windows)| windows)
-            .or_else(|| {
-                orchard
-                    .harvest_schedules
-                    .iter()
-                    .find(|(owner, _)| *owner == extension.owner)
-                    .map(|(_, windows)| windows)
-            });
+        let schedule = staged_windows.as_ref().or_else(|| {
+            orchard
+                .orchard_harvest_schedules
+                .iter()
+                .find(|(stored_orchard_id, owner, _)| {
+                    *stored_orchard_id == orchard_id && *owner == extension.owner
+                })
+                .map(|(_, _, windows)| windows)
+                .or_else(|| {
+                    orchard
+                        .harvest_schedules
+                        .iter()
+                        .find(|(owner, _)| *owner == extension.owner)
+                        .map(|(_, windows)| windows)
+                })
+        });
         let Some(mut windows) = schedule.cloned() else {
             return Ok(false);
         };

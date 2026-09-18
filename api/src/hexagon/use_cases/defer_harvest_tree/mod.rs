@@ -1,7 +1,7 @@
 use crate::hexagon::models::{
     HarvestDate, HarvestRunId, HarvestScheduleOwner, HarvestTreeOutcome, HarvestWindowExtension,
     HarvestedPart, OrchardId, OrchardTree, TreeId, concrete_harvest_period,
-    current_contiguous_fruit_period,
+    current_harvest_part_periods, current_harvest_parts_and_period,
 };
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
@@ -60,6 +60,7 @@ pub fn defer_harvest_tree(
         }
         let current_index = current_index.expect("the current harvest tree was checked");
         let snapshot_period = run.ordered_trees[current_index].period;
+        let snapshot_parts = run.ordered_trees[current_index].harvested_parts.clone();
         if deferred_on < run.started_on || deferred_on < snapshot_period.start {
             return Err(HarvestTreeDeferralError::ActionDateOutsideRunPeriod);
         }
@@ -70,58 +71,85 @@ pub fn defer_harvest_tree(
             .iter()
             .find(|tree| tree.id == event.tree_id)
             .ok_or(HarvestTreeDeferralError::TreeCouldNotBeDeferred)?;
-        let live_period = current_contiguous_fruit_period(&tree.harvest_windows, deferred_on)
-            .filter(|period| period.start == snapshot_period.start);
-        let Some(live_period) = live_period else {
+        let live_harvest =
+            current_harvest_parts_and_period(&tree.harvest_windows, &snapshot_parts, deferred_on)
+                .filter(|(parts, period)| {
+                    *parts == snapshot_parts && period.start == snapshot_period.start
+                });
+        let Some((_, live_period)) = live_harvest else {
             return Err(if deferred_on > snapshot_period.end {
                 HarvestTreeDeferralError::ActionDateOutsideRunPeriod
             } else {
                 HarvestTreeDeferralError::HarvestWindowChanged
             });
         };
-        let current_period_end = live_period.end;
-        let proposed_end = current_period_end
-            .add_days(7)
-            .ok_or(HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended)?
-            .max(retry_on);
+        let part_periods =
+            current_harvest_part_periods(&tree.harvest_windows, &snapshot_parts, deferred_on);
+        let mut required_extensions = part_periods
+            .iter()
+            .filter(|(_, period)| period.end <= retry_on)
+            .map(|(harvested_part, period)| {
+                period
+                    .end
+                    .add_days(7)
+                    .map(|proposed_end| (*harvested_part, period.end, proposed_end.max(retry_on)))
+                    .ok_or(HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        required_extensions
+            .sort_by_key(|(harvested_part, current_end, _)| (*current_end, *harvested_part));
+        let planned_extensions = required_extensions
+            .iter()
+            .map(|(harvested_part, current_end, proposed_end)| {
+                harvest_window_extension(tree, *harvested_part, *current_end, *proposed_end)
+                    .map(|extension| (extension, *current_end, *proposed_end))
+                    .ok_or(HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-        if current_period_end <= retry_on {
-            let extension = harvest_window_extension(tree, current_period_end, proposed_end)
-                .ok_or(HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended)?;
+        if let Some((_, current_end, proposed_end)) = planned_extensions.first() {
             let proposal = HarvestWindowExtensionProposal {
-                current_end: current_period_end,
-                proposed_end,
+                current_end: *current_end,
+                proposed_end: *proposed_end,
             };
             if !event.extend_window {
                 return Err(HarvestTreeDeferralError::WindowExtensionRequired(proposal));
             }
-            let extended = orchard
-                .extend_orchard_harvest_window(event.orchard_id, &extension)
-                .map_err(|_| HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended)?;
-            if !extended {
-                return Err(HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended);
+            for (extension, _, _) in &planned_extensions {
+                let extended = orchard
+                    .extend_orchard_harvest_window(event.orchard_id, extension)
+                    .map_err(|_| HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended)?;
+                if !extended {
+                    return Err(HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended);
+                }
             }
-            if proposed_end > snapshot_period.end {
+            let extended_period_end = required_extensions
+                .iter()
+                .map(|(_, _, proposed_end)| *proposed_end)
+                .chain(std::iter::once(live_period.end))
+                .max()
+                .expect("a live harvest has an end");
+            if extended_period_end > snapshot_period.end {
                 orchard
                     .extend_harvest_run_tree_period(
                         event.harvest_run_id,
                         event.tree_id,
-                        proposed_end,
+                        extended_period_end,
                         deferred_on,
                     )
                     .map_err(|_| HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended)?;
-                run.ordered_trees[current_index].period.end = proposed_end;
+                run.ordered_trees[current_index].period.end = extended_period_end;
             }
-        } else if current_period_end > snapshot_period.end {
+        } else if live_period.end > snapshot_period.end {
             orchard
                 .extend_harvest_run_tree_period(
                     event.harvest_run_id,
                     event.tree_id,
-                    current_period_end,
+                    live_period.end,
                     deferred_on,
                 )
                 .map_err(|_| HarvestTreeDeferralError::TreeCouldNotBeDeferred)?;
-            run.ordered_trees[current_index].period.end = current_period_end;
+            run.ordered_trees[current_index].period.end = live_period.end;
         }
 
         let outcome = HarvestTreeOutcome::Deferred {
@@ -145,13 +173,14 @@ pub fn defer_harvest_tree(
 
 fn harvest_window_extension(
     tree: &OrchardTree,
+    harvested_part: HarvestedPart,
     current_period_end: HarvestDate,
     proposed_end: HarvestDate,
 ) -> Option<HarvestWindowExtension> {
     let (current_window, start_year) = tree
         .harvest_windows
         .iter()
-        .filter(|window| window.harvested_part == HarvestedPart::Fruit)
+        .filter(|window| window.harvested_part == harvested_part)
         .find_map(|window| {
             [current_period_end.year - 1, current_period_end.year]
                 .into_iter()

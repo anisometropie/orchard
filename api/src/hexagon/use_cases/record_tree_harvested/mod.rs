@@ -1,6 +1,6 @@
 use crate::hexagon::models::{
     HarvestDate, HarvestRunId, HarvestTreeOutcome, OrchardId, TreeId,
-    current_contiguous_fruit_period,
+    current_harvest_parts_and_period,
 };
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
@@ -47,6 +47,7 @@ pub fn record_tree_harvested(
         }
         let current_index = current_index.expect("the current harvest tree was checked");
         let snapshot_period = run.ordered_trees[current_index].period;
+        let snapshot_parts = run.ordered_trees[current_index].harvested_parts.clone();
         if harvested_on < run.started_on || harvested_on < snapshot_period.start {
             return Err(TreeHarvestedEverythingError::ActionDateOutsideRunPeriod);
         }
@@ -57,9 +58,12 @@ pub fn record_tree_harvested(
             .iter()
             .find(|tree| tree.id == event.tree_id)
             .ok_or(TreeHarvestedEverythingError::TreeCouldNotBeRecorded)?;
-        let live_period = current_contiguous_fruit_period(&tree.harvest_windows, harvested_on)
-            .filter(|period| period.start == snapshot_period.start);
-        let Some(live_period) = live_period else {
+        let live_harvest =
+            current_harvest_parts_and_period(&tree.harvest_windows, &snapshot_parts, harvested_on)
+                .filter(|(parts, period)| {
+                    *parts == snapshot_parts && period.start == snapshot_period.start
+                });
+        let Some((_, live_period)) = live_harvest else {
             return Err(if harvested_on > snapshot_period.end {
                 TreeHarvestedEverythingError::ActionDateOutsideRunPeriod
             } else {

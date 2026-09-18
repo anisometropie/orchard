@@ -39,7 +39,7 @@ fn defer_for_seven_days_then_propose_the_tree_again() {
     assert_eq!(deferred.current_tree, None);
     assert_eq!(
         start(&mut storage, "2026-09-23"),
-        Err(HarvestRunStartError::NoTreesCurrentlyInFruit)
+        Err(HarvestRunStartError::NoTreesCurrentlyAvailable)
     );
     assert_eq!(
         start(&mut storage, "2026-09-24").unwrap().total_tree_count,
@@ -388,6 +388,72 @@ fn reject_an_extension_that_the_annual_window_cannot_represent() {
     );
 }
 
+#[test]
+fn defer_all_selected_parts_together_and_extend_each_short_window() {
+    let (mut storage, observer) = harvest_storage(30);
+    replace_orchard_harvest_windows(
+        OrchardHarvestWindowsReplaced {
+            orchard_id: OrchardId(7),
+            owner: HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
+            reference_region: "Example Region, France".into(),
+            windows: vec![
+                AnnualHarvestWindowChanged {
+                    start_month: 9,
+                    start_day: 1,
+                    end_month: 9,
+                    end_day: 20,
+                    harvested_part: HarvestedPart::Cone,
+                },
+                AnnualHarvestWindowChanged {
+                    start_month: 9,
+                    start_day: 1,
+                    end_month: 9,
+                    end_day: 22,
+                    harvested_part: HarvestedPart::Flower,
+                },
+            ],
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let started = start_harvest_run(
+        HarvestRunStartRequested {
+            orchard_id: OrchardId(7),
+            target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Cone, HarvestedPart::Flower],
+            action_date: "2026-09-17".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let request = |extend_window| HarvestTreeDeferred {
+        orchard_id: OrchardId(7),
+        harvest_run_id: started.run_id,
+        tree_id: TreeId(1),
+        action_date: "2026-09-17".into(),
+        extend_window,
+    };
+
+    assert_eq!(
+        defer_harvest_tree(request(false), &mut storage),
+        Err(HarvestTreeDeferralError::WindowExtensionRequired(
+            HarvestWindowExtensionProposal {
+                current_end: orchard_api::hexagon::models::HarvestDate::new(2026, 9, 20).unwrap(),
+                proposed_end: orchard_api::hexagon::models::HarvestDate::new(2026, 9, 27).unwrap(),
+            }
+        ))
+    );
+    let deferred = defer_harvest_tree(request(true), &mut storage).unwrap();
+
+    assert_eq!(deferred.route[0].period.end.to_string(), "2026-09-29");
+    let windows = observer.orchard_harvest_windows(
+        OrchardId(7),
+        HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
+    );
+    assert_eq!(windows[0].end, AnnualDate { month: 9, day: 27 });
+    assert_eq!(windows[1].end, AnnualDate { month: 9, day: 29 });
+}
+
 fn start(
     storage: &mut InMemoryOrchardStorage,
     action_date: &str,
@@ -397,6 +463,7 @@ fn start(
         HarvestRunStartRequested {
             orchard_id: OrchardId(7),
             target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
             action_date: action_date.into(),
         },
         storage,

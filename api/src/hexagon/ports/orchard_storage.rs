@@ -130,6 +130,7 @@ pub trait OrchardStorage {
         &mut self,
         orchard_id: OrchardId,
         target: HarvestRunTarget,
+        harvested_parts: &[crate::hexagon::models::HarvestedPart],
         started_on: HarvestDate,
         ordered_trees: &[HarvestRunTree],
     ) -> Result<HarvestRunId, OrchardStorageError>;

@@ -591,7 +591,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
         client
             .get(&candidates_url)
             .header("x-orchard-share-token", &watering_token)
-            .query(&[("on_date", "2026-09-17")])
+            .query(&[("on_date", "2026-09-17"), ("harvested_parts", "fruit")])
             .send()
             .await
             .unwrap()
@@ -601,7 +601,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
     let candidates = client
         .get(&candidates_url)
         .header(header::COOKIE, &cookie)
-        .query(&[("on_date", "2026-09-17")])
+        .query(&[("on_date", "2026-09-17"), ("harvested_parts", "fruit")])
         .send()
         .await
         .unwrap();
@@ -618,6 +618,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
             .json(&serde_json::json!({
                 "target": "all",
                 "plant_identity_id": null,
+                "harvested_parts": ["fruit"],
                 "on_date": "2026-09-17"
             }))
             .send()
@@ -633,6 +634,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
         .json(&serde_json::json!({
             "target": "all",
             "plant_identity_id": null,
+            "harvested_parts": ["fruit"],
             "on_date": "2026-09-17"
         }))
         .send()
@@ -791,6 +793,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
         .json(&serde_json::json!({
             "target": "all",
             "plant_identity_id": null,
+            "harvested_parts": ["fruit"],
             "on_date": "2026-10-01"
         }))
         .send()
@@ -801,7 +804,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
         client
             .get(&candidates_url)
             .header(header::COOKIE, &cookie)
-            .query(&[("on_date", "2026-10-01")])
+            .query(&[("on_date", "2026-10-01"), ("harvested_parts", "fruit")])
             .send()
             .await
             .unwrap()
@@ -814,7 +817,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
     let retry_candidates = client
         .get(&candidates_url)
         .header(header::COOKIE, &cookie)
-        .query(&[("on_date", "2026-10-02")])
+        .query(&[("on_date", "2026-10-02"), ("harvested_parts", "fruit")])
         .send()
         .await
         .unwrap()
@@ -832,6 +835,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
         .json(&serde_json::json!({
             "target": "all",
             "plant_identity_id": null,
+            "harvested_parts": ["fruit"],
             "on_date": "2026-10-02"
         }))
         .send()
@@ -862,6 +866,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
             .json(&serde_json::json!({
                 "target": "all",
                 "plant_identity_id": null,
+                "harvested_parts": ["fruit"],
                 "on_date": "2026-10-03"
             }))
             .send()
@@ -874,7 +879,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
         client
             .get(&candidates_url)
             .header(header::COOKIE, &cookie)
-            .query(&[("on_date", "2026-10-03")])
+            .query(&[("on_date", "2026-10-03"), ("harvested_parts", "fruit")])
             .send()
             .await
             .unwrap()
@@ -890,6 +895,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
         .json(&serde_json::json!({
             "target": "all",
             "plant_identity_id": null,
+            "harvested_parts": ["fruit"],
             "on_date": "2027-09-17"
         }))
         .send()

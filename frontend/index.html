@@ -1909,6 +1909,7 @@
       let harvestCandidateTreeIds = new Set();
       let harvestCandidatesLoaded = false;
       let harvestCandidatesOnDate = null;
+      let harvestCandidatesPartKey = null;
       let harvestCandidatesError = null;
       const inventoryToggle = document.getElementById("inventory-toggle");
       const inventoryPanel = document.getElementById("inventory-panel");
@@ -2200,7 +2201,10 @@
             input.type = "checkbox";
             input.value = part;
             input.checked = harvestPartSelectedByDefault(part);
-            input.addEventListener("change", applyHarvestWindow);
+            input.addEventListener("change", () => {
+              applyHarvestWindow();
+              if (isEditable() && !harvestProgress) void loadHarvestCandidates();
+            });
             const icon = document.createElement("span");
             icon.className = "harvest-part-filter-icon";
             icon.setAttribute("aria-hidden", "true");
@@ -3703,6 +3707,7 @@
           orchardFeatures,
           localIsoDate(),
           harvestCandidatesLoaded ? harvestCandidateTreeIds : [],
+          selectedHarvestPartValues(),
         );
         const previousSpecies = harvestSpecies.value;
         const options = species.map(({ plantIdentityId, label, treeCount }) =>
@@ -3751,7 +3756,9 @@
           harvestJobStatus.textContent = "Checking today's harvest availability…";
           harvestJobStatus.hidden = false;
         } else if (!preservesProgress && !active && species.length === 0) {
-          harvestJobStatus.textContent = "No trees are in a fruit harvest window today.";
+          harvestJobStatus.textContent = selectedHarvestPartValues().length === 0
+            ? "Select at least one harvested part."
+            : "No trees have a selected part available to harvest today.";
           harvestJobStatus.hidden = false;
         } else if (!preservesProgress && !active) {
           harvestJobStatus.textContent = "";
@@ -3760,18 +3767,28 @@
         }
       }
 
-      async function loadHarvestCandidates(onDate = localIsoDate()) {
+      async function loadHarvestCandidates(
+        onDate = localIsoDate(),
+        harvestedParts = selectedHarvestPartValues(),
+      ) {
         if (!isEditable()) return false;
+        const harvestedPartKey = harvestedParts.join(",");
         harvestCandidateTreeIds = new Set();
         harvestCandidatesLoaded = false;
         harvestCandidatesOnDate = onDate;
+        harvestCandidatesPartKey = harvestedPartKey;
         harvestCandidatesError = null;
         refreshHarvestJobControls();
+        if (harvestedParts.length === 0) {
+          harvestCandidatesLoaded = true;
+          refreshHarvestJobControls();
+          return true;
+        }
         try {
           const response = await fetch(
             orchardResourceUrl(
               currentAccess,
-              `harvest-candidates?on_date=${encodeURIComponent(onDate)}`,
+              `harvest-candidates?on_date=${encodeURIComponent(onDate)}&harvested_parts=${encodeURIComponent(harvestedPartKey)}`,
             ),
             { headers: accessHeaders(currentAccess), cache: "no-store" },
           );
@@ -3780,6 +3797,10 @@
           if (!Array.isArray(result.candidates)) {
             throw new Error("Invalid harvest candidate response.");
           }
+          if (
+            harvestCandidatesOnDate !== onDate ||
+            harvestCandidatesPartKey !== harvestedPartKey
+          ) return false;
           harvestCandidateTreeIds = new Set(
             result.candidates
               .map(({ tree_id: treeId }) => treeId)
@@ -3788,6 +3809,10 @@
           );
           harvestCandidatesLoaded = true;
         } catch (error) {
+          if (
+            harvestCandidatesOnDate !== onDate ||
+            harvestCandidatesPartKey !== harvestedPartKey
+          ) return false;
           console.error("Could not load current harvest availability", error);
           harvestCandidatesError =
             "Could not load current harvest availability. Try reloading the page.";
@@ -3936,6 +3961,14 @@
           return;
         }
         harvestTargetScope.value = progress.target || "all";
+        if (Array.isArray(progress.harvested_parts)) {
+          const activeParts = new Set(progress.harvested_parts);
+          harvestPartFilters
+            .querySelectorAll('input[type="checkbox"]')
+            .forEach((input) => {
+              input.checked = activeParts.has(input.value);
+            });
+        }
         if (progress.plant_identity_id != null) {
           harvestSpecies.value = String(progress.plant_identity_id);
         }
@@ -3983,12 +4016,15 @@
         harvestStart.disabled = true;
         try {
           const onDate = localIsoDate();
+          const harvestedParts = selectedHarvestPartValues();
+          const harvestedPartKey = harvestedParts.join(",");
           const selectedPlantIdentityId = harvestSpecies.value;
           if (
             harvestCandidatesOnDate !== onDate ||
+            harvestCandidatesPartKey !== harvestedPartKey ||
             !harvestCandidatesLoaded
           ) {
-            const loaded = await loadHarvestCandidates(onDate);
+            const loaded = await loadHarvestCandidates(onDate, harvestedParts);
             if (!loaded) return;
             if (
               harvestTargetScope.value === "species" &&
@@ -4019,6 +4055,7 @@
                   harvestTargetScope.value,
                   harvestSpecies.value,
                   onDate,
+                  harvestedParts,
                 ),
               ),
             },
@@ -4889,6 +4926,7 @@
         harvestCandidateTreeIds = new Set();
         harvestCandidatesLoaded = false;
         harvestCandidatesOnDate = null;
+        harvestCandidatesPartKey = null;
         harvestCandidatesError = null;
         placingWaterSource = false;
         reopenWateringPanelAfterSourcePlacement = false;
@@ -5240,7 +5278,8 @@
             ? "this week"
             : `in ${offset} week${offset === 1 ? "" : "s"}`;
         harvestWeeksLabel.textContent = `${weeks} week${weeks === 1 ? "" : "s"}`;
-        harvestPartFilters.disabled = !harvestFilterEnabled.checked;
+        harvestPartFilters.disabled =
+          !harvestFilterEnabled.checked || harvestProgress != null;
         const selectedParts = selectedHarvestPartValues();
 
         const mapFeatures = filterTreeFeaturesByIdentity(

@@ -50,6 +50,7 @@ fn start_with_every_living_tree_currently_in_a_fruit_period_and_order_nearest_ne
         HarvestRunStartRequested {
             orchard_id: OrchardId(7),
             target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
             action_date: "2026-09-17".into(),
         },
         &mut storage,
@@ -108,6 +109,7 @@ fn select_one_species_and_only_fruit_windows() {
         HarvestRunStartRequested {
             orchard_id: OrchardId(7),
             target: HarvestRunTarget::Species(PlantIdentityId(2)),
+            harvested_parts: vec![HarvestedPart::Fruit],
             action_date: "2026-09-17".into(),
         },
         &mut storage,
@@ -116,6 +118,59 @@ fn select_one_species_and_only_fruit_windows() {
 
     assert_eq!(progress.route.len(), 1);
     assert_eq!(progress.route[0].plant_identity_id, PlantIdentityId(2));
+}
+
+#[test]
+fn visit_a_tree_once_for_all_selected_parts_that_are_currently_available() {
+    let (mut storage, _) = harvest_storage(vec![
+        tree(PlantIdentityId(1), 5.0, true),
+        tree(PlantIdentityId(2), 5.1, true),
+    ]);
+    replace_orchard_harvest_windows(
+        OrchardHarvestWindowsReplaced {
+            orchard_id: OrchardId(7),
+            owner: HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
+            reference_region: "Example Region, France".into(),
+            windows: vec![
+                changed_window(9, 1, 9, 30, HarvestedPart::Cone),
+                changed_window(9, 1, 9, 30, HarvestedPart::Flower),
+                changed_window(9, 1, 9, 30, HarvestedPart::Fruit),
+            ],
+        },
+        &mut storage,
+    )
+    .unwrap();
+    configure_window(
+        &mut storage,
+        PlantIdentityId(2),
+        9,
+        1,
+        9,
+        30,
+        HarvestedPart::Fruit,
+    );
+
+    let progress = start_harvest_run(
+        HarvestRunStartRequested {
+            orchard_id: OrchardId(7),
+            target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Flower, HarvestedPart::Cone],
+            action_date: "2026-09-17".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+
+    assert_eq!(progress.route.len(), 1);
+    assert_eq!(progress.route[0].id, TreeId(1));
+    assert_eq!(
+        progress.route[0].harvested_parts,
+        vec![HarvestedPart::Cone, HarvestedPart::Flower]
+    );
+    assert_eq!(
+        progress.harvested_parts,
+        vec![HarvestedPart::Cone, HarvestedPart::Flower]
+    );
 }
 
 #[test]
@@ -139,6 +194,7 @@ fn merge_adjacent_current_fruit_windows_across_new_year() {
         HarvestRunStartRequested {
             orchard_id: OrchardId(7),
             target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
             action_date: "2026-01-05".into(),
         },
         &mut storage,
@@ -167,6 +223,19 @@ fn reject_an_invalid_action_date_and_an_empty_current_harvest() {
             HarvestRunStartRequested {
                 orchard_id: OrchardId(7),
                 target: HarvestRunTarget::All,
+                harvested_parts: vec![],
+                action_date: "2026-08-15".into(),
+            },
+            &mut storage,
+        ),
+        Err(HarvestRunStartError::NoHarvestPartsSelected)
+    );
+    assert_eq!(
+        start_harvest_run(
+            HarvestRunStartRequested {
+                orchard_id: OrchardId(7),
+                target: HarvestRunTarget::All,
+                harvested_parts: vec![HarvestedPart::Fruit],
                 action_date: "2026-02-29".into(),
             },
             &mut storage,
@@ -178,11 +247,12 @@ fn reject_an_invalid_action_date_and_an_empty_current_harvest() {
             HarvestRunStartRequested {
                 orchard_id: OrchardId(7),
                 target: HarvestRunTarget::All,
+                harvested_parts: vec![HarvestedPart::Fruit],
                 action_date: "2026-07-01".into(),
             },
             &mut storage,
         ),
-        Err(HarvestRunStartError::NoTreesCurrentlyInFruit)
+        Err(HarvestRunStartError::NoTreesCurrentlyAvailable)
     );
 }
 
@@ -202,6 +272,7 @@ fn resume_the_same_target_but_refuse_a_different_target_while_active() {
         HarvestRunStartRequested {
             orchard_id: OrchardId(7),
             target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
             action_date: "2026-09-17".into(),
         },
         &mut storage,
@@ -212,6 +283,7 @@ fn resume_the_same_target_but_refuse_a_different_target_while_active() {
         HarvestRunStartRequested {
             orchard_id: OrchardId(7),
             target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
             action_date: "2026-09-18".into(),
         },
         &mut storage,
@@ -222,7 +294,20 @@ fn resume_the_same_target_but_refuse_a_different_target_while_active() {
         start_harvest_run(
             HarvestRunStartRequested {
                 orchard_id: OrchardId(7),
+                target: HarvestRunTarget::All,
+                harvested_parts: vec![HarvestedPart::Flower],
+                action_date: "2026-09-18".into(),
+            },
+            &mut storage,
+        ),
+        Err(HarvestRunStartError::AnotherHarvestRunIsActive)
+    );
+    assert_eq!(
+        start_harvest_run(
+            HarvestRunStartRequested {
+                orchard_id: OrchardId(7),
                 target: HarvestRunTarget::Species(PlantIdentityId(1)),
+                harvested_parts: vec![HarvestedPart::Fruit],
                 action_date: "2026-09-18".into(),
             },
             &mut storage,

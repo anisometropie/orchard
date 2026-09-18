@@ -64,7 +64,7 @@ fn harvest_each_current_tree_then_exclude_that_period_but_allow_next_year() {
 
     assert_eq!(
         start(&mut storage, "2026-09-20"),
-        Err(HarvestRunStartError::NoTreesCurrentlyInFruit)
+        Err(HarvestRunStartError::NoTreesCurrentlyAvailable)
     );
     assert_eq!(
         start(&mut storage, "2027-09-17").unwrap().total_tree_count,
@@ -173,6 +173,7 @@ fn start(
         HarvestRunStartRequested {
             orchard_id: OrchardId(7),
             target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
             action_date: action_date.into(),
         },
         storage,

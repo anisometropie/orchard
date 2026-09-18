@@ -9,6 +9,15 @@ const HARVEST_ROUTE_WINDOW_SIZES = Object.freeze({
   next: 1,
   four: 4,
 });
+const HARVESTED_PARTS = new Set([
+  "cone",
+  "flower",
+  "fruit",
+  "leaf",
+  "nut",
+  "pod",
+  "seed",
+]);
 
 export function localIsoDate(date = new Date()) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
@@ -20,10 +29,16 @@ export function localIsoDate(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
-export function harvestStartRequest(scope, plantIdentityId, onDate) {
+export function harvestStartRequest(
+  scope,
+  plantIdentityId,
+  onDate,
+  harvestedParts = ["fruit"],
+) {
   const on_date = normalizeIsoDate(onDate);
+  const harvested_parts = normalizeHarvestedParts(harvestedParts);
   if (scope === "all") {
-    return { target: "all", plant_identity_id: null, on_date };
+    return { target: "all", plant_identity_id: null, harvested_parts, on_date };
   }
   if (scope !== "species") throw new Error(`Unknown harvest scope: ${scope}`);
 
@@ -37,6 +52,7 @@ export function harvestStartRequest(scope, plantIdentityId, onDate) {
   return {
     target: "species",
     plant_identity_id: normalizedPlantIdentityId,
+    harvested_parts,
     on_date,
   };
 }
@@ -46,14 +62,20 @@ export function harvestConflictMessage(code) {
     return "Today's date is outside the harvest period captured by this tour. Cancel this tour and start a new one.";
   }
   if (code === "harvest_window_changed") {
-    return "This tree's fruit harvest window changed after the tour started. Cancel this tour and start a new one.";
+    return "This tree's harvest window changed after the tour started. Cancel this tour and start a new one.";
   }
   return "Harvest progress changed. Reload the page to resume.";
 }
 
-export function availableHarvestSpecies(features, onDate, eligibleTreeIds = null) {
+export function availableHarvestSpecies(
+  features,
+  onDate,
+  eligibleTreeIds = null,
+  harvestedParts = ["fruit"],
+) {
   const date = isoDateParts(normalizeIsoDate(onDate));
   const eligibleTrees = normalizeTreeIds(eligibleTreeIds);
+  const selectedParts = new Set(normalizeHarvestedParts(harvestedParts, true));
   const species = new Map();
 
   for (const feature of Array.isArray(features) ? features : []) {
@@ -62,7 +84,7 @@ export function availableHarvestSpecies(features, onDate, eligibleTreeIds = null
     if (properties.is_alive === false) continue;
     if (
       !harvestWindows(properties.harvest_windows).some((window) =>
-        isFruitWindowOnDate(window, date),
+        isHarvestWindowOnDate(window, date, selectedParts),
       )
     ) continue;
 
@@ -129,8 +151,10 @@ export function harvestRoutePathGeoJson(route) {
   };
 }
 
-function isFruitWindowOnDate(window, date) {
-  if (!window || (window.harvested_part || "fruit") !== "fruit") return false;
+function isHarvestWindowOnDate(window, date, selectedParts) {
+  if (!window || !selectedParts.has(window.harvested_part || "fruit")) {
+    return false;
+  }
   const start = parseAnnualDate(window.start || "");
   const end = parseAnnualDate(window.end || "");
   if (!start || !end) return false;
@@ -151,6 +175,20 @@ function isFruitWindowOnDate(window, date) {
     ) return true;
   }
   return false;
+}
+
+function normalizeHarvestedParts(value, allowEmpty = false) {
+  if (!Array.isArray(value)) {
+    throw new TypeError("Harvested parts must be an array.");
+  }
+  const parts = [...new Set(value)];
+  if (parts.some((part) => !HARVESTED_PARTS.has(part))) {
+    throw new TypeError("A harvested part is invalid.");
+  }
+  if (!allowEmpty && parts.length === 0) {
+    throw new TypeError("Select at least one harvested part.");
+  }
+  return parts;
 }
 
 function annualDateInYear(annualDate, year) {
