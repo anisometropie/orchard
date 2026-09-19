@@ -33,7 +33,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
     );
     assert_eq!(
         String::from_utf8(adoption.stdout).unwrap(),
-        "Adopted the existing version-10 schema.\nApplied migrations: 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23.\n"
+        "Adopted the existing version-10 schema.\nApplied migrations: 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24.\n"
     );
     let versions = verification_connection
         .query(
@@ -47,7 +47,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
     assert_eq!(
         versions,
         vec![
-            1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
+            1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
         ]
     );
 
@@ -69,7 +69,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
     assert!(revert.status.success());
     assert_eq!(
         String::from_utf8(revert.stdout).unwrap(),
-        "Reverted migrations: 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11.\n"
+        "Reverted migrations: 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11.\n"
     );
     verification_connection
         .batch_execute(

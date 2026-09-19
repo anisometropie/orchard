@@ -167,8 +167,7 @@
         flex-wrap: wrap;
         gap: 6px;
       }
-      #login-form[hidden],
-      #share-result[hidden] {
+      #login-form[hidden] {
         display: none;
       }
       #login-error {
@@ -176,14 +175,63 @@
         flex-basis: 100%;
         font-size: 12px;
       }
-      #share-result {
+      .share-result {
         display: flex;
-        flex-basis: 100%;
         gap: 6px;
       }
-      #share-link {
+      .share-link {
         flex: 1;
         min-width: 220px;
+      }
+      #share-management {
+        flex-basis: 100%;
+      }
+      #share-management summary {
+        cursor: pointer;
+      }
+      .share-manager {
+        display: grid;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .share-permissions {
+        align-items: center;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 0;
+        padding: 8px;
+      }
+      .share-permissions label {
+        align-items: center;
+        display: inline-flex;
+        gap: 4px;
+      }
+      #access-panel .share-permissions input[type="checkbox"] {
+        min-height: 0;
+        padding: 0;
+        width: auto;
+      }
+      #issued-share-tokens {
+        display: grid;
+        gap: 7px;
+      }
+      .issued-share-token {
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        display: grid;
+        gap: 6px;
+        padding: 8px;
+      }
+      .issued-share-token-title {
+        color: #555;
+        font-size: 12px;
+      }
+      #share-management-error {
+        color: #b42318;
+        font-size: 12px;
       }
       #access-mode {
         color: #555;
@@ -1064,10 +1112,14 @@
           box-sizing: border-box;
           width: 100%;
         }
-        #share-result {
+        .share-result {
           flex-direction: column;
         }
-        #share-link {
+        .share-permissions {
+          align-items: stretch;
+          flex-direction: column;
+        }
+        .share-link {
           min-width: 0;
         }
         #active-map-filter {
@@ -1576,14 +1628,22 @@
         <span id="login-error" role="alert" hidden></span>
       </form>
       <select id="orchard-select" aria-label="Open orchard" hidden></select>
-      <button id="share-view-orchard" type="button" hidden>Share view-only link</button>
-      <button id="share-watering-orchard" type="button" hidden>Share watering link</button>
-      <button id="share-harvest-watering-orchard" type="button" hidden>Share harvest + watering link</button>
+      <details id="share-management" hidden>
+        <summary>Shared links</summary>
+        <div class="share-manager">
+          <fieldset class="share-permissions">
+            <legend>New link · view access included</legend>
+            <label><input id="new-share-harvest" type="checkbox" /> Harvest</label>
+            <label><input id="new-share-water" type="checkbox" /> Water</label>
+            <label><input id="new-share-add-photos" type="checkbox" /> Add photos</label>
+            <button id="create-share-link" type="button">Create link</button>
+          </fieldset>
+          <small>Each new link is shown once. Save it before leaving this orchard.</small>
+          <div id="issued-share-tokens" aria-live="polite"></div>
+          <span id="share-management-error" role="alert" hidden></span>
+        </div>
+      </details>
       <button id="logout" class="secondary" type="button" hidden>Log out</button>
-      <div id="share-result" hidden>
-        <input id="share-link" aria-label="Shared orchard link" readonly />
-        <button id="copy-share-link" type="button">Copy</button>
-      </div>
     </section>
     <div id="map-filter-panel" hidden>
       <section
@@ -1788,13 +1848,14 @@
       } from "./harvest-job.mjs?v=4";
       import {
         accessHeaders,
+        canAddPhotosToOrchard,
         canHarvestOrchard,
         canWaterOrchard,
         hasOpenOrchard,
         orchardResourceUrl,
         resolveOrchardAccess,
         sharedOrchardUrl,
-      } from "./orchard-access.mjs?v=5";
+      } from "./orchard-access.mjs?v=6";
       import {
         adaptiveWateringWideZoom,
         appendManualTree,
@@ -2057,17 +2118,15 @@
       const loginCancel = document.getElementById("login-cancel");
       const loginError = document.getElementById("login-error");
       const orchardSelect = document.getElementById("orchard-select");
-      const shareViewOrchard = document.getElementById("share-view-orchard");
-      const shareWateringOrchard = document.getElementById(
-        "share-watering-orchard",
-      );
-      const shareHarvestWateringOrchard = document.getElementById(
-        "share-harvest-watering-orchard",
-      );
+      const shareManagement = document.getElementById("share-management");
+      const newShareHarvest = document.getElementById("new-share-harvest");
+      const newShareWater = document.getElementById("new-share-water");
+      const newShareAddPhotos = document.getElementById("new-share-add-photos");
+      const createShareLinkButton = document.getElementById("create-share-link");
+      const issuedShareTokens = document.getElementById("issued-share-tokens");
+      const shareManagementError = document.getElementById("share-management-error");
       const logout = document.getElementById("logout");
-      const shareResult = document.getElementById("share-result");
-      const shareLink = document.getElementById("share-link");
-      const copyShareLink = document.getElementById("copy-share-link");
+      const newlyCreatedShareLinks = new Map();
       const wateringToggle = document.getElementById("watering-toggle");
       const wateringPanel = document.getElementById("watering-panel");
       const wateringClose = document.getElementById("watering-close");
@@ -2704,19 +2763,26 @@
         const canFilter =
           properties.plant_identity_id != null ||
           properties.plant_identity_taxon_name;
-        const canEdit = interactiveHover && feature && isEditable();
-        if (interactiveHover && (canFilter || canEdit)) {
+        const canManageTree =
+          interactiveHover &&
+          feature &&
+          (isEditable() || canAddPhotosToOrchard(currentAccess));
+        if (interactiveHover && (canFilter || canManageTree)) {
           const actions = document.createElement("div");
           actions.className = "tree-tooltip-actions";
-          if (canEdit) {
+          if (canManageTree) {
             const editButton = document.createElement("button");
             editButton.type = "button";
             editButton.className = "inventory-row-action harvest-edit-button";
-            editButton.textContent = "✎";
-            editButton.title = `Edit ${properties.name || "tree"}`;
+            editButton.textContent = isEditable() ? "✎" : "📷";
+            editButton.title = isEditable()
+              ? `Edit ${properties.name || "tree"}`
+              : `Add a photo of ${properties.name || "tree"}`;
             editButton.setAttribute(
               "aria-label",
-              `Edit ${properties.name || "tree"}`,
+              isEditable()
+                ? `Edit ${properties.name || "tree"}`
+                : `Add a photo of ${properties.name || "tree"}`,
             );
             editButton.addEventListener("click", (event) => {
               event.stopPropagation();
@@ -2780,19 +2846,20 @@
         closeTreeEditor();
 
         const editable = isEditable();
+        const canOpenEditor = editable || canAddPhotosToOrchard(currentAccess);
         const popup = new maplibregl.Popup({
-          closeButton: !editable,
+          closeButton: !canOpenEditor,
           closeOnClick: false,
           offset: 12,
         })
           .setLngLat(feature.geometry.coordinates)
           .setDOMContent(
-            editable
+            canOpenEditor
               ? createTreeEditor(feature)
               : createTreeTooltip(feature.properties),
           )
           .addTo(map);
-        if (!editable) return;
+        if (!canOpenEditor) return;
         treeEditor = popup;
         popup.on("close", () => {
           if (treeEditor === popup) treeEditor = undefined;
@@ -2882,7 +2949,9 @@
       }
 
       async function uploadTreePhoto(treeId, photo) {
-        if (!isEditable()) throw new Error("Only the orchard owner can add photos.");
+        if (!canAddPhotosToOrchard(currentAccess)) {
+          throw new Error("This shared link cannot add photos.");
+        }
         if (treeId == null) throw new Error("This tree has no editable ID.");
         const [fullWebpBase64, thumbnailWebpBase64] = await Promise.all([
           blobBase64(photo.fullWebp),
@@ -2895,7 +2964,10 @@
           ),
           {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: {
+              "content-type": "application/json",
+              ...accessHeaders(currentAccess),
+            },
             body: JSON.stringify({
               full_webp_base64: fullWebpBase64,
               thumbnail_webp_base64: thumbnailWebpBase64,
@@ -2921,6 +2993,7 @@
       function createTreeEditor(feature) {
         const form = document.createElement("form");
         form.className = "tree-editor";
+        const editable = isEditable();
         const originalIsAlive = feature.properties.is_alive !== false;
         const originalIsInDanger = feature.properties.is_in_danger === true;
 
@@ -2952,7 +3025,7 @@
         function syncConditionControls() {
           if (deadCheckbox.checked) dangerCheckbox.checked = false;
           dangerCheckbox.disabled = deadCheckbox.checked;
-          note.hidden = !deadCheckbox.checked;
+          note.hidden = !editable || !deadCheckbox.checked;
         }
 
         deadCheckbox.addEventListener("change", syncConditionControls);
@@ -2984,6 +3057,10 @@
         saveButton.type = "submit";
         saveButton.textContent = "OK";
         actions.append(cancelButton, saveButton);
+
+        dangerField.hidden = !editable;
+        deadField.hidden = !editable;
+        saveButton.hidden = !editable;
 
         form.append(title, dangerField, deadField, note);
         form.append(photoInput, photoActions, error, actions);
@@ -5170,6 +5247,20 @@
         }
       }
 
+      async function loadCurrentSharePermissions() {
+        if (currentAccess.mode !== "shared") return;
+        const response = await fetch(
+          orchardResourceUrl(currentAccess, "share-access"),
+          { headers: accessHeaders(currentAccess), cache: "no-store" },
+        );
+        if ([401, 403, 404].includes(response.status)) {
+          throw new Error("access-denied");
+        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const { permissions } = await response.json();
+        currentAccess = { ...currentAccess, permissions };
+      }
+
       async function openOrchardFromLocation() {
         const status = document.getElementById("map-status");
         currentAccess = resolveOrchardAccess(window.location.hash, session);
@@ -5190,11 +5281,21 @@
         status.textContent = "Loading orchard trees…";
         status.hidden = false;
         try {
+          await loadCurrentSharePermissions();
+          renderAccessControls();
           await loadMapConfiguration();
           await fetchOrchardTrees();
           if (canHarvestOrchard(currentAccess)) await loadHarvestCandidates();
           await restoreActiveWateringRun();
           await restoreActiveHarvestRun();
+          if (isEditable()) {
+            try {
+              await loadIssuedShareTokens();
+            } catch (error) {
+              shareManagementError.textContent = error.message;
+              shareManagementError.hidden = false;
+            }
+          }
           status.hidden = true;
         } catch (error) {
           console.error("Could not initialize the orchard map", error);
@@ -5228,6 +5329,9 @@
         harvestCandidatesOnDate = null;
         harvestCandidatesPartKey = null;
         harvestCandidatesError = null;
+        newlyCreatedShareLinks.clear();
+        issuedShareTokens.replaceChildren();
+        shareManagementError.hidden = true;
         placingWaterSource = false;
         reopenWateringPanelAfterSourcePlacement = false;
         wateringCameraMode = "wide";
@@ -5385,18 +5489,18 @@
         loginToggle.hidden = loggedIn;
         orchardSelect.hidden = !loggedIn;
         logout.hidden = !loggedIn;
-        shareViewOrchard.hidden = !isEditable();
-        shareWateringOrchard.hidden = !isEditable();
-        shareHarvestWateringOrchard.hidden = !isEditable();
-        shareResult.hidden = true;
+        shareManagement.hidden = !isEditable();
         refreshTourPresentation();
 
-        if (currentAccess.mode === "read-only") {
-          accessMode.textContent = "Shared orchard · view only";
-        } else if (currentAccess.mode === "watering") {
-          accessMode.textContent = "Shared orchard · view and water";
-        } else if (currentAccess.mode === "harvest-watering") {
-          accessMode.textContent = "Shared orchard · harvest and water";
+        if (currentAccess.mode === "shared") {
+          const capabilities = [
+            currentAccess.permissions?.harvest && "harvest",
+            currentAccess.permissions?.water && "water",
+            currentAccess.permissions?.add_photos && "add photos",
+          ].filter(Boolean);
+          accessMode.textContent = capabilities.length > 0
+            ? `Shared orchard · view, ${capabilities.join(", ")}`
+            : "Shared orchard · view only";
         } else if (isEditable()) {
           accessMode.textContent = currentAccess.orchard.name;
         } else if (currentAccess.mode === "login-required") {
@@ -5467,58 +5571,204 @@
       async function logOut() {
         await fetch("/api/session", { method: "DELETE" });
         session = null;
-        if (
-          !["read-only", "watering", "harvest-watering"].includes(
-            currentAccess.mode,
-          )
-        ) {
+        if (currentAccess.mode !== "shared") {
           window.location.hash = "";
         }
         await openOrchardFromLocation();
       }
 
-      async function createShareLink(permission) {
+      function selectedNewSharePermissions() {
+        return {
+          harvest: newShareHarvest.checked,
+          water: newShareWater.checked,
+          add_photos: newShareAddPhotos.checked,
+        };
+      }
+
+      async function createShareLink() {
         if (!isEditable()) return;
-        const response = await fetch(
-          orchardResourceUrl(
-            currentAccess,
-            permission === "watering"
-              ? "share/watering"
-              : permission === "harvest-watering"
-                ? "share/harvest-watering"
-                : "share",
-          ),
-          { method: "POST" },
-        );
-        if (!response.ok) {
-          document.getElementById("map-status").textContent =
-            "Could not create the share link.";
-          document.getElementById("map-status").hidden = false;
+        try {
+          createShareLinkButton.disabled = true;
+          shareManagementError.hidden = true;
+          const response = await fetch(
+            orchardResourceUrl(currentAccess, "share-tokens"),
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                permissions: selectedNewSharePermissions(),
+              }),
+            },
+          );
+          if (!response.ok) throw new Error("Could not create the shared link.");
+          const { id, share_token: token } = await response.json();
+          const link = sharedOrchardUrl(
+            window.location.origin,
+            currentAccess.orchardId,
+            token,
+          );
+          newlyCreatedShareLinks.set(String(id), link);
+          await loadIssuedShareTokens();
+          const createdLink = issuedShareTokens.querySelector(
+            `[data-share-id="${id}"] .share-link`,
+          );
+          createdLink?.select();
+          try {
+            await navigator.clipboard.writeText(link);
+            const copyButton = issuedShareTokens.querySelector(
+              `[data-share-id="${id}"] .copy-share-link`,
+            );
+            if (copyButton) copyButton.textContent = "Copied";
+          } catch {}
+        } catch (error) {
+          shareManagementError.textContent = error.message;
+          shareManagementError.hidden = false;
+        } finally {
+          createShareLinkButton.disabled = false;
+        }
+      }
+
+      function sharePermissionsFromRow(row) {
+        return {
+          harvest: row.querySelector('[data-permission="harvest"]').checked,
+          water: row.querySelector('[data-permission="water"]').checked,
+          add_photos: row.querySelector('[data-permission="add_photos"]').checked,
+        };
+      }
+
+      function sharePermissionControl(label, name, checked) {
+        const wrapper = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.dataset.permission = name;
+        input.checked = checked;
+        wrapper.append(input, document.createTextNode(label));
+        return wrapper;
+      }
+
+      function renderIssuedShareTokens(shares) {
+        if (shares.length === 0) {
+          const empty = document.createElement("span");
+          empty.textContent = "No shared links have been issued.";
+          issuedShareTokens.replaceChildren(empty);
           return;
         }
-        const { share_token: token } = await response.json();
-        shareLink.value = sharedOrchardUrl(
-          window.location.origin,
-          currentAccess.orchardId,
-          token,
-          permission,
+        const rows = shares.map((share) => {
+          const row = document.createElement("div");
+          row.className = "issued-share-token";
+          row.dataset.shareId = String(share.id);
+          const title = document.createElement("div");
+          title.className = "issued-share-token-title";
+          title.textContent = `Link #${share.id} · ${new Date(
+            share.created_at_unix_seconds * 1000,
+          ).toLocaleString()}`;
+          const permissions = document.createElement("fieldset");
+          permissions.className = "share-permissions";
+          const legend = document.createElement("legend");
+          legend.textContent = "View access included";
+          permissions.append(
+            legend,
+            sharePermissionControl("Harvest", "harvest", share.permissions.harvest),
+            sharePermissionControl("Water", "water", share.permissions.water),
+            sharePermissionControl(
+              "Add photos",
+              "add_photos",
+              share.permissions.add_photos,
+            ),
+          );
+          permissions.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+            input.addEventListener("change", async () => {
+              permissions.disabled = true;
+              shareManagementError.hidden = true;
+              try {
+                const response = await fetch(
+                  orchardResourceUrl(currentAccess, `share-tokens/${share.id}`),
+                  {
+                    method: "PATCH",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ permissions: sharePermissionsFromRow(row) }),
+                  },
+                );
+                if (!response.ok) throw new Error("Could not change link permissions.");
+              } catch (error) {
+                shareManagementError.textContent = error.message;
+                shareManagementError.hidden = false;
+                await loadIssuedShareTokens();
+              } finally {
+                permissions.disabled = false;
+              }
+            });
+          });
+          const link = newlyCreatedShareLinks.get(String(share.id));
+          const linkBox = document.createElement("div");
+          linkBox.className = "share-result";
+          if (link) {
+            const linkInput = document.createElement("input");
+            linkInput.className = "share-link";
+            linkInput.setAttribute(
+              "aria-label",
+              `New shared orchard link #${share.id}`,
+            );
+            linkInput.readOnly = true;
+            linkInput.value = link;
+            const copyButton = document.createElement("button");
+            copyButton.type = "button";
+            copyButton.className = "copy-share-link";
+            copyButton.textContent = "Copy";
+            copyButton.addEventListener("click", async () => {
+              linkInput.select();
+              try {
+                await navigator.clipboard.writeText(linkInput.value);
+                copyButton.textContent = "Copied";
+              } catch {
+                document.execCommand("copy");
+              }
+            });
+            linkBox.append(linkInput, copyButton);
+          }
+          const revoke = document.createElement("button");
+          revoke.type = "button";
+          revoke.className = "secondary";
+          revoke.textContent = "Revoke";
+          revoke.addEventListener("click", async () => {
+            if (revoke.dataset.confirm !== "true") {
+              revoke.dataset.confirm = "true";
+              revoke.textContent = "Confirm revoke";
+              return;
+            }
+            revoke.disabled = true;
+            shareManagementError.hidden = true;
+            try {
+              const response = await fetch(
+                orchardResourceUrl(currentAccess, `share-tokens/${share.id}`),
+                { method: "DELETE" },
+              );
+              if (!response.ok) throw new Error("Could not revoke the shared link.");
+              newlyCreatedShareLinks.delete(String(share.id));
+              await loadIssuedShareTokens();
+            } catch (error) {
+              shareManagementError.textContent = error.message;
+              shareManagementError.hidden = false;
+              revoke.disabled = false;
+            }
+          });
+          row.append(title, permissions);
+          if (link) row.append(linkBox);
+          row.append(revoke);
+          return row;
+        });
+        issuedShareTokens.replaceChildren(...rows);
+      }
+
+      async function loadIssuedShareTokens() {
+        if (!isEditable()) return;
+        const response = await fetch(
+          orchardResourceUrl(currentAccess, "share-tokens"),
+          { cache: "no-store" },
         );
-        shareLink.setAttribute(
-          "aria-label",
-          permission === "watering"
-            ? "Orchard watering link"
-            : permission === "harvest-watering"
-              ? "Orchard harvest and watering link"
-              : "View-only orchard link",
-        );
-        shareResult.hidden = false;
-        shareLink.select();
-        try {
-          await navigator.clipboard.writeText(shareLink.value);
-          copyShareLink.textContent = "Copied";
-        } catch {
-          copyShareLink.textContent = "Copy";
-        }
+        if (!response.ok) throw new Error("Could not load issued shared links.");
+        const { shares } = await response.json();
+        renderIssuedShareTokens(shares);
       }
 
       function currentMapModePresentation() {
@@ -5819,22 +6069,7 @@
         if (!orchardSelect.value) return;
         window.location.hash = `#/orchards/${encodeURIComponent(orchardSelect.value)}`;
       });
-      shareViewOrchard.addEventListener("click", () => createShareLink("view"));
-      shareWateringOrchard.addEventListener("click", () =>
-        createShareLink("watering"),
-      );
-      shareHarvestWateringOrchard.addEventListener("click", () =>
-        createShareLink("harvest-watering"),
-      );
-      copyShareLink.addEventListener("click", async () => {
-        shareLink.select();
-        try {
-          await navigator.clipboard.writeText(shareLink.value);
-          copyShareLink.textContent = "Copied";
-        } catch {
-          document.execCommand("copy");
-        }
-      });
+      createShareLinkButton.addEventListener("click", createShareLink);
       logout.addEventListener("click", logOut);
       window.addEventListener("hashchange", openOrchardFromLocation);
 

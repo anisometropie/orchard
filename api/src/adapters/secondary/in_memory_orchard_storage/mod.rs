@@ -4,10 +4,11 @@ use crate::hexagon::models::{
     AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, GeoPoint,
     HarvestDataOrigin, HarvestDate, HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree,
     HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
-    HarvestWindowExtension, HarvestedPart, MapConfiguration, Orchard, OrchardId,
-    OrchardShareAccess, OrchardSharePermission, OrchardTree, PlantCultivar, PlantCultivarId,
-    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId,
-    TreePhoto, TreePhotoVariant, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
+    HarvestWindowExtension, HarvestedPart, IssuedOrchardShareToken, MapConfiguration, Orchard,
+    OrchardId, OrchardShareAccess, OrchardSharePermissions, OrchardShareTokenId, OrchardTree,
+    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
+    PlantIdentityReference, Tree, TreeId, TreePhoto, TreePhotoVariant, User, UserId, WateringRun,
+    WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -34,7 +35,7 @@ pub struct InMemoryOrchardStorage {
 struct InMemoryOrchard {
     users: Vec<InMemoryUser>,
     sessions: Vec<(String, UserId)>,
-    share_tokens: Vec<(OrchardShareAccess, String)>,
+    share_tokens: Vec<InMemoryShareToken>,
     share_token_sequence: u64,
     orchards: Vec<(Orchard, UserId)>,
     plant_identities: Vec<PlantIdentity>,
@@ -54,6 +55,13 @@ struct InMemoryUser {
     id: u64,
     username: String,
     password: String,
+}
+
+struct InMemoryShareToken {
+    id: OrchardShareTokenId,
+    access: OrchardShareAccess,
+    token: String,
+    created_at_unix_seconds: i64,
 }
 
 #[derive(Clone)]
@@ -395,8 +403,8 @@ impl AccessControl for InMemoryOrchardStorage {
         &mut self,
         user_id: UserId,
         orchard_id: OrchardId,
-        permission: OrchardSharePermission,
-    ) -> Result<String, AccessControlError> {
+        permissions: OrchardSharePermissions,
+    ) -> Result<crate::hexagon::models::CreatedOrchardShareToken, AccessControlError> {
         let mut orchard = self.orchard.lock().unwrap();
         if !orchard.orchards.iter().any(|(candidate, owner_user_id)| {
             candidate.id == orchard_id && *owner_user_id == user_id
@@ -404,18 +412,23 @@ impl AccessControl for InMemoryOrchardStorage {
             return Err(AccessControlError::OrchardOwnershipCouldNotBeRead);
         }
         orchard.share_token_sequence += 1;
+        let id = OrchardShareTokenId(orchard.share_token_sequence);
+        let created_at_unix_seconds =
+            i64::try_from(orchard.share_token_sequence).unwrap_or(i64::MAX);
         let token = format!(
             "in-memory-share-{}-{}",
             orchard_id.0, orchard.share_token_sequence
         );
-        orchard.share_tokens.push((
-            OrchardShareAccess {
+        orchard.share_tokens.push(InMemoryShareToken {
+            id,
+            access: OrchardShareAccess {
                 orchard_id,
-                permission,
+                permissions,
             },
-            token.clone(),
-        ));
-        Ok(token)
+            token: token.clone(),
+            created_at_unix_seconds,
+        });
+        Ok(crate::hexagon::models::CreatedOrchardShareToken { id, token })
     }
 
     fn orchard_share_for_token(
@@ -428,8 +441,74 @@ impl AccessControl for InMemoryOrchardStorage {
             .unwrap()
             .share_tokens
             .iter()
-            .find(|(_, share_token)| share_token == token)
-            .map(|(access, _)| *access))
+            .find(|share| share.token == token)
+            .map(|share| share.access))
+    }
+
+    fn issued_orchard_share_tokens(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<IssuedOrchardShareToken>, AccessControlError> {
+        let orchard = self.orchard.lock().unwrap();
+        if !orchard.orchards.iter().any(|(candidate, owner_user_id)| {
+            candidate.id == orchard_id && *owner_user_id == user_id
+        }) {
+            return Err(AccessControlError::ShareTokensCouldNotBeListed);
+        }
+        Ok(orchard
+            .share_tokens
+            .iter()
+            .filter(|share| share.access.orchard_id == orchard_id)
+            .map(|share| IssuedOrchardShareToken {
+                id: share.id,
+                permissions: share.access.permissions,
+                created_at_unix_seconds: share.created_at_unix_seconds,
+            })
+            .collect())
+    }
+
+    fn change_orchard_share_permissions(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+        share_id: OrchardShareTokenId,
+        permissions: OrchardSharePermissions,
+    ) -> Result<bool, AccessControlError> {
+        let mut orchard = self.orchard.lock().unwrap();
+        if !orchard.orchards.iter().any(|(candidate, owner_user_id)| {
+            candidate.id == orchard_id && *owner_user_id == user_id
+        }) {
+            return Err(AccessControlError::ShareTokenCouldNotBeChanged);
+        }
+        let Some(share) = orchard
+            .share_tokens
+            .iter_mut()
+            .find(|share| share.id == share_id && share.access.orchard_id == orchard_id)
+        else {
+            return Ok(false);
+        };
+        share.access.permissions = permissions;
+        Ok(true)
+    }
+
+    fn revoke_orchard_share_token(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+        share_id: OrchardShareTokenId,
+    ) -> Result<bool, AccessControlError> {
+        let mut orchard = self.orchard.lock().unwrap();
+        if !orchard.orchards.iter().any(|(candidate, owner_user_id)| {
+            candidate.id == orchard_id && *owner_user_id == user_id
+        }) {
+            return Err(AccessControlError::ShareTokenCouldNotBeRevoked);
+        }
+        let original_len = orchard.share_tokens.len();
+        orchard
+            .share_tokens
+            .retain(|share| !(share.id == share_id && share.access.orchard_id == orchard_id));
+        Ok(orchard.share_tokens.len() != original_len)
     }
 
     fn delete_session(&mut self, token: &str) -> Result<(), AccessControlError> {

@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   accessHeaders,
+  canAddPhotosToOrchard,
   canHarvestOrchard,
   canWaterOrchard,
   hasOpenOrchard,
@@ -18,27 +19,45 @@ test("show orchard controls only while an owned or shared orchard is open", () =
   assert.equal(hasOpenOrchard({ mode: "empty" }), false);
   assert.equal(hasOpenOrchard({ mode: "login-required" }), false);
   assert.equal(hasOpenOrchard({ mode: "editable" }), true);
-  assert.equal(hasOpenOrchard({ mode: "read-only" }), true);
-  assert.equal(hasOpenOrchard({ mode: "watering" }), true);
-  assert.equal(hasOpenOrchard({ mode: "harvest-watering" }), true);
+  assert.equal(hasOpenOrchard({ mode: "shared" }), true);
 });
 
 test("allow only an owner or watering-link visitor to water the open orchard", () => {
   assert.equal(canWaterOrchard({ mode: "empty" }), false);
   assert.equal(canWaterOrchard({ mode: "login-required" }), false);
   assert.equal(canWaterOrchard({ mode: "editable" }), true);
-  assert.equal(canWaterOrchard({ mode: "read-only" }), false);
-  assert.equal(canWaterOrchard({ mode: "watering" }), true);
-  assert.equal(canWaterOrchard({ mode: "harvest-watering" }), true);
+  assert.equal(canWaterOrchard({ mode: "shared", permissions: {} }), false);
+  assert.equal(
+    canWaterOrchard({ mode: "shared", permissions: { water: true } }),
+    true,
+  );
 });
 
 test("allow only an owner or combined-link visitor to harvest the open orchard", () => {
   assert.equal(canHarvestOrchard({ mode: "empty" }), false);
   assert.equal(canHarvestOrchard({ mode: "login-required" }), false);
   assert.equal(canHarvestOrchard({ mode: "editable" }), true);
-  assert.equal(canHarvestOrchard({ mode: "read-only" }), false);
-  assert.equal(canHarvestOrchard({ mode: "watering" }), false);
-  assert.equal(canHarvestOrchard({ mode: "harvest-watering" }), true);
+  assert.equal(canHarvestOrchard({ mode: "shared", permissions: {} }), false);
+  assert.equal(
+    canHarvestOrchard({ mode: "shared", permissions: { harvest: true } }),
+    true,
+  );
+});
+
+test("allow only an owner or photo-enabled link visitor to add photos", () => {
+  assert.equal(canAddPhotosToOrchard({ mode: "empty" }), false);
+  assert.equal(canAddPhotosToOrchard({ mode: "editable" }), true);
+  assert.equal(
+    canAddPhotosToOrchard({ mode: "shared", permissions: {} }),
+    false,
+  );
+  assert.equal(
+    canAddPhotosToOrchard({
+      mode: "shared",
+      permissions: { add_photos: true },
+    }),
+    true,
+  );
 });
 
 test("a watering fragment opens one orchard with watering access", () => {
@@ -48,9 +67,10 @@ test("a watering fragment opens one orchard with watering access", () => {
   );
 
   assert.deepEqual(access, {
-    mode: "watering",
+    mode: "shared",
     orchardId: 42,
     shareToken: "O8xz_watering-token",
+    permissions: {},
   });
   assert.deepEqual(accessHeaders(access), {
     "x-orchard-share-token": "O8xz_watering-token",
@@ -64,9 +84,10 @@ test("a combined fragment opens one orchard with harvest and watering access", (
   );
 
   assert.deepEqual(access, {
-    mode: "harvest-watering",
+    mode: "shared",
     orchardId: 42,
     shareToken: "O8xz-worker-token",
+    permissions: {},
   });
   assert.deepEqual(accessHeaders(access), {
     "x-orchard-share-token": "O8xz-worker-token",
@@ -87,9 +108,10 @@ test("a shared fragment opens one orchard read only without putting the secret i
   );
 
   assert.deepEqual(access, {
-    mode: "read-only",
+    mode: "shared",
     orchardId: 42,
     shareToken: "O8xz_private-token",
+    permissions: {},
   });
   assert.equal(
     orchardResourceUrl(access, "trees.geojson"),
@@ -125,7 +147,7 @@ test("share URLs keep the revocable token in the browser fragment", () => {
   );
   assert.equal(
     sharedOrchardUrl("https://orchard.example", 7, "watering-token", "watering"),
-    "https://orchard.example/#/orchards/7/share/watering/watering-token",
+    "https://orchard.example/#/orchards/7/share/watering-token",
   );
   assert.equal(
     sharedOrchardUrl(
@@ -134,12 +156,17 @@ test("share URLs keep the revocable token in the browser fragment", () => {
       "worker-token",
       "harvest-watering",
     ),
-    "https://orchard.example/#/orchards/7/share/harvest-watering/worker-token",
+    "https://orchard.example/#/orchards/7/share/worker-token",
   );
 });
 
-test("the owner can create the distinct harvest and watering link from the access panel", () => {
-  assert.match(indexHtml, /id="share-harvest-watering-orchard"/);
-  assert.match(indexHtml, /createShareLink\("harvest-watering"\)/);
-  assert.match(indexHtml, /permission === "harvest-watering"[\s\S]*?"share\/harvest-watering"/);
+test("the owner can choose capabilities and manage issued links", () => {
+  assert.match(indexHtml, /id="new-share-harvest"/);
+  assert.match(indexHtml, /id="new-share-water"/);
+  assert.match(indexHtml, /id="new-share-add-photos"/);
+  assert.match(indexHtml, /id="issued-share-tokens"/);
+  assert.match(indexHtml, /share-tokens/);
+  assert.match(indexHtml, /newlyCreatedShareLinks\.get\(String\(share\.id\)\)/);
+  assert.match(indexHtml, /if \(link\) row\.append\(linkBox\)/);
+  assert.doesNotMatch(indexHtml, /id="share-result"/);
 });

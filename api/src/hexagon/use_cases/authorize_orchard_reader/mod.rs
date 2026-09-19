@@ -1,4 +1,4 @@
-use crate::hexagon::models::OrchardId;
+use crate::hexagon::models::{OrchardId, OrchardSharePermissions};
 use crate::hexagon::ports::AccessControl;
 use crate::hexagon::use_cases::authorize_orchard_owner::{
     OrchardOwnerAccessError, OrchardOwnerAccessRequested, authorize_orchard_owner,
@@ -17,7 +17,7 @@ pub struct OrchardReadAccessRequested {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrchardReadAccess {
     Editable,
-    ReadOnly,
+    ReadOnly(OrchardSharePermissions),
 }
 
 #[derive(Debug, PartialEq)]
@@ -51,7 +51,7 @@ pub fn authorize_orchard_reader(
             .orchard_share_for_token(&share_token)
             .map_err(|_| OrchardReadAccessError::AccessCouldNotBeChecked)?
             .filter(|access| access.orchard_id == event.orchard_id)
-            .map(|_| OrchardReadAccess::ReadOnly)
+            .map(|access| OrchardReadAccess::ReadOnly(access.permissions))
             .ok_or(OrchardReadAccessError::AccessNotFound),
     }
 }

@@ -326,6 +326,144 @@ async fn only_the_owner_adds_photos_and_shared_readers_see_the_latest_webp_varia
 }
 
 #[tokio::test]
+async fn an_owner_lists_changes_and_revokes_hashed_share_tokens_with_independent_permissions() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let tokens_url = format!("{}/orchards/7/share-tokens", server.url());
+
+    let created = client
+        .post(&tokens_url)
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "permissions": {
+                "harvest": false,
+                "water": false,
+                "add_photos": true
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = created.json::<serde_json::Value>().await.unwrap();
+    let share_id = created["id"].as_u64().unwrap();
+    let token = created["share_token"].as_str().unwrap().to_owned();
+
+    let listed = client
+        .get(&tokens_url)
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = listed.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(listed["shares"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["shares"][0]["id"], share_id);
+    assert_eq!(listed["shares"][0]["permissions"]["add_photos"], true);
+    assert!(listed["shares"][0].get("share_token").is_none());
+
+    let share_access_url = format!("{}/orchards/7/share-access", server.url());
+    let access = client
+        .get(&share_access_url)
+        .header("x-orchard-share-token", &token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(access.status(), StatusCode::OK);
+    assert_eq!(
+        access.json::<serde_json::Value>().await.unwrap()["permissions"],
+        serde_json::json!({
+            "harvest": false,
+            "water": false,
+            "add_photos": true
+        })
+    );
+
+    let photo_url = format!("{}/orchards/7/trees/1/photos", server.url());
+    assert_eq!(
+        client
+            .post(&photo_url)
+            .header("x-orchard-share-token", &token)
+            .json(&photo_request(&webp(&[1, 2, 3]), &webp(&[4, 5])))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CREATED
+    );
+
+    let token_url = format!("{tokens_url}/{share_id}");
+    assert_eq!(
+        client
+            .patch(&token_url)
+            .header(header::COOKIE, &cookie)
+            .json(&serde_json::json!({
+                "permissions": {
+                    "harvest": true,
+                    "water": true,
+                    "add_photos": false
+                }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        client
+            .post(&photo_url)
+            .header("x-orchard-share-token", &token)
+            .json(&photo_request(&webp(&[6]), &webp(&[7])))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .get(&share_access_url)
+            .header("x-orchard-share-token", &token)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["permissions"],
+        serde_json::json!({
+            "harvest": true,
+            "water": true,
+            "add_photos": false
+        })
+    );
+
+    assert_eq!(
+        client
+            .delete(&token_url)
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        client
+            .get(&share_access_url)
+            .header("x-orchard-share-token", token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn only_a_watering_link_can_water_and_only_the_owner_can_order_a_row() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await

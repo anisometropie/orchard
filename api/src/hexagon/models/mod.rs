@@ -20,7 +20,8 @@ pub use map_configuration::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, GeoPoint, MapConfiguration,
 };
 pub use orchard_access::{
-    AuthenticatedSession, Orchard, OrchardId, OrchardShareAccess, OrchardSharePermission, User,
+    AuthenticatedSession, CreatedOrchardShareToken, IssuedOrchardShareToken, Orchard, OrchardId,
+    OrchardShareAccess, OrchardSharePermission, OrchardSharePermissions, OrchardShareTokenId, User,
     UserId,
 };
 pub use plant_identity::{

@@ -1,5 +1,6 @@
 use crate::hexagon::models::{
-    Orchard, OrchardId, OrchardShareAccess, OrchardSharePermission, User, UserId,
+    CreatedOrchardShareToken, IssuedOrchardShareToken, Orchard, OrchardId, OrchardShareAccess,
+    OrchardSharePermissions, OrchardShareTokenId, User, UserId,
 };
 
 #[derive(Debug, PartialEq)]
@@ -11,6 +12,9 @@ pub enum AccessControlError {
     OrchardOwnershipCouldNotBeRead,
     ShareTokenCouldNotBeCreated,
     ShareTokenCouldNotBeRead,
+    ShareTokensCouldNotBeListed,
+    ShareTokenCouldNotBeChanged,
+    ShareTokenCouldNotBeRevoked,
     SessionCouldNotBeDeleted,
     PasswordCouldNotBeChanged,
 }
@@ -38,13 +42,34 @@ pub trait AccessControl {
         &mut self,
         user_id: UserId,
         orchard_id: OrchardId,
-        permission: OrchardSharePermission,
-    ) -> Result<String, AccessControlError>;
+        permissions: OrchardSharePermissions,
+    ) -> Result<CreatedOrchardShareToken, AccessControlError>;
 
     fn orchard_share_for_token(
         &mut self,
         token: &str,
     ) -> Result<Option<OrchardShareAccess>, AccessControlError>;
+
+    fn issued_orchard_share_tokens(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<IssuedOrchardShareToken>, AccessControlError>;
+
+    fn change_orchard_share_permissions(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+        share_id: OrchardShareTokenId,
+        permissions: OrchardSharePermissions,
+    ) -> Result<bool, AccessControlError>;
+
+    fn revoke_orchard_share_token(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+        share_id: OrchardShareTokenId,
+    ) -> Result<bool, AccessControlError>;
 
     fn delete_session(&mut self, token: &str) -> Result<(), AccessControlError>;
 

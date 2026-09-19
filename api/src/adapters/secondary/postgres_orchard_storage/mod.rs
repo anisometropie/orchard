@@ -8,15 +8,15 @@ use rand::{RngCore, rngs::OsRng};
 use sha2::{Digest, Sha256};
 
 use crate::hexagon::models::{
-    AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow, GeoPoint,
-    HarvestDataOrigin, HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget,
-    HarvestRunTree, HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome,
-    HarvestTreeOutcomeRecord, HarvestWindowExtension, HarvestedPart, IdentificationStatus,
-    LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, Orchard, OrchardId,
-    OrchardShareAccess, OrchardSharePermission, OrchardTree, PlantCultivar, PlantCultivarId,
-    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole,
-    Tree, TreeId, TreePhoto, TreePhotoVariant, User, UserId, WateringRun, WateringRunId,
-    WateringRunTarget,
+    AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
+    CreatedOrchardShareToken, GeoPoint, HarvestDataOrigin, HarvestDate, HarvestPeriod, HarvestRun,
+    HarvestRunId, HarvestRunTarget, HarvestRunTree, HarvestScheduleOwner, HarvestTreeActionUndo,
+    HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension, HarvestedPart,
+    IdentificationStatus, IssuedOrchardShareToken, LegacyPlantIdentification, LegacyTreeSource,
+    MapConfiguration, Orchard, OrchardId, OrchardShareAccess, OrchardSharePermissions,
+    OrchardShareTokenId, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
+    PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId,
+    TreePhoto, TreePhotoVariant, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -146,33 +146,39 @@ impl AccessControl for PostgresOrchardStorage {
         &mut self,
         user_id: UserId,
         orchard_id: OrchardId,
-        permission: OrchardSharePermission,
-    ) -> Result<String, AccessControlError> {
+        permissions: OrchardSharePermissions,
+    ) -> Result<CreatedOrchardShareToken, AccessControlError> {
         let user_id = i64::try_from(user_id.0)
             .map_err(|_| AccessControlError::ShareTokenCouldNotBeCreated)?;
         let orchard_id = i64::try_from(orchard_id.0)
             .map_err(|_| AccessControlError::ShareTokenCouldNotBeCreated)?;
         let token = random_access_token();
         let token_hash = access_token_hash(&token);
-        let permission = match permission {
-            OrchardSharePermission::View => "view",
-            OrchardSharePermission::Watering => "watering",
-            OrchardSharePermission::HarvestAndWatering => "harvest_watering",
-        };
-        let changed = self
+        let row = self
             .client
-            .execute(
-                "INSERT INTO orchard_share_tokens (orchard_id, permission, token_hash)
-                 SELECT id, $3, $4
+            .query_opt(
+                "INSERT INTO orchard_share_tokens (
+                    orchard_id, token_hash, can_harvest, can_water, can_add_photos
+                 )
+                 SELECT id, $3, $4, $5, $6
                  FROM orchards
-                 WHERE id = $1 AND owner_user_id = $2",
-                &[&orchard_id, &user_id, &permission, &token_hash],
+                 WHERE id = $1 AND owner_user_id = $2
+                 RETURNING id",
+                &[
+                    &orchard_id,
+                    &user_id,
+                    &token_hash,
+                    &permissions.harvest,
+                    &permissions.water,
+                    &permissions.add_photos,
+                ],
             )
             .map_err(|_| AccessControlError::ShareTokenCouldNotBeCreated)?;
-        if changed != 1 {
-            return Err(AccessControlError::ShareTokenCouldNotBeCreated);
-        }
-        Ok(token)
+        let id = row
+            .and_then(|row| u64::try_from(row.get::<_, i64>(0)).ok())
+            .map(OrchardShareTokenId)
+            .ok_or(AccessControlError::ShareTokenCouldNotBeCreated)?;
+        Ok(CreatedOrchardShareToken { id, token })
     }
 
     fn orchard_share_for_token(
@@ -183,7 +189,7 @@ impl AccessControl for PostgresOrchardStorage {
         let access = self
             .client
             .query_opt(
-                "SELECT orchard_id, permission
+                "SELECT orchard_id, can_harvest, can_water, can_add_photos
                  FROM orchard_share_tokens
                  WHERE token_hash = $1",
                 &[&token_hash],
@@ -194,18 +200,119 @@ impl AccessControl for PostgresOrchardStorage {
                 let orchard_id = u64::try_from(row.get::<_, i64>(0))
                     .map(OrchardId)
                     .map_err(|_| AccessControlError::ShareTokenCouldNotBeRead)?;
-                let permission = match row.get::<_, String>(1).as_str() {
-                    "view" => OrchardSharePermission::View,
-                    "watering" => OrchardSharePermission::Watering,
-                    "harvest_watering" => OrchardSharePermission::HarvestAndWatering,
-                    _ => return Err(AccessControlError::ShareTokenCouldNotBeRead),
-                };
                 Ok(OrchardShareAccess {
                     orchard_id,
-                    permission,
+                    permissions: OrchardSharePermissions {
+                        harvest: row.get(1),
+                        water: row.get(2),
+                        add_photos: row.get(3),
+                    },
                 })
             })
             .transpose()
+    }
+
+    fn issued_orchard_share_tokens(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<IssuedOrchardShareToken>, AccessControlError> {
+        let user_id = i64::try_from(user_id.0)
+            .map_err(|_| AccessControlError::ShareTokensCouldNotBeListed)?;
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| AccessControlError::ShareTokensCouldNotBeListed)?;
+        self.client
+            .query(
+                "SELECT
+                    share.id,
+                    share.can_harvest,
+                    share.can_water,
+                    share.can_add_photos,
+                    floor(extract(epoch FROM share.created_at))::BIGINT
+                 FROM orchard_share_tokens share
+                 JOIN orchards orchard ON orchard.id = share.orchard_id
+                 WHERE share.orchard_id = $1 AND orchard.owner_user_id = $2
+                 ORDER BY share.created_at, share.id",
+                &[&orchard_id, &user_id],
+            )
+            .map_err(|_| AccessControlError::ShareTokensCouldNotBeListed)?
+            .into_iter()
+            .map(|row| {
+                let id = u64::try_from(row.get::<_, i64>(0))
+                    .map(OrchardShareTokenId)
+                    .map_err(|_| AccessControlError::ShareTokensCouldNotBeListed)?;
+                Ok(IssuedOrchardShareToken {
+                    id,
+                    permissions: OrchardSharePermissions {
+                        harvest: row.get(1),
+                        water: row.get(2),
+                        add_photos: row.get(3),
+                    },
+                    created_at_unix_seconds: row.get(4),
+                })
+            })
+            .collect()
+    }
+
+    fn change_orchard_share_permissions(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+        share_id: OrchardShareTokenId,
+        permissions: OrchardSharePermissions,
+    ) -> Result<bool, AccessControlError> {
+        let user_id = i64::try_from(user_id.0)
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeChanged)?;
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeChanged)?;
+        let share_id = i64::try_from(share_id.0)
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeChanged)?;
+        self.client
+            .execute(
+                "UPDATE orchard_share_tokens share
+                 SET can_harvest = $4, can_water = $5, can_add_photos = $6
+                 FROM orchards orchard
+                 WHERE share.id = $3
+                   AND share.orchard_id = $1
+                   AND orchard.id = share.orchard_id
+                   AND orchard.owner_user_id = $2",
+                &[
+                    &orchard_id,
+                    &user_id,
+                    &share_id,
+                    &permissions.harvest,
+                    &permissions.water,
+                    &permissions.add_photos,
+                ],
+            )
+            .map(|changed| changed == 1)
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeChanged)
+    }
+
+    fn revoke_orchard_share_token(
+        &mut self,
+        user_id: UserId,
+        orchard_id: OrchardId,
+        share_id: OrchardShareTokenId,
+    ) -> Result<bool, AccessControlError> {
+        let user_id = i64::try_from(user_id.0)
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeRevoked)?;
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeRevoked)?;
+        let share_id = i64::try_from(share_id.0)
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeRevoked)?;
+        self.client
+            .execute(
+                "DELETE FROM orchard_share_tokens share
+                 USING orchards orchard
+                 WHERE share.id = $3
+                   AND share.orchard_id = $1
+                   AND orchard.id = share.orchard_id
+                   AND orchard.owner_user_id = $2",
+                &[&orchard_id, &user_id, &share_id],
+            )
+            .map(|changed| changed == 1)
+            .map_err(|_| AccessControlError::ShareTokenCouldNotBeRevoked)
     }
 
     fn delete_session(&mut self, token: &str) -> Result<(), AccessControlError> {

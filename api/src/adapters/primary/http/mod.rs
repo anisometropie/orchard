@@ -19,8 +19,9 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use crate::hexagon::models::{
     AerialOverlayId, AnnualDate, BotanicalTaxon, GeoPoint, HarvestDate, HarvestRunId,
     HarvestRunTarget, HarvestScheduleOwner, HarvestedPart, InfraspecificRank, MapConfiguration,
-    NamedTaxon, OrchardId, OrchardSharePermission, OrchardTree, PlantCultivarId, PlantIdentity,
-    PlantIdentityId, Tree, TreeId, TreePhotoVariant, WateringRunId, WateringRunTarget,
+    NamedTaxon, OrchardId, OrchardSharePermission, OrchardSharePermissions, OrchardShareTokenId,
+    OrchardTree, PlantCultivarId, PlantIdentity, PlantIdentityId, Tree, TreeId, TreePhotoVariant,
+    WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, MapConfigurationStorage, OrchardStorage, TreePhotoStorage,
@@ -34,6 +35,10 @@ use crate::hexagon::use_cases::authorize_orchard_harvester::{
 };
 use crate::hexagon::use_cases::authorize_orchard_owner::{
     OrchardOwnerAccessError, OrchardOwnerAccessRequested, authorize_orchard_owner,
+};
+use crate::hexagon::use_cases::authorize_orchard_photographer::{
+    OrchardPhotographyAccessError, OrchardPhotographyAccessRequested, OrchardPhotographyCredential,
+    authorize_orchard_photographer,
 };
 use crate::hexagon::use_cases::authorize_orchard_reader::{
     OrchardReadAccessError, OrchardReadAccessRequested, OrchardReadCredential,
@@ -49,6 +54,10 @@ use crate::hexagon::use_cases::cancel_harvest_run::{
 use crate::hexagon::use_cases::cancel_watering_run::{
     WateringRunCancellationError, WateringRunCancellationRequested, cancel_watering_run,
 };
+use crate::hexagon::use_cases::change_orchard_share_permissions::{
+    OrchardSharePermissionsChangeError, OrchardSharePermissionsChanged,
+    change_orchard_share_permissions,
+};
 use crate::hexagon::use_cases::change_tree_condition::{
     OrchardTreeConditionChanged, TreeConditionChangeError, change_orchard_tree_condition,
 };
@@ -57,6 +66,9 @@ use crate::hexagon::use_cases::defer_harvest_tree::{
 };
 use crate::hexagon::use_cases::list_harvest_candidates::{
     HarvestCandidatesError, HarvestCandidatesRequested, list_harvest_candidates,
+};
+use crate::hexagon::use_cases::list_orchard_shares::{
+    OrchardSharesListError, OrchardSharesRequested, list_orchard_shares,
 };
 use crate::hexagon::use_cases::list_orchard_trees::list_trees_for_orchard;
 use crate::hexagon::use_cases::load_active_harvest_run::{
@@ -91,6 +103,9 @@ use crate::hexagon::use_cases::replace_plant_harvest_windows::{
 };
 use crate::hexagon::use_cases::restore_user_session::{
     UserSessionRestorationError, restore_user_session,
+};
+use crate::hexagon::use_cases::revoke_orchard_share::{
+    OrchardShareRevokeError, OrchardShareRevoked, revoke_orchard_share,
 };
 use crate::hexagon::use_cases::share_orchard::{
     OrchardShareError, OrchardShareLinkRequested, share_orchard,
@@ -179,6 +194,19 @@ where
         .route(
             "/orchards/{orchard_id}/share/harvest-watering",
             post(share_orchard_for_harvest_and_watering_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/share-access",
+            get(share_access_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/share-tokens",
+            get(list_share_tokens_handler::<U>).post(create_share_token_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/share-tokens/{share_id}",
+            patch(change_share_token_permissions_handler::<U>)
+                .delete(revoke_share_token_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/row-order",
@@ -367,7 +395,7 @@ where
         access_control,
         OrchardId(orchard_id),
         headers,
-        OrchardSharePermission::View,
+        OrchardSharePermission::View.into(),
     )
     .await
 }
@@ -384,7 +412,7 @@ where
         access_control,
         OrchardId(orchard_id),
         headers,
-        OrchardSharePermission::Watering,
+        OrchardSharePermission::Watering.into(),
     )
     .await
 }
@@ -401,7 +429,7 @@ where
         access_control,
         OrchardId(orchard_id),
         headers,
-        OrchardSharePermission::HarvestAndWatering,
+        OrchardSharePermission::HarvestAndWatering.into(),
     )
     .await
 }
@@ -410,7 +438,7 @@ async fn create_share_link<U>(
     access_control: Arc<Mutex<U>>,
     orchard_id: OrchardId,
     headers: HeaderMap,
-    permission: OrchardSharePermission,
+    permissions: OrchardSharePermissions,
 ) -> Result<Json<Value>, StatusCode>
 where
     U: AccessControl + Send + 'static,
@@ -421,18 +449,178 @@ where
             OrchardShareLinkRequested {
                 orchard_id,
                 session_token,
-                permission,
+                permissions,
             },
             &mut *access_control.lock().unwrap(),
         )
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|share_token| Json(json!({ "share_token": share_token })))
+    .map(|created| Json(json!({ "share_token": created.token, "id": created.id.0 })))
     .map_err(|error| match error {
         OrchardShareError::SessionNotFound => StatusCode::UNAUTHORIZED,
         OrchardShareError::OrchardNotOwned => StatusCode::NOT_FOUND,
         OrchardShareError::ShareLinkCouldNotBeCreated => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SharePermissionsRequest {
+    permissions: OrchardSharePermissions,
+}
+
+async fn create_share_token_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+    request: Result<Json<SharePermissionsRequest>, JsonRejection>,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    create_share_link(
+        access_control,
+        OrchardId(orchard_id),
+        headers,
+        request.permissions,
+    )
+    .await
+}
+
+async fn list_share_tokens_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        list_orchard_shares(
+            OrchardSharesRequested {
+                orchard_id: OrchardId(orchard_id),
+                session_token,
+            },
+            &mut *access_control.lock().unwrap(),
+        )
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(|shares| Json(json!({ "shares": shares })))
+    .map_err(|error| match error {
+        OrchardSharesListError::SessionNotFound => StatusCode::UNAUTHORIZED,
+        OrchardSharesListError::OrchardNotOwned => StatusCode::NOT_FOUND,
+        OrchardSharesListError::SharesCouldNotBeListed => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+async fn change_share_token_permissions_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    Path((orchard_id, share_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<SharePermissionsRequest>, JsonRejection>,
+) -> Result<StatusCode, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    tokio::task::spawn_blocking(move || {
+        change_orchard_share_permissions(
+            OrchardSharePermissionsChanged {
+                orchard_id: OrchardId(orchard_id),
+                share_id: OrchardShareTokenId(share_id),
+                permissions: request.permissions,
+                session_token,
+            },
+            &mut *access_control.lock().unwrap(),
+        )
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(|()| StatusCode::NO_CONTENT)
+    .map_err(|error| match error {
+        OrchardSharePermissionsChangeError::SessionNotFound => StatusCode::UNAUTHORIZED,
+        OrchardSharePermissionsChangeError::OrchardNotOwned
+        | OrchardSharePermissionsChangeError::ShareNotFound => StatusCode::NOT_FOUND,
+        OrchardSharePermissionsChangeError::PermissionsCouldNotBeChanged => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    })
+}
+
+async fn revoke_share_token_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    Path((orchard_id, share_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        revoke_orchard_share(
+            OrchardShareRevoked {
+                orchard_id: OrchardId(orchard_id),
+                share_id: OrchardShareTokenId(share_id),
+                session_token,
+            },
+            &mut *access_control.lock().unwrap(),
+        )
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(|()| StatusCode::NO_CONTENT)
+    .map_err(|error| match error {
+        OrchardShareRevokeError::SessionNotFound => StatusCode::UNAUTHORIZED,
+        OrchardShareRevokeError::OrchardNotOwned | OrchardShareRevokeError::ShareNotFound => {
+            StatusCode::NOT_FOUND
+        }
+        OrchardShareRevokeError::ShareCouldNotBeRevoked => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+async fn share_access_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    let credential = orchard_read_credential(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        authorize_orchard_reader(
+            OrchardReadAccessRequested {
+                orchard_id: OrchardId(orchard_id),
+                credential,
+            },
+            &mut *access_control.lock().unwrap(),
+        )
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(|access| {
+        let permissions = match access {
+            crate::hexagon::use_cases::authorize_orchard_reader::OrchardReadAccess::Editable => {
+                OrchardSharePermissions {
+                    harvest: true,
+                    water: true,
+                    add_photos: true,
+                }
+            }
+            crate::hexagon::use_cases::authorize_orchard_reader::OrchardReadAccess::ReadOnly(
+                permissions,
+            ) => permissions,
+        };
+        Json(json!({ "permissions": permissions }))
+    })
+    .map_err(|error| match error {
+        OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+        OrchardReadAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
     })
 }
 
@@ -1284,6 +1472,22 @@ fn orchard_harvesting_credential(
         .ok_or(StatusCode::UNAUTHORIZED)
 }
 
+fn orchard_photography_credential(
+    headers: &HeaderMap,
+) -> Result<OrchardPhotographyCredential, StatusCode> {
+    if let Some(share_token) = headers
+        .get("x-orchard-share-token")
+        .and_then(|value| value.to_str().ok())
+    {
+        return Ok(OrchardPhotographyCredential::ShareToken(
+            share_token.to_owned(),
+        ));
+    }
+    cookie_value(headers, "orchard_session")
+        .map(OrchardPhotographyCredential::OwnerSession)
+        .ok_or(StatusCode::UNAUTHORIZED)
+}
+
 fn owner_session_token(headers: &HeaderMap) -> Result<String, StatusCode> {
     if headers.contains_key("x-orchard-share-token") {
         return Err(StatusCode::FORBIDDEN);
@@ -1346,6 +1550,25 @@ fn authorize_harvesting_access(
         OrchardHarvestingAccessError::AccessNotFound => StatusCode::NOT_FOUND,
         OrchardHarvestingAccessError::PermissionDenied => StatusCode::FORBIDDEN,
         OrchardHarvestingAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+fn authorize_photography_access(
+    access_control: &mut impl AccessControl,
+    orchard_id: OrchardId,
+    credential: OrchardPhotographyCredential,
+) -> Result<(), StatusCode> {
+    authorize_orchard_photographer(
+        OrchardPhotographyAccessRequested {
+            orchard_id,
+            credential,
+        },
+        access_control,
+    )
+    .map_err(|error| match error {
+        OrchardPhotographyAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+        OrchardPhotographyAccessError::PermissionDenied => StatusCode::FORBIDDEN,
+        OrchardPhotographyAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
     })
 }
 
@@ -1534,7 +1757,7 @@ async fn add_tree_photo_handler<U>(
 where
     U: AccessControl + TreePhotoStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_photography_credential(&headers)?;
     let Json(request) = request.map_err(|rejection| rejection.status())?;
     let full_webp = STANDARD
         .decode(request.full_webp_base64)
@@ -1546,7 +1769,7 @@ where
     tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        authorize_photography_access(&mut *storage, orchard_id, credential)?;
         add_tree_photo(
             TreePhotoAdded {
                 orchard_id,

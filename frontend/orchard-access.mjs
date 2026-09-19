@@ -5,9 +5,10 @@ export function resolveOrchardAccess(hash, session) {
     /^#\/orchards\/(\d+)\/share\/harvest-watering\/([^/]+)$/.exec(hash || "");
   if (harvestWatering) {
     return {
-      mode: "harvest-watering",
+      mode: "shared",
       orchardId: Number(harvestWatering[1]),
       shareToken: decodeFragmentPart(harvestWatering[2]),
+      permissions: {},
     };
   }
 
@@ -16,18 +17,20 @@ export function resolveOrchardAccess(hash, session) {
   );
   if (watering) {
     return {
-      mode: "watering",
+      mode: "shared",
       orchardId: Number(watering[1]),
       shareToken: decodeFragmentPart(watering[2]),
+      permissions: {},
     };
   }
 
   const shared = /^#\/orchards\/(\d+)\/share\/([^/]+)$/.exec(hash || "");
   if (shared) {
     return {
-      mode: "read-only",
+      mode: "shared",
       orchardId: Number(shared[1]),
       shareToken: decodeFragmentPart(shared[2]),
+      permissions: {},
     };
   }
 
@@ -42,17 +45,19 @@ export function resolveOrchardAccess(hash, session) {
 }
 
 export function hasOpenOrchard(access) {
-  return ["editable", "read-only", "watering", "harvest-watering"].includes(
-    access.mode,
-  );
+  return ["editable", "shared"].includes(access.mode);
 }
 
 export function canWaterOrchard(access) {
-  return ["editable", "watering", "harvest-watering"].includes(access.mode);
+  return access.mode === "editable" || access.permissions?.water === true;
 }
 
 export function canHarvestOrchard(access) {
-  return ["editable", "harvest-watering"].includes(access.mode);
+  return access.mode === "editable" || access.permissions?.harvest === true;
+}
+
+export function canAddPhotosToOrchard(access) {
+  return access.mode === "editable" || access.permissions?.add_photos === true;
 }
 
 export function orchardResourceUrl(access, resource) {
@@ -61,26 +66,15 @@ export function orchardResourceUrl(access, resource) {
 }
 
 export function accessHeaders(access) {
-  return ["read-only", "watering", "harvest-watering"].includes(access.mode)
+  return access.mode === "shared"
     ? { "x-orchard-share-token": access.shareToken }
     : {};
 }
 
-export function sharedOrchardUrl(
-  origin,
-  orchardId,
-  shareToken,
-  permission = "view",
-) {
-  const permissionPath =
-    permission === "watering"
-      ? "/watering"
-      : permission === "harvest-watering"
-        ? "/harvest-watering"
-        : "";
+export function sharedOrchardUrl(origin, orchardId, shareToken) {
   return `${origin.replace(/\/$/, "")}/#/orchards/${encodeURIComponent(
     orchardId,
-  )}/share${permissionPath}/${encodeURIComponent(shareToken)}`;
+  )}/share/${encodeURIComponent(shareToken)}`;
 }
 
 function decodeFragmentPart(value) {

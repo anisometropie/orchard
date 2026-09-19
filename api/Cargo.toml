@@ -69,6 +69,22 @@ name = "authorize_orchard_harvester_unit"
 path = "src/hexagon/use_cases/authorize_orchard_harvester/authorize_orchard_harvester_unit_test.rs"
 
 [[test]]
+name = "authorize_orchard_photographer_unit"
+path = "src/hexagon/use_cases/authorize_orchard_photographer/authorize_orchard_photographer_unit_test.rs"
+
+[[test]]
+name = "list_orchard_shares_unit"
+path = "src/hexagon/use_cases/list_orchard_shares/list_orchard_shares_unit_test.rs"
+
+[[test]]
+name = "change_orchard_share_permissions_unit"
+path = "src/hexagon/use_cases/change_orchard_share_permissions/change_orchard_share_permissions_unit_test.rs"
+
+[[test]]
+name = "revoke_orchard_share_unit"
+path = "src/hexagon/use_cases/revoke_orchard_share/revoke_orchard_share_unit_test.rs"
+
+[[test]]
 name = "order_orchard_row_unit"
 path = "src/hexagon/use_cases/order_orchard_row/order_orchard_row_unit_test.rs"
 

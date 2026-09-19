@@ -1,4 +1,4 @@
-use crate::hexagon::models::{OrchardId, OrchardSharePermission};
+use crate::hexagon::models::{CreatedOrchardShareToken, OrchardId, OrchardSharePermissions};
 use crate::hexagon::ports::AccessControl;
 use crate::hexagon::use_cases::authorize_orchard_owner::{
     OrchardOwnerAccessError, OrchardOwnerAccessRequested, authorize_orchard_owner,
@@ -7,7 +7,7 @@ use crate::hexagon::use_cases::authorize_orchard_owner::{
 pub struct OrchardShareLinkRequested {
     pub orchard_id: OrchardId,
     pub session_token: String,
-    pub permission: OrchardSharePermission,
+    pub permissions: OrchardSharePermissions,
 }
 
 #[derive(Debug, PartialEq)]
@@ -20,7 +20,7 @@ pub enum OrchardShareError {
 pub fn share_orchard(
     event: OrchardShareLinkRequested,
     access_control: &mut impl AccessControl,
-) -> Result<String, OrchardShareError> {
+) -> Result<CreatedOrchardShareToken, OrchardShareError> {
     let user = authorize_orchard_owner(
         OrchardOwnerAccessRequested {
             orchard_id: event.orchard_id,
@@ -36,6 +36,6 @@ pub fn share_orchard(
         }
     })?;
     access_control
-        .create_share_token(user.id, event.orchard_id, event.permission)
+        .create_share_token(user.id, event.orchard_id, event.permissions)
         .map_err(|_| OrchardShareError::ShareLinkCouldNotBeCreated)
 }
