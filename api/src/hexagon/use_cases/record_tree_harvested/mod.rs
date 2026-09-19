@@ -1,5 +1,5 @@
 use crate::hexagon::models::{
-    HarvestDate, HarvestRunId, HarvestTreeOutcome, OrchardId, TreeId,
+    HarvestDate, HarvestRunId, HarvestTreeActionUndo, HarvestTreeOutcome, OrchardId, TreeId,
     current_harvest_parts_and_period,
 };
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
@@ -48,6 +48,7 @@ pub fn record_tree_harvested(
         let current_index = current_index.expect("the current harvest tree was checked");
         let snapshot_period = run.ordered_trees[current_index].period;
         let snapshot_parts = run.ordered_trees[current_index].harvested_parts.clone();
+        let previous_outcome = run.ordered_trees[current_index].outcome;
         if harvested_on < run.started_on || harvested_on < snapshot_period.start {
             return Err(TreeHarvestedEverythingError::ActionDateOutsideRunPeriod);
         }
@@ -87,6 +88,19 @@ pub fn record_tree_harvested(
             .record_harvest_tree_outcome(event.harvest_run_id, event.tree_id, outcome)
             .map_err(|_| TreeHarvestedEverythingError::TreeCouldNotBeRecorded)?;
         run.ordered_trees[current_index].outcome = Some(outcome);
+        orchard
+            .save_harvest_tree_action_undo(
+                event.harvest_run_id,
+                &HarvestTreeActionUndo {
+                    tree_id: event.tree_id,
+                    previous_outcome,
+                    previous_period_end: snapshot_period.end,
+                    recorded_outcome: outcome,
+                    recorded_period_end: run.ordered_trees[current_index].period.end,
+                    window_extensions: vec![],
+                },
+            )
+            .map_err(|_| TreeHarvestedEverythingError::TreeCouldNotBeRecorded)?;
         if current_harvest_tree_index(&run, harvested_on).is_none() {
             orchard
                 .complete_harvest_run(event.harvest_run_id)

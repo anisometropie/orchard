@@ -110,6 +110,9 @@ pub enum HarvestTreeOutcome {
     HarvestedEverything {
         harvested_on: HarvestDate,
     },
+    DoneForWindow {
+        recorded_on: HarvestDate,
+    },
     Deferred {
         deferred_on: HarvestDate,
         retry_on: HarvestDate,
@@ -143,11 +146,21 @@ pub struct HarvestTreeOutcomeRecord {
     pub outcome: HarvestTreeOutcome,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HarvestWindowExtension {
     pub owner: HarvestScheduleOwner,
     pub current_window: AnnualHarvestWindow,
     pub new_end: AnnualDate,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HarvestTreeActionUndo {
+    pub tree_id: TreeId,
+    pub previous_outcome: Option<HarvestTreeOutcome>,
+    pub previous_period_end: HarvestDate,
+    pub recorded_outcome: HarvestTreeOutcome,
+    pub recorded_period_end: HarvestDate,
+    pub window_extensions: Vec<HarvestWindowExtension>,
 }
 
 pub(crate) struct EligibleHarvestTree<'a> {
@@ -192,7 +205,8 @@ pub(crate) fn eligible_harvest_trees<'a>(
                             && record.harvested_parts.contains(harvested_part)
                             && periods_overlap(record.period, *period)
                             && match record.outcome {
-                                HarvestTreeOutcome::HarvestedEverything { .. } => true,
+                                HarvestTreeOutcome::HarvestedEverything { .. }
+                                | HarvestTreeOutcome::DoneForWindow { .. } => true,
                                 HarvestTreeOutcome::Deferred { retry_on, .. } => {
                                     action_date < retry_on
                                 }

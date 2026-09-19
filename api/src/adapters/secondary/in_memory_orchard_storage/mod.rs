@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 use crate::hexagon::models::{
     AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, GeoPoint,
     HarvestDataOrigin, HarvestDate, HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree,
-    HarvestScheduleOwner, HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension,
-    HarvestedPart, MapConfiguration, Orchard, OrchardId, OrchardShareAccess,
-    OrchardSharePermission, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
-    PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId, TreePhoto,
-    TreePhotoVariant, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
+    HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
+    HarvestWindowExtension, HarvestedPart, MapConfiguration, Orchard, OrchardId,
+    OrchardShareAccess, OrchardSharePermission, OrchardTree, PlantCultivar, PlantCultivarId,
+    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, Tree, TreeId,
+    TreePhoto, TreePhotoVariant, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -47,6 +47,7 @@ struct InMemoryOrchard {
     tree_photos: Vec<(OrchardId, TreeId, TreePhoto)>,
     watering_runs: Vec<WateringRun>,
     harvest_runs: Vec<HarvestRun>,
+    harvest_tree_action_undos: Vec<(HarvestRunId, HarvestTreeActionUndo)>,
 }
 
 struct InMemoryUser {
@@ -80,6 +81,8 @@ struct InMemoryOrchardTransaction {
     staged_harvest_runs: Vec<HarvestRun>,
     staged_harvest_tree_outcomes: Vec<(HarvestRunId, TreeId, HarvestTreeOutcome)>,
     staged_harvest_period_extensions: Vec<(HarvestRunId, TreeId, HarvestDate)>,
+    staged_harvest_tree_action_undos: Vec<(HarvestRunId, HarvestTreeActionUndo)>,
+    staged_restored_harvest_tree_actions: Vec<(HarvestRunId, HarvestTreeActionUndo)>,
     staged_completed_harvest_runs: Vec<HarvestRunId>,
     staged_deleted_harvest_runs: Vec<HarvestRunId>,
 }
@@ -290,6 +293,7 @@ impl InMemoryOrchardStorage {
             tree_photos: Vec::new(),
             watering_runs: Vec::new(),
             harvest_runs: Vec::new(),
+            harvest_tree_action_undos: Vec::new(),
         }));
         (
             Self {
@@ -710,6 +714,34 @@ impl OrchardStorage for InMemoryOrchardStorage {
                     {
                         run.completed = true;
                     }
+                }
+                for (run_id, undo) in transaction.staged_harvest_tree_action_undos {
+                    committed_orchard
+                        .harvest_tree_action_undos
+                        .retain(|(stored_run_id, _)| *stored_run_id != run_id);
+                    committed_orchard
+                        .harvest_tree_action_undos
+                        .push((run_id, undo));
+                }
+                for (run_id, undo) in transaction.staged_restored_harvest_tree_actions {
+                    if let Some(run) = committed_orchard
+                        .harvest_runs
+                        .iter_mut()
+                        .find(|run| run.id == run_id)
+                    {
+                        run.completed = false;
+                        if let Some(tree) = run
+                            .ordered_trees
+                            .iter_mut()
+                            .find(|tree| tree.tree_id == undo.tree_id)
+                        {
+                            tree.outcome = undo.previous_outcome;
+                            tree.period.end = undo.previous_period_end;
+                        }
+                    }
+                    committed_orchard
+                        .harvest_tree_action_undos
+                        .retain(|(stored_run_id, _)| *stored_run_id != run_id);
                 }
                 committed_orchard
                     .harvest_runs
@@ -1526,6 +1558,148 @@ impl OrchardStorage for InMemoryOrchardStorage {
         Ok(true)
     }
 
+    fn restore_orchard_harvest_window(
+        &mut self,
+        orchard_id: OrchardId,
+        extension: &HarvestWindowExtension,
+    ) -> Result<bool, OrchardStorageError> {
+        let staged_windows = self.transaction.as_ref().and_then(|transaction| {
+            transaction
+                .staged_orchard_harvest_schedule_replacements
+                .iter()
+                .rev()
+                .find(|(stored_orchard_id, owner, _)| {
+                    *stored_orchard_id == orchard_id && *owner == extension.owner
+                })
+                .map(|(_, _, windows)| windows.clone())
+        });
+        let orchard = self.orchard.lock().unwrap();
+        let schedule = staged_windows.as_ref().or_else(|| {
+            orchard
+                .orchard_harvest_schedules
+                .iter()
+                .find(|(stored_orchard_id, owner, _)| {
+                    *stored_orchard_id == orchard_id && *owner == extension.owner
+                })
+                .map(|(_, _, windows)| windows)
+                .or_else(|| {
+                    orchard
+                        .harvest_schedules
+                        .iter()
+                        .find(|(owner, _)| *owner == extension.owner)
+                        .map(|(_, windows)| windows)
+                })
+        });
+        let Some(mut windows) = schedule.cloned() else {
+            return Ok(false);
+        };
+        let mut extended_window = extension.current_window.clone();
+        extended_window.end = extension.new_end;
+        extended_window.data_origin = HarvestDataOrigin::FieldObservation;
+        extended_window.source_url = None;
+        let Some(window) = windows
+            .iter_mut()
+            .find(|window| **window == extended_window)
+        else {
+            return Ok(false);
+        };
+        *window = extension.current_window.clone();
+        drop(orchard);
+
+        let transaction = self
+            .transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        transaction
+            .staged_orchard_harvest_schedule_replacements
+            .retain(|(stored_orchard_id, owner, _)| {
+                *stored_orchard_id != orchard_id || *owner != extension.owner
+            });
+        transaction
+            .staged_orchard_harvest_schedule_replacements
+            .push((orchard_id, extension.owner, windows));
+        Ok(true)
+    }
+
+    fn save_harvest_tree_action_undo(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+        undo: &HarvestTreeActionUndo,
+    ) -> Result<(), OrchardStorageError> {
+        let can_save = self
+            .orchard
+            .lock()
+            .unwrap()
+            .harvest_runs
+            .iter()
+            .any(|run| run.id == harvest_run_id && !run.completed);
+        if !can_save {
+            return Err(OrchardStorageError::HarvestRunCouldNotBeChanged);
+        }
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_harvest_tree_action_undos
+            .push((harvest_run_id, undo.clone()));
+        Ok(())
+    }
+
+    fn harvest_tree_action_undo(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+    ) -> Result<Option<HarvestTreeActionUndo>, OrchardStorageError> {
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .harvest_tree_action_undos
+            .iter()
+            .find(|(stored_run_id, _)| *stored_run_id == harvest_run_id)
+            .map(|(_, undo)| undo.clone()))
+    }
+
+    fn restore_harvest_tree_action(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+        undo: &HarvestTreeActionUndo,
+    ) -> Result<(), OrchardStorageError> {
+        let orchard = self.orchard.lock().unwrap();
+        let Some(run) = orchard
+            .harvest_runs
+            .iter()
+            .find(|run| run.id == harvest_run_id)
+        else {
+            return Err(OrchardStorageError::HarvestRunCouldNotBeChanged);
+        };
+        let action_is_latest =
+            orchard
+                .harvest_tree_action_undos
+                .iter()
+                .any(|(stored_run_id, stored_undo)| {
+                    *stored_run_id == harvest_run_id && stored_undo == undo
+                });
+        let tree_matches = run.ordered_trees.iter().any(|tree| {
+            tree.tree_id == undo.tree_id
+                && tree.outcome == Some(undo.recorded_outcome)
+                && tree.period.end == undo.recorded_period_end
+        });
+        let another_run_is_active = run.completed
+            && orchard
+                .harvest_runs
+                .iter()
+                .any(|other| other.orchard_id == run.orchard_id && !other.completed);
+        drop(orchard);
+        if !action_is_latest || !tree_matches || another_run_is_active {
+            return Err(OrchardStorageError::HarvestRunCouldNotBeChanged);
+        }
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_restored_harvest_tree_actions
+            .push((harvest_run_id, undo.clone()));
+        Ok(())
+    }
+
     fn complete_harvest_run(
         &mut self,
         harvest_run_id: HarvestRunId,
@@ -1592,6 +1766,9 @@ fn harvest_outcome_fits_period(
         HarvestTreeOutcome::HarvestedEverything { harvested_on } => {
             period.start <= harvested_on && harvested_on <= period.end
         }
+        HarvestTreeOutcome::DoneForWindow { recorded_on } => {
+            period.start <= recorded_on && recorded_on <= period.end
+        }
         HarvestTreeOutcome::Deferred {
             deferred_on,
             retry_on,
@@ -1605,6 +1782,7 @@ fn deferred_outcome_is_due(
 ) -> bool {
     let action_date = match new_outcome {
         HarvestTreeOutcome::HarvestedEverything { harvested_on } => harvested_on,
+        HarvestTreeOutcome::DoneForWindow { recorded_on } => recorded_on,
         HarvestTreeOutcome::Deferred { deferred_on, .. } => deferred_on,
     };
     matches!(

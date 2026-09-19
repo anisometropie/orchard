@@ -10,12 +10,13 @@ use sha2::{Digest, Sha256};
 use crate::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow, GeoPoint,
     HarvestDataOrigin, HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget,
-    HarvestRunTree, HarvestScheduleOwner, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
-    HarvestWindowExtension, HarvestedPart, IdentificationStatus, LegacyPlantIdentification,
-    LegacyTreeSource, MapConfiguration, Orchard, OrchardId, OrchardShareAccess,
-    OrchardSharePermission, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
-    PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId,
-    TreePhoto, TreePhotoVariant, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
+    HarvestRunTree, HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome,
+    HarvestTreeOutcomeRecord, HarvestWindowExtension, HarvestedPart, IdentificationStatus,
+    LegacyPlantIdentification, LegacyTreeSource, MapConfiguration, Orchard, OrchardId,
+    OrchardShareAccess, OrchardSharePermission, OrchardTree, PlantCultivar, PlantCultivarId,
+    PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole,
+    Tree, TreeId, TreePhoto, TreePhotoVariant, User, UserId, WateringRun, WateringRunId,
+    WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -1185,6 +1186,173 @@ impl OrchardStorage for PostgresOrchardStorage {
         Ok(changed == 1)
     }
 
+    fn restore_orchard_harvest_window(
+        &mut self,
+        orchard_id: OrchardId,
+        extension: &HarvestWindowExtension,
+    ) -> Result<bool, OrchardStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| OrchardStorageError::HarvestWindowCouldNotBeExtended)?;
+        let (plant_identity_id, cultivar_id) = match extension.owner {
+            HarvestScheduleOwner::PlantIdentity(plant_identity_id) => (
+                i64::try_from(plant_identity_id.0)
+                    .map_err(|_| OrchardStorageError::HarvestWindowCouldNotBeExtended)?,
+                None,
+            ),
+            HarvestScheduleOwner::PlantCultivar(cultivar_id) => {
+                let cultivar_id = i64::try_from(cultivar_id.0)
+                    .map_err(|_| OrchardStorageError::HarvestWindowCouldNotBeExtended)?;
+                let Some(cultivar) = self
+                    .client
+                    .query_opt(
+                        "SELECT plant_identity_id FROM plant_cultivars WHERE id = $1",
+                        &[&cultivar_id],
+                    )
+                    .map_err(|_| OrchardStorageError::HarvestWindowCouldNotBeExtended)?
+                else {
+                    return Ok(false);
+                };
+                (cultivar.get::<_, i64>(0), Some(cultivar_id))
+            }
+        };
+        let original = &extension.current_window;
+        let harvested_part = original.harvested_part.as_str();
+        let original_data_origin = original.data_origin.as_str();
+        let changed = self
+            .client
+            .execute(
+                "UPDATE plant_harvest_windows
+                 SET end_month = $10, end_day = $11,
+                     data_origin = $12::text::harvest_data_origin,
+                     source_url = $13
+                 WHERE orchard_id = $1
+                   AND plant_identity_id = $2
+                   AND cultivar_id IS NOT DISTINCT FROM $3
+                   AND start_month = $4 AND start_day = $5
+                   AND end_month = $6 AND end_day = $7
+                   AND harvested_part = $8::text::harvested_part
+                   AND reference_region IS NOT DISTINCT FROM $9
+                   AND data_origin = 'field_observation'::harvest_data_origin
+                   AND source_url IS NULL",
+                &[
+                    &orchard_id,
+                    &plant_identity_id,
+                    &cultivar_id,
+                    &i16::from(original.start.month),
+                    &i16::from(original.start.day),
+                    &i16::from(extension.new_end.month),
+                    &i16::from(extension.new_end.day),
+                    &harvested_part,
+                    &original.reference_region,
+                    &i16::from(original.end.month),
+                    &i16::from(original.end.day),
+                    &original_data_origin,
+                    &original.source_url,
+                ],
+            )
+            .map_err(|_| OrchardStorageError::HarvestWindowCouldNotBeExtended)?;
+        Ok(changed == 1)
+    }
+
+    fn save_harvest_tree_action_undo(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+        undo: &HarvestTreeActionUndo,
+    ) -> Result<(), OrchardStorageError> {
+        let harvest_run_id = i64::try_from(harvest_run_id.0)
+            .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeChanged)?;
+        let undo = serde_json::to_string(undo)
+            .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeChanged)?;
+        match self.client.execute(
+            "UPDATE harvest_runs
+             SET last_action_undo = $2::text::jsonb
+             WHERE id = $1 AND completed_at IS NULL",
+            &[&harvest_run_id, &undo],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::HarvestRunCouldNotBeChanged),
+        }
+    }
+
+    fn harvest_tree_action_undo(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+    ) -> Result<Option<HarvestTreeActionUndo>, OrchardStorageError> {
+        let harvest_run_id = i64::try_from(harvest_run_id.0)
+            .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)?;
+        self.client
+            .query_opt(
+                "SELECT last_action_undo::text FROM harvest_runs WHERE id = $1",
+                &[&harvest_run_id],
+            )
+            .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)?
+            .and_then(|row| row.get::<_, Option<String>>(0))
+            .map(|undo| {
+                serde_json::from_str(&undo)
+                    .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)
+            })
+            .transpose()
+    }
+
+    fn restore_harvest_tree_action(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+        undo: &HarvestTreeActionUndo,
+    ) -> Result<(), OrchardStorageError> {
+        let harvest_run_id = i64::try_from(harvest_run_id.0)
+            .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeChanged)?;
+        let tree_id = i64::try_from(undo.tree_id.0)
+            .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeChanged)?;
+        let previous_end = undo.previous_period_end.to_string();
+        let recorded_end = undo.recorded_period_end.to_string();
+        let (previous_outcome, previous_resolved_on, previous_retry_on) =
+            harvest_tree_outcome_columns(undo.previous_outcome);
+        let (recorded_outcome, recorded_resolved_on, recorded_retry_on) =
+            harvest_tree_outcome_columns(Some(undo.recorded_outcome));
+        let stored_undo = serde_json::to_string(undo)
+            .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeChanged)?;
+        let restored_tree = self
+            .client
+            .execute(
+                "UPDATE harvest_run_trees
+                 SET window_end = $3::text::date,
+                     outcome = $4,
+                     resolved_on = $5::text::date,
+                     retry_on = $6::text::date
+                 WHERE harvest_run_id = $1
+                   AND tree_id = $2
+                   AND window_end = $7::text::date
+                   AND outcome IS NOT DISTINCT FROM $8
+                   AND resolved_on IS NOT DISTINCT FROM $9::text::date
+                   AND retry_on IS NOT DISTINCT FROM $10::text::date",
+                &[
+                    &harvest_run_id,
+                    &tree_id,
+                    &previous_end,
+                    &previous_outcome,
+                    &previous_resolved_on,
+                    &previous_retry_on,
+                    &recorded_end,
+                    &recorded_outcome,
+                    &recorded_resolved_on,
+                    &recorded_retry_on,
+                ],
+            )
+            .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeChanged)?;
+        if restored_tree != 1 {
+            return Err(OrchardStorageError::HarvestRunCouldNotBeChanged);
+        }
+        match self.client.execute(
+            "UPDATE harvest_runs
+             SET completed_at = NULL, last_action_undo = NULL
+             WHERE id = $1 AND last_action_undo = $2::text::jsonb",
+            &[&harvest_run_id, &stored_undo],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::HarvestRunCouldNotBeChanged),
+        }
+    }
+
     fn complete_harvest_run(
         &mut self,
         harvest_run_id: HarvestRunId,
@@ -1655,6 +1823,9 @@ fn harvest_tree_outcome_columns(
         Some(HarvestTreeOutcome::HarvestedEverything { harvested_on }) => {
             (Some("harvested"), Some(harvested_on.to_string()), None)
         }
+        Some(HarvestTreeOutcome::DoneForWindow { recorded_on }) => {
+            (Some("done_for_window"), Some(recorded_on.to_string()), None)
+        }
         Some(HarvestTreeOutcome::Deferred {
             deferred_on,
             retry_on,
@@ -1697,6 +1868,11 @@ fn harvest_tree_outcome_from_stored_values(
         (Some("harvested"), Some(harvested_on), None) => {
             Ok(Some(HarvestTreeOutcome::HarvestedEverything {
                 harvested_on: parse_stored_harvest_date(&harvested_on)?,
+            }))
+        }
+        (Some("done_for_window"), Some(recorded_on), None) => {
+            Ok(Some(HarvestTreeOutcome::DoneForWindow {
+                recorded_on: parse_stored_harvest_date(&recorded_on)?,
             }))
         }
         (Some("deferred"), Some(deferred_on), Some(retry_on)) => {

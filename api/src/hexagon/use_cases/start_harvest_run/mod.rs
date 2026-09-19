@@ -32,6 +32,7 @@ pub struct HarvestProgress {
     pub route: Vec<HarvestTree>,
     pub handled_tree_count: usize,
     pub harvested_tree_count: usize,
+    pub done_for_window_tree_count: usize,
     pub deferred_tree_count: usize,
     pub total_tree_count: usize,
     pub current_tree: Option<HarvestTree>,
@@ -219,13 +220,19 @@ pub(crate) fn harvest_progress(
             )
         })
         .count();
+    let done_for_window_tree_count = run
+        .ordered_trees
+        .iter()
+        .filter(|tree| matches!(tree.outcome, Some(HarvestTreeOutcome::DoneForWindow { .. })))
+        .count();
     Some(HarvestProgress {
         run_id: run.id,
         target: run.target,
         harvested_parts: run.harvested_parts.clone(),
         route,
-        handled_tree_count: harvested_tree_count + deferred_tree_count,
+        handled_tree_count: harvested_tree_count + done_for_window_tree_count + deferred_tree_count,
         harvested_tree_count,
+        done_for_window_tree_count,
         deferred_tree_count,
         total_tree_count: run.ordered_trees.len(),
         current_tree,
@@ -244,7 +251,10 @@ pub(crate) fn current_harvest_tree_index(
         .position(|tree| match tree.outcome {
             None => true,
             Some(HarvestTreeOutcome::Deferred { retry_on, .. }) => retry_on <= action_date,
-            Some(HarvestTreeOutcome::HarvestedEverything { .. }) => false,
+            Some(
+                HarvestTreeOutcome::HarvestedEverything { .. }
+                | HarvestTreeOutcome::DoneForWindow { .. },
+            ) => false,
         })
 }
 

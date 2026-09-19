@@ -368,8 +368,11 @@
         margin-top: 2px;
       }
       #watering-done,
+      #harvest-previous-tree,
       #harvest-complete-tree,
-      #harvest-defer-tree {
+      #harvest-defer-tree,
+      #harvest-extend-window,
+      #harvest-keep-window {
         background: #245c2a;
         border: 1px solid #245c2a;
         border-radius: 6px;
@@ -379,6 +382,25 @@
         padding: 9px 14px;
       }
       #harvest-defer-tree {
+        background: white;
+        color: #245c2a;
+      }
+      #harvest-extension-decision {
+        background: #fff8e6;
+        border: 1px solid #d59b20;
+        border-radius: 6px;
+        margin-top: 6px;
+        padding: 6px;
+      }
+      #harvest-extension-message {
+        margin-bottom: 6px;
+      }
+      .harvest-extension-actions {
+        display: flex;
+        gap: 6px;
+      }
+      #harvest-previous-tree,
+      #harvest-keep-window {
         background: white;
         color: #245c2a;
       }
@@ -1236,8 +1258,11 @@
           white-space: nowrap;
         }
         #watering-done,
+        #harvest-previous-tree,
         #harvest-complete-tree,
-        #harvest-defer-tree {
+        #harvest-defer-tree,
+        #harvest-extend-window,
+        #harvest-keep-window {
           font-size: 12px;
           line-height: 1.1;
           min-height: 40px;
@@ -1260,6 +1285,10 @@
         .harvest-tree-actions button {
           flex: 0 1 auto;
           max-width: 100px;
+        }
+        #harvest-extension-decision {
+          font-size: 11px;
+          max-width: 210px;
         }
         #watering-zoom-controls:not([hidden]) {
           bottom: max(18px, env(safe-area-inset-bottom));
@@ -1480,8 +1509,16 @@
         <div id="harvest-tree-name"></div>
         <div id="harvest-tree-progress"></div>
         <div id="harvest-tree-error" role="alert" hidden></div>
+        <div id="harvest-extension-decision" hidden>
+          <div id="harvest-extension-message"></div>
+          <div class="harvest-extension-actions">
+            <button id="harvest-extend-window" type="button">Extend window</button>
+            <button id="harvest-keep-window" type="button">Keep window; finish tree</button>
+          </div>
+        </div>
       </div>
       <div class="harvest-tree-actions">
+        <button id="harvest-previous-tree" type="button" hidden>Previous tree</button>
         <button id="harvest-complete-tree" type="button">Harvested everything</button>
         <button id="harvest-defer-tree" type="button">Done for now</button>
       </div>
@@ -1925,6 +1962,8 @@
       let wateringCameraFrame = null;
       let harvestProgress = null;
       let harvestRoute = [];
+      let harvestUndoRunId = null;
+      let pendingHarvestDeferral = null;
       let harvestCandidateTreeIds = new Set();
       let harvestCandidatesLoaded = false;
       let harvestCandidatesOnDate = null;
@@ -2069,6 +2108,21 @@
         "harvest-tree-progress",
       );
       const harvestTreeError = document.getElementById("harvest-tree-error");
+      const harvestExtensionDecision = document.getElementById(
+        "harvest-extension-decision",
+      );
+      const harvestExtensionMessage = document.getElementById(
+        "harvest-extension-message",
+      );
+      const harvestExtendWindow = document.getElementById(
+        "harvest-extend-window",
+      );
+      const harvestKeepWindow = document.getElementById(
+        "harvest-keep-window",
+      );
+      const harvestPreviousTree = document.getElementById(
+        "harvest-previous-tree",
+      );
       const harvestCompleteTree = document.getElementById(
         "harvest-complete-tree",
       );
@@ -3714,6 +3768,7 @@
             throw new Error("Enter a positive whole number of watering cans.");
           }
           if (!response.ok) throw new Error("Could not start watering. Please try again.");
+          if (harvestUndoRunId != null) resetCompletedHarvestPresentation();
           setWorkflowPanel(null);
           showWateringProgress(await response.json(), {
             cameraMode: "wide",
@@ -4035,15 +4090,49 @@
         });
       }
 
-      function resetCompletedHarvestPresentation(message = "") {
+      function clearHarvestExtensionDecision() {
+        pendingHarvestDeferral = null;
+        harvestExtensionDecision.hidden = true;
+        harvestExtensionMessage.textContent = "";
+      }
+
+      function showHarvestExtensionDecision(conflict) {
+        pendingHarvestDeferral = {
+          runId: harvestProgress.run_id,
+          treeId: harvestProgress.next_tree.id,
+          actionDate: localIsoDate(),
+        };
+        const schedule = conflict.schedule_label || "shared harvest";
+        harvestExtensionMessage.textContent =
+          `Retry would be on ${conflict.retry_on}, after the ${schedule} window ends on ${conflict.current_end}. Extend that shared species/cultivar window to ${conflict.proposed_end} and retry next week? Keeping the current window finishes this tree for this window.`;
+        harvestExtensionDecision.hidden = false;
+        harvestPreviousTree.hidden = true;
+        harvestCompleteTree.hidden = true;
+        harvestDeferTree.hidden = true;
+        harvestCompleteTree.disabled = true;
+        harvestDeferTree.disabled = true;
+        harvestPreviousTree.disabled = true;
+        harvestCancel.disabled = true;
+        layoutMapControls();
+      }
+
+      function resetCompletedHarvestPresentation(
+        message = "",
+        { preserveUndo = false } = {},
+      ) {
         harvestProgress = null;
         harvestRoute = [];
+        if (!preserveUndo) harvestUndoRunId = null;
+        clearHarvestExtensionDecision();
         harvestPartFilters.disabled = false;
         harvestTreeBanner.hidden = true;
         harvestTreeName.textContent = "";
         harvestTreeProgress.textContent = "";
         harvestTreeError.textContent = "";
         harvestTreeError.hidden = true;
+        harvestPreviousTree.hidden = true;
+        harvestCompleteTree.hidden = false;
+        harvestDeferTree.hidden = false;
         harvestJobError.textContent = "";
         harvestJobError.hidden = true;
         clearHarvestRouteSources();
@@ -4063,9 +4152,22 @@
         harvestProgress = progress?.next_tree ? progress : null;
         harvestRoute = progress?.route || [];
         if (!progress?.next_tree) {
-          resetCompletedHarvestPresentation("Harvest tour complete.");
+          const preserveUndo = harvestUndoRunId != null;
+          resetCompletedHarvestPresentation("Harvest tour complete.", {
+            preserveUndo,
+          });
+          if (preserveUndo) {
+            harvestTreeName.textContent = "Harvest tour complete";
+            harvestTreeProgress.textContent = "Use Previous tree to correct the last choice.";
+            harvestTreeBanner.hidden = false;
+            harvestPreviousTree.hidden = false;
+            harvestCompleteTree.hidden = true;
+            harvestDeferTree.hidden = true;
+            layoutMapControls();
+          }
           return;
         }
+        clearHarvestExtensionDecision();
         harvestTargetScope.value = progress.target || "all";
         if (Array.isArray(progress.harvested_parts)) {
           const activeParts = new Set(progress.harvested_parts);
@@ -4094,6 +4196,10 @@
         harvestTreeBanner.hidden = false;
         harvestTreeError.textContent = "";
         harvestTreeError.hidden = true;
+        harvestPreviousTree.hidden = harvestUndoRunId == null;
+        harvestPreviousTree.disabled = false;
+        harvestCompleteTree.hidden = false;
+        harvestDeferTree.hidden = false;
         harvestJobStatus.textContent = `${resolvedCount} of ${progress.total_tree_count} trees handled.`;
         harvestJobStatus.hidden = false;
         harvestJobStatus.dataset.progress = "true";
@@ -4183,6 +4289,7 @@
             throw new Error("Could not start harvesting. Please try again.");
           }
           const progress = await response.json();
+          harvestUndoRunId = null;
           setWorkflowPanel(null);
           showHarvestProgress(progress, { cameraDuration: 0 });
           try {
@@ -4197,74 +4304,75 @@
         }
       }
 
-      async function recordCurrentHarvestTree(outcome) {
+      async function recordCurrentHarvestTree(outcome, extendWindow) {
         if (!harvestProgress?.next_tree) return;
+        const activeRun = harvestProgress;
+        const treeId = activeRun.next_tree.id;
+        const actionDate = pendingHarvestDeferral?.actionDate || localIsoDate();
         harvestCompleteTree.disabled = true;
         harvestDeferTree.disabled = true;
+        harvestPreviousTree.disabled = true;
+        harvestExtendWindow.disabled = true;
+        harvestKeepWindow.disabled = true;
         harvestCancel.disabled = true;
         harvestJobError.hidden = true;
         harvestTreeError.hidden = true;
-        const actionDate = localIsoDate();
-        let extendWindow = false;
         try {
-          while (true) {
-            const response = await fetch(
-              orchardResourceUrl(
-                currentAccess,
-                `harvest-runs/${encodeURIComponent(harvestProgress.run_id)}/${outcome}`,
-              ),
-              {
-                method: "POST",
-                headers: {
-                  "content-type": "application/json",
-                  ...accessHeaders(currentAccess),
-                },
-                body: JSON.stringify({
-                  tree_id: harvestProgress.next_tree.id,
-                  action_date: actionDate,
-                  extend_window: extendWindow,
-                }),
+          const request = {
+            tree_id: treeId,
+            action_date: actionDate,
+          };
+          if (typeof extendWindow === "boolean") {
+            request.extend_window = extendWindow;
+          }
+          const response = await fetch(
+            orchardResourceUrl(
+              currentAccess,
+              `harvest-runs/${encodeURIComponent(activeRun.run_id)}/${outcome}`,
+            ),
+            {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                ...accessHeaders(currentAccess),
               },
-            );
-            if (response.status === 409) {
-              const conflict = await response.json().catch(() => ({}));
-              if (
-                outcome === "deferred" &&
-                conflict.code === "harvest_window_extension_required" &&
-                !extendWindow
-              ) {
-                const schedule = conflict.schedule_label || "shared harvest";
-                const accepted = window.confirm(
-                  `This tree should return on ${conflict.retry_on}, but the ${schedule} window ends ${conflict.current_end}. Extend that shared species/cultivar window to ${conflict.proposed_end}?`,
-                );
-                if (!accepted) return;
-                extendWindow = true;
-                continue;
-              }
-              throw new Error(harvestConflictMessage(conflict.code));
+              body: JSON.stringify(request),
+            },
+          );
+          if (response.status === 409) {
+            const conflict = await response.json().catch(() => ({}));
+            if (
+              outcome === "deferred" &&
+              conflict.code === "harvest_window_extension_required" &&
+              extendWindow === undefined
+            ) {
+              showHarvestExtensionDecision(conflict);
+              return;
             }
-            if (response.status === 404) {
-              throw new Error("This harvest tour or tree no longer exists.");
-            }
-            if (!response.ok) {
-              throw new Error("Could not record this tree. Please try again.");
-            }
-            const progress = await response.json();
-            showHarvestProgress(progress);
-            harvestCancel.disabled = true;
-            if (extendWindow) {
-              try {
-                await fetchOrchardTrees();
-              } catch (error) {
-                console.error("Could not refresh trees after extending harvest window", error);
-              }
-            }
+            throw new Error(harvestConflictMessage(conflict.code));
+          }
+          if (response.status === 404) {
+            throw new Error("This harvest tour or tree no longer exists.");
+          }
+          if (!response.ok) {
+            throw new Error("Could not record this tree. Please try again.");
+          }
+          const progress = await response.json();
+          clearHarvestExtensionDecision();
+          harvestUndoRunId = activeRun.run_id;
+          showHarvestProgress(progress);
+          harvestCancel.disabled = true;
+          if (extendWindow === true) {
             try {
-              await loadHarvestCandidates();
+              await fetchOrchardTrees();
             } catch (error) {
-              console.error("Could not refresh harvest availability", error);
+              console.error("Could not refresh trees after extending harvest window", error);
             }
-            break;
+          }
+          try {
+            await loadHarvestCandidates();
+          } catch (error) {
+            console.error("Could not refresh harvest availability", error);
           }
         } catch (error) {
           harvestJobError.textContent = error.message;
@@ -4272,6 +4380,69 @@
           harvestTreeError.textContent = error.message;
           harvestTreeError.hidden = false;
         } finally {
+          const waitingForExtension = pendingHarvestDeferral != null;
+          harvestCompleteTree.disabled = waitingForExtension;
+          harvestDeferTree.disabled = waitingForExtension;
+          harvestPreviousTree.disabled = waitingForExtension;
+          harvestExtendWindow.disabled = false;
+          harvestKeepWindow.disabled = false;
+          harvestCancel.disabled = waitingForExtension || harvestProgress == null;
+        }
+      }
+
+      async function undoLastHarvestTreeAction() {
+        const runId = harvestUndoRunId;
+        if (runId == null || pendingHarvestDeferral) return;
+        harvestPreviousTree.disabled = true;
+        harvestCompleteTree.disabled = true;
+        harvestDeferTree.disabled = true;
+        harvestCancel.disabled = true;
+        harvestJobError.hidden = true;
+        harvestTreeError.hidden = true;
+        try {
+          const response = await fetch(
+            orchardResourceUrl(
+              currentAccess,
+              `harvest-runs/${encodeURIComponent(runId)}/previous`,
+            ),
+            {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                ...accessHeaders(currentAccess),
+              },
+              body: JSON.stringify({ action_date: localIsoDate() }),
+            },
+          );
+          if (response.status === 404) {
+            throw new Error("This harvest tour no longer exists.");
+          }
+          if (response.status === 409) {
+            const conflict = await response.json().catch(() => ({}));
+            throw new Error(
+              conflict.message || "The previous tree could not be restored safely.",
+            );
+          }
+          if (!response.ok) {
+            throw new Error("Could not restore the previous tree. Please try again.");
+          }
+          const progress = await response.json();
+          harvestUndoRunId = null;
+          clearHarvestExtensionDecision();
+          showHarvestProgress(progress);
+          try {
+            await fetchOrchardTrees();
+            await loadHarvestCandidates();
+          } catch (error) {
+            console.error("Could not refresh harvest data after undo", error);
+          }
+        } catch (error) {
+          harvestJobError.textContent = error.message;
+          harvestJobError.hidden = false;
+          harvestTreeError.textContent = error.message;
+          harvestTreeError.hidden = false;
+        } finally {
+          harvestPreviousTree.disabled = false;
           harvestCompleteTree.disabled = false;
           harvestDeferTree.disabled = false;
           harvestCancel.disabled = harvestProgress == null;
@@ -5034,6 +5205,8 @@
         wateringRoute = [];
         harvestProgress = null;
         harvestRoute = [];
+        harvestUndoRunId = null;
+        clearHarvestExtensionDecision();
         harvestCandidateTreeIds = new Set();
         harvestCandidatesLoaded = false;
         harvestCandidatesOnDate = null;
@@ -5188,6 +5361,8 @@
           if (!harvestTourPanel.hidden) setWorkflowPanel(null);
           harvestProgress = null;
           harvestRoute = [];
+          harvestUndoRunId = null;
+          clearHarvestExtensionDecision();
           harvestTreeBanner.hidden = true;
           clearHarvestRouteSources();
         }
@@ -5523,6 +5698,13 @@
       harvestDeferTree.addEventListener("click", () =>
         recordCurrentHarvestTree("deferred"),
       );
+      harvestExtendWindow.addEventListener("click", () =>
+        recordCurrentHarvestTree("deferred", true),
+      );
+      harvestKeepWindow.addEventListener("click", () =>
+        recordCurrentHarvestTree("deferred", false),
+      );
+      harvestPreviousTree.addEventListener("click", undoLastHarvestTreeAction);
       mapModeButtons.forEach((button) => {
         button.addEventListener("click", () => {
           setMapMode(button.dataset.mapMode);

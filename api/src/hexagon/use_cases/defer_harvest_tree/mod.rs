@@ -1,6 +1,6 @@
 use crate::hexagon::models::{
-    HarvestDate, HarvestRunId, HarvestScheduleOwner, HarvestTreeOutcome, HarvestWindowExtension,
-    HarvestedPart, OrchardId, OrchardTree, TreeId, concrete_harvest_period,
+    HarvestDate, HarvestRunId, HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome,
+    HarvestWindowExtension, HarvestedPart, OrchardId, OrchardTree, TreeId, concrete_harvest_period,
     current_harvest_part_periods, current_harvest_parts_and_period,
 };
 use crate::hexagon::ports::{OrchardStorage, OrchardStorageError};
@@ -12,7 +12,7 @@ pub struct HarvestTreeDeferred {
     pub harvest_run_id: HarvestRunId,
     pub tree_id: TreeId,
     pub action_date: String,
-    pub extend_window: bool,
+    pub extend_window: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,6 +61,7 @@ pub fn defer_harvest_tree(
         let current_index = current_index.expect("the current harvest tree was checked");
         let snapshot_period = run.ordered_trees[current_index].period;
         let snapshot_parts = run.ordered_trees[current_index].harvested_parts.clone();
+        let previous_outcome = run.ordered_trees[current_index].outcome;
         if deferred_on < run.started_on || deferred_on < snapshot_period.start {
             return Err(HarvestTreeDeferralError::ActionDateOutsideRunPeriod);
         }
@@ -98,23 +99,31 @@ pub fn defer_harvest_tree(
             .collect::<Result<Vec<_>, _>>()?;
         required_extensions
             .sort_by_key(|(harvested_part, current_end, _)| (*current_end, *harvested_part));
-        let planned_extensions = required_extensions
-            .iter()
-            .map(|(harvested_part, current_end, proposed_end)| {
-                harvest_window_extension(tree, *harvested_part, *current_end, *proposed_end)
-                    .map(|extension| (extension, *current_end, *proposed_end))
-                    .ok_or(HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        if let Some((_, current_end, proposed_end)) = planned_extensions.first() {
+        if let Some((_, current_end, proposed_end)) = required_extensions.first() {
             let proposal = HarvestWindowExtensionProposal {
                 current_end: *current_end,
                 proposed_end: *proposed_end,
             };
-            if !event.extend_window {
+            if event.extend_window.is_none() {
                 return Err(HarvestTreeDeferralError::WindowExtensionRequired(proposal));
             }
+        }
+        let planned_extensions = if event.extend_window == Some(true) {
+            required_extensions
+                .iter()
+                .map(|(harvested_part, current_end, proposed_end)| {
+                    harvest_window_extension(tree, *harvested_part, *current_end, *proposed_end)
+                        .map(|extension| (extension, *current_end, *proposed_end))
+                        .ok_or(HarvestTreeDeferralError::HarvestWindowCouldNotBeExtended)
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            vec![]
+        };
+
+        let declined_extension =
+            !required_extensions.is_empty() && event.extend_window == Some(false);
+        if !required_extensions.is_empty() && event.extend_window == Some(true) {
             for (extension, _, _) in &planned_extensions {
                 let extended = orchard
                     .extend_orchard_harvest_window(event.orchard_id, extension)
@@ -152,14 +161,36 @@ pub fn defer_harvest_tree(
             run.ordered_trees[current_index].period.end = live_period.end;
         }
 
-        let outcome = HarvestTreeOutcome::Deferred {
-            deferred_on,
-            retry_on,
+        let outcome = if declined_extension {
+            HarvestTreeOutcome::DoneForWindow {
+                recorded_on: deferred_on,
+            }
+        } else {
+            HarvestTreeOutcome::Deferred {
+                deferred_on,
+                retry_on,
+            }
         };
         orchard
             .record_harvest_tree_outcome(event.harvest_run_id, event.tree_id, outcome)
             .map_err(|_| HarvestTreeDeferralError::TreeCouldNotBeDeferred)?;
         run.ordered_trees[current_index].outcome = Some(outcome);
+        orchard
+            .save_harvest_tree_action_undo(
+                event.harvest_run_id,
+                &HarvestTreeActionUndo {
+                    tree_id: event.tree_id,
+                    previous_outcome,
+                    previous_period_end: snapshot_period.end,
+                    recorded_outcome: outcome,
+                    recorded_period_end: run.ordered_trees[current_index].period.end,
+                    window_extensions: planned_extensions
+                        .into_iter()
+                        .map(|(extension, _, _)| extension)
+                        .collect(),
+                },
+            )
+            .map_err(|_| HarvestTreeDeferralError::TreeCouldNotBeDeferred)?;
         if current_harvest_tree_index(&run, deferred_on).is_none() {
             orchard
                 .complete_harvest_run(event.harvest_run_id)

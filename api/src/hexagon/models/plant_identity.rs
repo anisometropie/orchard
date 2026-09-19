@@ -82,7 +82,7 @@ impl HarvestDataOrigin {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum HarvestScheduleOwner {
     PlantIdentity(PlantIdentityId),
     PlantCultivar(PlantCultivarId),

@@ -760,8 +760,7 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
         .header(header::COOKIE, &cookie)
         .json(&serde_json::json!({
             "tree_id": 1,
-            "action_date": "2026-09-25",
-            "extend_window": false
+            "action_date": "2026-09-25"
         }))
         .send()
         .await
@@ -779,13 +778,49 @@ async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() 
         .json(&serde_json::json!({
             "tree_id": 1,
             "action_date": "2026-09-25",
+            "extend_window": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deferred.status(), StatusCode::OK);
+    let deferred = deferred.json::<serde_json::Value>().await.unwrap();
+    assert!(deferred["next_tree"].is_null());
+    assert_eq!(deferred["done_for_window_tree_count"], 1);
+    assert_eq!(deferred["deferred_tree_count"], 0);
+
+    let previous = client
+        .post(format!(
+            "{}/orchards/7/harvest-runs/{run_id}/previous",
+            server.url()
+        ))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({ "action_date": "2026-09-25" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(previous.status(), StatusCode::OK);
+    let previous = previous.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(previous["next_tree"]["id"], 1);
+    assert_eq!(previous["next_tree"]["window_end"], "2026-09-30");
+    assert_eq!(previous["done_for_window_tree_count"], 0);
+
+    let deferred = client
+        .post(&defer_url)
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "tree_id": 1,
+            "action_date": "2026-09-25",
             "extend_window": true
         }))
         .send()
         .await
         .unwrap();
     assert_eq!(deferred.status(), StatusCode::OK);
-    assert!(deferred.json::<serde_json::Value>().await.unwrap()["next_tree"].is_null());
+    let deferred = deferred.json::<serde_json::Value>().await.unwrap();
+    assert!(deferred["next_tree"].is_null());
+    assert_eq!(deferred["done_for_window_tree_count"], 0);
+    assert_eq!(deferred["deferred_tree_count"], 1);
 
     let before_retry = client
         .post(&harvest_runs_url)

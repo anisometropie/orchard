@@ -62,7 +62,7 @@ fn list_candidates_from_prior_outcomes_without_changing_the_active_run() {
             harvest_run_id: started.run_id,
             tree_id: TreeId(2),
             action_date: "2026-09-17".into(),
-            extend_window: false,
+            extend_window: None,
         },
         &mut storage,
     )

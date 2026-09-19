@@ -13,7 +13,7 @@ pub(crate) use harvest::{
 };
 pub use harvest::{
     HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree,
-    HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension,
+    HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension,
 };
 pub use legacy_tree_source::{LegacyPlantIdentification, LegacyTreeSource};
 pub use map_configuration::{

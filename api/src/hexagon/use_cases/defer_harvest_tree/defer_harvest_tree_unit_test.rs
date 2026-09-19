@@ -29,7 +29,7 @@ fn defer_for_seven_days_then_propose_the_tree_again() {
             harvest_run_id: started.run_id,
             tree_id: TreeId(1),
             action_date: "2026-09-17".into(),
-            extend_window: false,
+            extend_window: None,
         },
         &mut storage,
     )
@@ -58,7 +58,7 @@ fn re_propose_a_due_tree_while_the_original_tour_is_still_active() {
             harvest_run_id: started.run_id,
             tree_id: TreeId(1),
             action_date: "2026-09-17".into(),
-            extend_window: false,
+            extend_window: None,
         },
         &mut storage,
     )
@@ -77,7 +77,7 @@ fn re_propose_a_due_tree_while_the_original_tour_is_still_active() {
                 harvest_run_id: started.run_id,
                 tree_id: TreeId(1),
                 action_date: "2026-09-24".into(),
-                extend_window: false,
+                extend_window: None,
             },
             &mut storage,
         ),
@@ -94,7 +94,7 @@ fn re_propose_a_due_tree_while_the_original_tour_is_still_active() {
             harvest_run_id: started.run_id,
             tree_id: TreeId(1),
             action_date: "2026-09-24".into(),
-            extend_window: true,
+            extend_window: Some(true),
         },
         &mut storage,
     )
@@ -113,7 +113,7 @@ fn require_confirmation_then_extend_the_shared_window_and_defer_atomically() {
         harvest_run_id: started.run_id,
         tree_id: TreeId(1),
         action_date: "2026-09-17".into(),
-        extend_window: false,
+        extend_window: None,
     };
 
     assert_eq!(
@@ -128,7 +128,7 @@ fn require_confirmation_then_extend_the_shared_window_and_defer_atomically() {
 
     let deferred = defer_harvest_tree(
         HarvestTreeDeferred {
-            extend_window: true,
+            extend_window: Some(true),
             ..request()
         },
         &mut storage,
@@ -148,6 +148,45 @@ fn require_confirmation_then_extend_the_shared_window_and_defer_atomically() {
 }
 
 #[test]
+fn declining_the_extension_finishes_the_tree_for_this_window_and_returns_it_next_year() {
+    let (mut storage, observer) = harvest_storage(20);
+    let started = start(&mut storage, "2026-09-17").unwrap();
+    let finished_for_window = defer_harvest_tree(
+        HarvestTreeDeferred {
+            orchard_id: OrchardId(7),
+            harvest_run_id: started.run_id,
+            tree_id: TreeId(1),
+            action_date: "2026-09-17".into(),
+            extend_window: Some(false),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    assert!(finished_for_window.current_tree.is_none());
+    assert_eq!(finished_for_window.handled_tree_count, 1);
+    assert_eq!(finished_for_window.done_for_window_tree_count, 1);
+    assert_eq!(finished_for_window.deferred_tree_count, 0);
+    assert_eq!(
+        finished_for_window.route[0].period.end.to_string(),
+        "2026-09-20"
+    );
+    assert_eq!(
+        start(&mut storage, "2026-09-18"),
+        Err(HarvestRunStartError::NoTreesCurrentlyAvailable)
+    );
+    let next_year = start(&mut storage, "2027-09-17").unwrap();
+    assert_eq!(next_year.current_tree.as_ref().unwrap().id, TreeId(1));
+    assert_eq!(
+        observer.orchard_harvest_windows(
+            OrchardId(7),
+            HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
+        )[0]
+        .end,
+        AnnualDate { month: 9, day: 20 }
+    );
+}
+
+#[test]
 fn reconcile_the_shared_extension_when_later_trees_are_reached() {
     let (mut storage, _) = harvest_storage_with_tree_count(24, 2);
     let started = start(&mut storage, "2026-09-17").unwrap();
@@ -157,7 +196,7 @@ fn reconcile_the_shared_extension_when_later_trees_are_reached() {
             harvest_run_id: started.run_id,
             tree_id: TreeId(1),
             action_date: "2026-09-17".into(),
-            extend_window: true,
+            extend_window: Some(true),
         },
         &mut storage,
     )
@@ -216,7 +255,7 @@ fn use_the_shortened_live_window_when_deciding_whether_to_extend() {
         harvest_run_id: started.run_id,
         tree_id: TreeId(1),
         action_date: "2026-09-17".into(),
-        extend_window: false,
+        extend_window: None,
     };
 
     assert_eq!(
@@ -231,7 +270,7 @@ fn use_the_shortened_live_window_when_deciding_whether_to_extend() {
 
     let progress = defer_harvest_tree(
         HarvestTreeDeferred {
-            extend_window: true,
+            extend_window: Some(true),
             ..request()
         },
         &mut storage,
@@ -278,7 +317,7 @@ fn reject_deferral_when_the_live_harvest_occurrence_changed() {
                 harvest_run_id: started.run_id,
                 tree_id: TreeId(1),
                 action_date: "2026-09-17".into(),
-                extend_window: false,
+                extend_window: None,
             },
             &mut storage,
         ),
@@ -308,7 +347,7 @@ fn reject_deferral_when_the_live_harvest_occurrence_was_removed() {
                 harvest_run_id: started.run_id,
                 tree_id: TreeId(1),
                 action_date: "2026-09-17".into(),
-                extend_window: false,
+                extend_window: None,
             },
             &mut storage,
         ),
@@ -329,7 +368,7 @@ fn reject_retroactive_and_out_of_period_deferral_dates() {
                     harvest_run_id: started.run_id,
                     tree_id: TreeId(1),
                     action_date: action_date.into(),
-                    extend_window: false,
+                    extend_window: None,
                 },
                 &mut storage,
             ),
@@ -372,7 +411,7 @@ fn reject_an_extension_that_the_annual_window_cannot_represent() {
                 harvest_run_id: started.run_id,
                 tree_id: TreeId(1),
                 action_date: "2026-12-29".into(),
-                extend_window: false,
+                extend_window: Some(true),
             },
             &mut storage,
         ),
@@ -435,7 +474,7 @@ fn defer_all_selected_parts_together_and_extend_each_short_window() {
     };
 
     assert_eq!(
-        defer_harvest_tree(request(false), &mut storage),
+        defer_harvest_tree(request(None), &mut storage),
         Err(HarvestTreeDeferralError::WindowExtensionRequired(
             HarvestWindowExtensionProposal {
                 current_end: orchard_api::hexagon::models::HarvestDate::new(2026, 9, 20).unwrap(),
@@ -443,7 +482,7 @@ fn defer_all_selected_parts_together_and_extend_each_short_window() {
             }
         ))
     );
-    let deferred = defer_harvest_tree(request(true), &mut storage).unwrap();
+    let deferred = defer_harvest_tree(request(Some(true)), &mut storage).unwrap();
 
     assert_eq!(deferred.route[0].period.end.to_string(), "2026-09-29");
     let windows = observer.orchard_harvest_windows(

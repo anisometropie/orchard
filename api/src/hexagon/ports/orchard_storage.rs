@@ -1,8 +1,8 @@
 use crate::hexagon::models::{
     AnnualHarvestWindow, GeoPoint, HarvestDate, HarvestRun, HarvestRunId, HarvestRunTarget,
-    HarvestRunTree, HarvestScheduleOwner, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
-    HarvestWindowExtension, OrchardId, OrchardTree, PlantIdentification, PlantIdentityReference,
-    Tree, TreeId, WateringRun, WateringRunId, WateringRunTarget,
+    HarvestRunTree, HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome,
+    HarvestTreeOutcomeRecord, HarvestWindowExtension, OrchardId, OrchardTree, PlantIdentification,
+    PlantIdentityReference, Tree, TreeId, WateringRun, WateringRunId, WateringRunTarget,
 };
 
 #[derive(Debug, PartialEq)]
@@ -152,6 +152,25 @@ pub trait OrchardStorage {
         orchard_id: OrchardId,
         extension: &HarvestWindowExtension,
     ) -> Result<bool, OrchardStorageError>;
+    fn restore_orchard_harvest_window(
+        &mut self,
+        orchard_id: OrchardId,
+        extension: &HarvestWindowExtension,
+    ) -> Result<bool, OrchardStorageError>;
+    fn save_harvest_tree_action_undo(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+        undo: &HarvestTreeActionUndo,
+    ) -> Result<(), OrchardStorageError>;
+    fn harvest_tree_action_undo(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+    ) -> Result<Option<HarvestTreeActionUndo>, OrchardStorageError>;
+    fn restore_harvest_tree_action(
+        &mut self,
+        harvest_run_id: HarvestRunId,
+        undo: &HarvestTreeActionUndo,
+    ) -> Result<(), OrchardStorageError>;
     fn complete_harvest_run(
         &mut self,
         harvest_run_id: HarvestRunId,

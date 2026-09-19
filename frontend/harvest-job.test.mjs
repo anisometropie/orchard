@@ -150,7 +150,7 @@ test("keep active watering and harvest banners compact on mobile", () => {
   );
   assert.match(
     mobileCss,
-    /#watering-done,[\s\S]*?#harvest-defer-tree \{[\s\S]*?min-height: 40px;/,
+    /#watering-done,[\s\S]*?#harvest-keep-window \{[\s\S]*?min-height: 40px;/,
   );
 });
 
@@ -215,10 +215,14 @@ function harvestPartFiltersDisabledAfterCompletion() {
     harvestTreeName: { textContent: "Lavatère" },
     harvestTreeProgress: { textContent: "1 of 1" },
     harvestTreeError: { textContent: "", hidden: false },
+    harvestPreviousTree: { hidden: false },
+    harvestCompleteTree: { hidden: false },
+    harvestDeferTree: { hidden: false },
     harvestJobError: { textContent: "", hidden: false },
     harvestJobStatus: { textContent: "", hidden: false, dataset: {} },
     harvestPartFilters,
     clearHarvestRouteSources() {},
+    clearHarvestExtensionDecision() {},
     refreshHarvestJobControls() {},
     renderMapMode() {},
     layoutMapControls() {},
@@ -232,6 +236,39 @@ function harvestPartFiltersDisabledAfterCompletion() {
 
 test("re-enable harvested-part checkboxes when a harvest tour completes", () => {
   assert.equal(harvestPartFiltersDisabledAfterCompletion(), false);
+});
+
+test("ask about a harvest-window extension inline and allow one-tree undo", () => {
+  const banner = sectionMarkup("harvest-tree-banner");
+  assert.match(banner, /id="harvest-extension-decision"[^>]*hidden/);
+  assert.match(banner, /id="harvest-extension-message"/);
+  assert.match(banner, /id="harvest-extend-window"/);
+  assert.match(banner, /id="harvest-keep-window"/);
+  assert.match(banner, /id="harvest-previous-tree"/);
+
+  const recordStart = indexHtml.indexOf(
+    "async function recordCurrentHarvestTree",
+  );
+  const recordEnd = indexHtml.indexOf(
+    "async function undoLastHarvestTreeAction",
+    recordStart,
+  );
+  const recordFunction = indexHtml.slice(recordStart, recordEnd);
+  assert.doesNotMatch(recordFunction, /window\.confirm/);
+  assert.match(recordFunction, /showHarvestExtensionDecision\(conflict\)/);
+  assert.match(recordFunction, /request\.extend_window = extendWindow/);
+  assert.match(
+    indexHtml,
+    /recordCurrentHarvestTree\("deferred", true\)/,
+  );
+  assert.match(
+    indexHtml,
+    /recordCurrentHarvestTree\("deferred", false\)/,
+  );
+  assert.match(
+    indexHtml,
+    /`harvest-runs\/\$\{encodeURIComponent\(runId\)\}\/previous`/,
+  );
 });
 
 test("format the calendar date in the browser's local timezone", () => {

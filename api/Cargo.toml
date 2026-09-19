@@ -109,6 +109,10 @@ name = "cancel_harvest_run_unit"
 path = "src/hexagon/use_cases/cancel_harvest_run/cancel_harvest_run_unit_test.rs"
 
 [[test]]
+name = "undo_last_harvest_tree_action_unit"
+path = "src/hexagon/use_cases/undo_last_harvest_tree_action/undo_last_harvest_tree_action_unit_test.rs"
+
+[[test]]
 name = "add_tree_photo_unit"
 path = "src/hexagon/use_cases/add_tree_photo/add_tree_photo_unit_test.rs"
 

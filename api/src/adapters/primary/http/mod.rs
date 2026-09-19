@@ -100,6 +100,9 @@ use crate::hexagon::use_cases::start_harvest_run::{
 use crate::hexagon::use_cases::start_watering_run::{
     WateringProgress, WateringRunStartError, WateringRunStartRequested, start_watering_run,
 };
+use crate::hexagon::use_cases::undo_last_harvest_tree_action::{
+    LastHarvestTreeActionUndoError, LastHarvestTreeActionUndone, undo_last_harvest_tree_action,
+};
 
 pub async fn start_http_server<U>(
     orchard_storage: U,
@@ -212,6 +215,10 @@ where
         .route(
             "/orchards/{orchard_id}/harvest-runs/{harvest_run_id}/deferred",
             post(defer_harvest_tree_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-runs/{harvest_run_id}/previous",
+            post(undo_last_harvest_tree_action_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/plant-identities/{plant_identity_id}/harvest-windows",
@@ -848,8 +855,7 @@ where
 struct RecordHarvestTreeRequest {
     tree_id: u64,
     action_date: String,
-    #[serde(default)]
-    extend_window: bool,
+    extend_window: Option<bool>,
 }
 
 async fn record_tree_harvested_handler<U>(
@@ -863,7 +869,7 @@ where
 {
     let session_token = owner_session_token(&headers)?;
     let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
-    if request.extend_window {
+    if request.extend_window.is_some() {
         return Err(StatusCode::BAD_REQUEST);
     }
     let response = tokio::task::spawn_blocking(move || {
@@ -1022,6 +1028,65 @@ where
     Ok(response)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UndoHarvestTreeActionRequest {
+    action_date: String,
+}
+
+async fn undo_last_harvest_tree_action_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, harvest_run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<UndoHarvestTreeActionRequest>, JsonRejection>,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    let response = tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        if let Err(status) = authorize_owner_access(&mut *storage, orchard_id, session_token) {
+            return status.into_response();
+        }
+        match undo_last_harvest_tree_action(
+            LastHarvestTreeActionUndone {
+                orchard_id,
+                harvest_run_id: HarvestRunId(harvest_run_id),
+                action_date: request.action_date,
+            },
+            &mut *storage,
+        ) {
+            Ok(progress) => Json(harvest_progress_json(progress)).into_response(),
+            Err(error) => match error {
+                LastHarvestTreeActionUndoError::InvalidActionDate => {
+                    StatusCode::BAD_REQUEST.into_response()
+                }
+                LastHarvestTreeActionUndoError::HarvestRunNotFound => {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+                LastHarvestTreeActionUndoError::NoHarvestTreeActionToUndo => {
+                    harvest_conflict_response(
+                        "no_harvest_tree_action_to_undo",
+                        "There is no previous harvest-tree action to undo.",
+                    )
+                }
+                LastHarvestTreeActionUndoError::HarvestTreeActionCouldNotBeUndone => {
+                    harvest_conflict_response(
+                        "harvest_tree_action_could_not_be_undone",
+                        "The previous harvest-tree action could not be safely undone.",
+                    )
+                }
+            },
+        }
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(response)
+}
+
 fn harvest_conflict_response(code: &str, message: &str) -> Response {
     (
         StatusCode::CONFLICT,
@@ -1053,6 +1118,7 @@ fn harvest_progress_json(progress: HarvestProgress) -> Value {
         "route": progress.route.into_iter().map(harvest_tree_json).collect::<Vec<_>>(),
         "handled_tree_count": progress.handled_tree_count,
         "harvested_tree_count": progress.harvested_tree_count,
+        "done_for_window_tree_count": progress.done_for_window_tree_count,
         "deferred_tree_count": progress.deferred_tree_count,
         "total_tree_count": progress.total_tree_count,
         "next_tree": progress.current_tree.map(harvest_tree_json),
