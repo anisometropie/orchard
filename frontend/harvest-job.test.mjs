@@ -16,6 +16,70 @@ import {
 
 const indexHtml = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 
+function sectionMarkup(id) {
+  const idPosition = indexHtml.indexOf(`id="${id}"`);
+  const start = indexHtml.lastIndexOf("<section", idPosition);
+  const end = indexHtml.indexOf("</section>", start);
+  assert.notEqual(idPosition, -1, `${id} section should exist`);
+  assert.notEqual(start, -1, `${id} section should exist`);
+  assert.notEqual(end, -1, `${id} section should be closed`);
+  return indexHtml.slice(start, end + "</section>".length);
+}
+
+test("separate harvest filtering from the harvest tour tool", () => {
+  const mapFilters = sectionMarkup("harvest-map-filters");
+  const tourPanel = sectionMarkup("harvest-tour-panel");
+
+  assert.match(
+    indexHtml,
+    /id="harvest-tour-toggle"[\s\S]*?class="workflow-button"[\s\S]*?aria-controls="harvest-tour-panel"/,
+  );
+  assert.match(mapFilters, /id="harvest-map-part-filters"/);
+  assert.match(mapFilters, /id="harvest-offset"/);
+  assert.match(mapFilters, /id="harvest-weeks"/);
+  assert.doesNotMatch(mapFilters, /id="harvest-target-scope"/);
+  assert.doesNotMatch(mapFilters, /id="harvest-start"/);
+
+  assert.match(tourPanel, /id="harvest-part-filters"/);
+  assert.match(tourPanel, /id="harvest-target-scope"/);
+  assert.match(tourPanel, /id="harvest-species"/);
+  assert.match(tourPanel, /id="harvest-start"/);
+  assert.doesNotMatch(tourPanel, /id="harvest-offset"/);
+  assert.doesNotMatch(tourPanel, /id="harvest-weeks"/);
+});
+
+test("opening the harvest tour shows the current harvest week", () => {
+  const functionStart = indexHtml.indexOf(
+    "function showCurrentHarvestAvailability",
+  );
+  const functionEnd = indexHtml.indexOf("function setWorkflowPanel", functionStart);
+  assert.notEqual(functionStart, -1);
+  assert.notEqual(functionEnd, -1);
+
+  const selectedModes = [];
+  const context = {
+    harvestFilterEnabled: { checked: false },
+    harvestOffset: { value: "9" },
+    harvestWeeks: { value: "4" },
+    setMapMode(mode) {
+      selectedModes.push(mode);
+    },
+  };
+  vm.runInNewContext(
+    `${indexHtml.slice(functionStart, functionEnd)}\nshowCurrentHarvestAvailability();`,
+    context,
+  );
+
+  assert.equal(context.harvestFilterEnabled.checked, true);
+  assert.equal(context.harvestOffset.value, "0");
+  assert.equal(context.harvestWeeks.value, "1");
+  assert.deepEqual(selectedModes, ["harvest"]);
+  assert.match(
+    indexHtml,
+    /harvestTourToggle\.addEventListener\("click", \(\) => \{[\s\S]*?showCurrentHarvestAvailability\(\);/,
+  );
+});
+
 test("offer one shared next-tree, next-four, or whole-path route display", () => {
   assert.equal(indexHtml.match(/id="tour-route-display"/g)?.length, 1);
   assert.equal(indexHtml.match(/id="tour-route-display-control"/g)?.length, 1);
@@ -29,7 +93,7 @@ test("offer one shared next-tree, next-four, or whole-path route display", () =>
   assert.match(indexHtml, /<option value="route">Whole path<\/option>/);
 });
 
-function harvestPartFiltersDisabledAfterCompletion(harvestFilterEnabled) {
+function harvestPartFiltersDisabledAfterCompletion() {
   const functionStart = indexHtml.indexOf(
     "function resetCompletedHarvestPresentation",
   );
@@ -51,7 +115,6 @@ function harvestPartFiltersDisabledAfterCompletion(harvestFilterEnabled) {
     harvestJobError: { textContent: "", hidden: false },
     harvestJobStatus: { textContent: "", hidden: false, dataset: {} },
     harvestPartFilters,
-    harvestFilterEnabled: { checked: harvestFilterEnabled },
     clearHarvestRouteSources() {},
     refreshHarvestJobControls() {},
     renderMapMode() {},
@@ -65,11 +128,7 @@ function harvestPartFiltersDisabledAfterCompletion(harvestFilterEnabled) {
 }
 
 test("re-enable harvested-part checkboxes when a harvest tour completes", () => {
-  assert.equal(harvestPartFiltersDisabledAfterCompletion(true), false);
-});
-
-test("keep harvested-part checkboxes disabled when their main filter is off", () => {
-  assert.equal(harvestPartFiltersDisabledAfterCompletion(false), true);
+  assert.equal(harvestPartFiltersDisabledAfterCompletion(), false);
 });
 
 test("format the calendar date in the browser's local timezone", () => {

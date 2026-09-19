@@ -240,7 +240,6 @@
       #watering-cancel[hidden],
       #harvest-cancel[hidden],
       #harvest-species-field[hidden],
-      #harvest-job-controls[hidden],
       .manual-order-actions[hidden] {
         display: none;
       }
@@ -837,6 +836,11 @@
         font-size: 12px;
         gap: 5px;
       }
+      .workflow-panel .harvest-part-filter {
+        display: flex;
+        font-weight: 500;
+        margin-top: 0;
+      }
       .harvest-part-filter-icon {
         font-size: 16px;
         line-height: 1;
@@ -846,43 +850,9 @@
         font-size: 13px;
         margin-top: 7px;
       }
-      #harvest-job-controls {
-        border-top: 1px solid #d6d6d6;
-        margin-top: 12px;
-        padding-top: 10px;
-      }
-      #harvest-job-controls h3 {
-        font-size: 14px;
-        margin: 0;
-      }
-      #harvest-job-controls select,
-      #harvest-job-controls button {
-        border: 1px solid #777;
-        border-radius: 5px;
-        box-sizing: border-box;
-        font: inherit;
-        padding: 7px 9px;
+      #harvest-tour-panel button:not(.workflow-panel-close) {
         width: 100%;
       }
-      #harvest-job-controls select {
-        background: white;
-        display: block;
-        margin-top: 4px;
-      }
-      #harvest-job-controls button {
-        background: #245c2a;
-        border-color: #245c2a;
-        color: white;
-        cursor: pointer;
-        font-weight: 600;
-        margin-top: 10px;
-      }
-      #harvest-job-controls #harvest-cancel {
-        background: white;
-        border-color: #8f2f26;
-        color: #8f2f26;
-      }
-      #harvest-job-controls button:disabled,
       #harvest-tree-banner button:disabled {
         cursor: not-allowed;
         opacity: 0.55;
@@ -1337,6 +1307,16 @@
         Watering
       </button>
       <button
+        id="harvest-tour-toggle"
+        class="workflow-button"
+        type="button"
+        aria-controls="harvest-tour-panel"
+        aria-expanded="false"
+        hidden
+      >
+        Harvest tour
+      </button>
+      <button
         id="row-order-toggle"
         class="workflow-button order-button"
         type="button"
@@ -1411,6 +1391,30 @@
       <button id="watering-cancel" class="danger" type="button" hidden>Cancel run</button>
       <p id="watering-menu-status" class="workflow-status" hidden></p>
       <p id="watering-error" class="workflow-error" role="alert" hidden></p>
+    </section>
+    <section id="harvest-tour-panel" class="workflow-panel" aria-labelledby="harvest-tour-title" hidden>
+      <header>
+        <h2 id="harvest-tour-title">Harvest tour</h2>
+        <button id="harvest-tour-close" class="workflow-panel-close" type="button" aria-label="Close harvest tour menu">×</button>
+      </header>
+      <fieldset id="harvest-part-filters" class="harvest-part-filters">
+        <legend>Harvested parts</legend>
+      </fieldset>
+      <label>
+        Harvest
+        <select id="harvest-target-scope">
+          <option value="all">All currently available</option>
+          <option value="species">One species</option>
+        </select>
+      </label>
+      <label id="harvest-species-field" hidden>
+        Species
+        <select id="harvest-species"></select>
+      </label>
+      <button id="harvest-start" type="button">Start harvesting</button>
+      <button id="harvest-cancel" class="danger" type="button" hidden>Cancel harvest tour</button>
+      <p id="harvest-job-status" class="workflow-status" hidden></p>
+      <p id="harvest-job-error" class="workflow-error" role="alert" hidden></p>
     </section>
     <section id="row-order-panel" class="workflow-panel" aria-labelledby="row-order-title" hidden>
       <header>
@@ -1541,11 +1545,8 @@
           Harvest available
         </label>
         <div id="harvest-window-label">This week</div>
-        <fieldset
-          id="harvest-part-filters"
-          class="harvest-part-filters"
-        >
-          <legend>Harvested parts</legend>
+        <fieldset id="harvest-map-part-filters" class="harvest-part-filters">
+          <legend>Parts displayed</legend>
         </fieldset>
         <label>
           Start: <span id="harvest-offset-label">this week</span>
@@ -1555,24 +1556,6 @@
           Width: <span id="harvest-weeks-label">1 week</span>
           <input type="range" id="harvest-weeks" min="1" max="12" value="1" />
         </label>
-        <div id="harvest-job-controls" hidden>
-          <h3>Harvest tour</h3>
-          <label>
-            Harvest
-            <select id="harvest-target-scope">
-              <option value="all">All currently available</option>
-              <option value="species">One species</option>
-            </select>
-          </label>
-          <label id="harvest-species-field" hidden>
-            Species
-            <select id="harvest-species"></select>
-          </label>
-          <button id="harvest-start" type="button">Start harvesting</button>
-          <button id="harvest-cancel" type="button" hidden>Cancel harvest tour</button>
-          <p id="harvest-job-status" hidden></p>
-          <p id="harvest-job-error" role="alert" hidden></p>
-        </div>
       </section>
       <section id="normal-map-filters" class="map-mode-filters">
         <label
@@ -1965,11 +1948,20 @@
       const harvestWindowLabel = document.getElementById(
         "harvest-window-label",
       );
+      const harvestMapPartFilters = document.getElementById(
+        "harvest-map-part-filters",
+      );
       const harvestPartFilters = document.getElementById(
         "harvest-part-filters",
       );
-      const harvestJobControls = document.getElementById(
-        "harvest-job-controls",
+      const harvestTourToggle = document.getElementById(
+        "harvest-tour-toggle",
+      );
+      const harvestTourPanel = document.getElementById(
+        "harvest-tour-panel",
+      );
+      const harvestTourClose = document.getElementById(
+        "harvest-tour-close",
       );
       const harvestTargetScope = document.getElementById(
         "harvest-target-scope",
@@ -2172,7 +2164,7 @@
       function placeWorkflowPanelsBelowToolbar() {
         if (mapToolbar.hidden) return;
         if (compactMobileLayout.matches) {
-          [wateringPanel, rowOrderPanel].forEach((panel) => {
+          [wateringPanel, harvestTourPanel, rowOrderPanel].forEach((panel) => {
             panel.style.removeProperty("top");
             panel.style.removeProperty("max-height");
           });
@@ -2188,7 +2180,7 @@
         const top = Math.ceil(
           Math.max(mapToolbar.getBoundingClientRect().bottom, bannerBottom) + 12,
         );
-        [wateringPanel, rowOrderPanel].forEach((panel) => {
+        [wateringPanel, harvestTourPanel, rowOrderPanel].forEach((panel) => {
           panel.style.top = `${top}px`;
           panel.style.maxHeight = `${Math.max(
             120,
@@ -2217,7 +2209,7 @@
       });
       layoutMapControls();
 
-      function renderHarvestPartFilters() {
+      function appendHarvestPartFilters(container, onChange) {
         Object.entries(HARVEST_PIN_ICONS)
           .filter(([part]) => part !== "multiple")
           .forEach(([part, symbol]) => {
@@ -2227,10 +2219,7 @@
             input.type = "checkbox";
             input.value = part;
             input.checked = harvestPartSelectedByDefault(part);
-            input.addEventListener("change", () => {
-              applyHarvestWindow();
-              if (isEditable() && !harvestProgress) void loadHarvestCandidates();
-            });
+            input.addEventListener("change", onChange);
             const icon = document.createElement("span");
             icon.className = "harvest-part-filter-icon";
             icon.setAttribute("aria-hidden", "true");
@@ -2242,14 +2231,29 @@
                 `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`,
               ),
             );
-            harvestPartFilters.append(label);
+            container.append(label);
           });
       }
 
-      function selectedHarvestPartValues() {
+      function renderHarvestPartFilters() {
+        appendHarvestPartFilters(harvestMapPartFilters, applyHarvestWindow);
+        appendHarvestPartFilters(harvestPartFilters, () => {
+          if (isEditable() && !harvestProgress) void loadHarvestCandidates();
+        });
+      }
+
+      function selectedPartValues(container) {
         return [
-          ...harvestPartFilters.querySelectorAll('input[type="checkbox"]:checked'),
+          ...container.querySelectorAll('input[type="checkbox"]:checked'),
         ].map((input) => input.value);
+      }
+
+      function selectedHarvestPartValues() {
+        return selectedPartValues(harvestPartFilters);
+      }
+
+      function selectedMapHarvestPartValues() {
+        return selectedPartValues(harvestMapPartFilters);
       }
 
       function createMapPinImage(fillColor, drawCenter) {
@@ -2995,6 +2999,13 @@
         }
       }
 
+      function showCurrentHarvestAvailability() {
+        harvestFilterEnabled.checked = true;
+        harvestOffset.value = "0";
+        harvestWeeks.value = "1";
+        setMapMode("harvest");
+      }
+
       function setWorkflowPanel(openPanel) {
         if (openPanel !== wateringPanel && placingWaterSource) {
           placingWaterSource = false;
@@ -3002,11 +3013,16 @@
           map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
         }
         wateringPanel.hidden = openPanel !== wateringPanel;
+        harvestTourPanel.hidden = openPanel !== harvestTourPanel;
         rowOrderPanel.hidden = openPanel !== rowOrderPanel;
         mapFilterPanel.hidden = openPanel != null || !hasOpenOrchard(currentAccess);
         wateringToggle.setAttribute(
           "aria-expanded",
           String(openPanel === wateringPanel),
+        );
+        harvestTourToggle.setAttribute(
+          "aria-expanded",
+          String(openPanel === harvestTourPanel),
         );
         rowOrderToggle.setAttribute(
           "aria-expanded",
@@ -3027,9 +3043,10 @@
           harvestActive: harvestProgress != null,
         });
         wateringToggle.hidden = !presentation.wateringLauncherVisible;
-        harvestJobControls.hidden = !presentation.harvestLauncherVisible;
+        harvestTourToggle.hidden = !presentation.harvestLauncherVisible;
         tourRouteDisplayControl.hidden = !presentation.routeDisplayVisible;
         if (harvestProgress && !wateringPanel.hidden) setWorkflowPanel(null);
+        if (wateringProgress && !harvestTourPanel.hidden) setWorkflowPanel(null);
       }
 
       function replaceRowOptions(select, rows) {
@@ -3766,6 +3783,7 @@
 
         const targetsSpecies = harvestTargetScope.value === "species";
         const active = harvestProgress != null;
+        harvestPartFilters.disabled = active;
         harvestSpeciesField.hidden = !targetsSpecies;
         harvestTargetScope.disabled = active;
         harvestSpecies.disabled = active;
@@ -3975,7 +3993,7 @@
       function resetCompletedHarvestPresentation(message = "") {
         harvestProgress = null;
         harvestRoute = [];
-        harvestPartFilters.disabled = !harvestFilterEnabled.checked;
+        harvestPartFilters.disabled = false;
         harvestTreeBanner.hidden = true;
         harvestTreeName.textContent = "";
         harvestTreeProgress.textContent = "";
@@ -4116,6 +4134,7 @@
             throw new Error("Could not start harvesting. Please try again.");
           }
           const progress = await response.json();
+          setWorkflowPanel(null);
           showHarvestProgress(progress, { cameraDuration: 0 });
           try {
             await loadHarvestCandidates(onDate);
@@ -5117,6 +5136,7 @@
           wateringZoomControls.hidden = true;
         }
         if (!isEditable()) {
+          if (!harvestTourPanel.hidden) setWorkflowPanel(null);
           harvestProgress = null;
           harvestRoute = [];
           harvestTreeBanner.hidden = true;
@@ -5256,6 +5276,10 @@
 
       function renderMapMode() {
         const presentation = currentMapModePresentation();
+        const workflowPanelOpen =
+          !wateringPanel.hidden ||
+          !harvestTourPanel.hidden ||
+          !rowOrderPanel.hidden;
         mapModeButtons.forEach((button) => {
           button.setAttribute(
             "aria-pressed",
@@ -5263,7 +5287,9 @@
           );
         });
         mapFilterPanel.hidden =
-          !hasOpenOrchard(currentAccess) || !presentation.filterPanelVisible;
+          workflowPanelOpen ||
+          !hasOpenOrchard(currentAccess) ||
+          !presentation.filterPanelVisible;
         normalMapFilters.hidden = !presentation.normalFiltersVisible;
         harvestMapFilters.hidden = !presentation.harvestFiltersVisible;
 
@@ -5320,9 +5346,8 @@
             ? "this week"
             : `in ${offset} week${offset === 1 ? "" : "s"}`;
         harvestWeeksLabel.textContent = `${weeks} week${weeks === 1 ? "" : "s"}`;
-        harvestPartFilters.disabled =
-          !harvestFilterEnabled.checked || harvestProgress != null;
-        const selectedParts = selectedHarvestPartValues();
+        harvestMapPartFilters.disabled = !harvestFilterEnabled.checked;
+        const selectedParts = selectedMapHarvestPartValues();
 
         const mapFeatures = filterTreeFeaturesByIdentity(
           orchardFeatures,
@@ -5363,7 +5388,6 @@
             features: visibleFeatures,
           });
         }
-        refreshHarvestJobControls();
         renderMapMode();
       }
 
@@ -5480,6 +5504,17 @@
         setWorkflowPanel(opensWateringPanel ? wateringPanel : null);
       });
       wateringClose.addEventListener("click", () => setWorkflowPanel(null));
+      harvestTourToggle.addEventListener("click", () => {
+        const opensHarvestTourPanel = harvestTourPanel.hidden;
+        if (!opensHarvestTourPanel) {
+          setWorkflowPanel(null);
+          return;
+        }
+        setWorkflowPanel(harvestTourPanel);
+        showCurrentHarvestAvailability();
+        refreshHarvestJobControls();
+      });
+      harvestTourClose.addEventListener("click", () => setWorkflowPanel(null));
       wateringTargetScope.addEventListener("change", refreshWorkflowRows);
       wateringPlaceSource.addEventListener("click", beginWaterSourcePlacement);
       wateringCarryCapacityInput.addEventListener("input", refreshWorkflowRows);
