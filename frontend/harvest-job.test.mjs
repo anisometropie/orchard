@@ -80,11 +80,114 @@ test("opening the harvest tour shows the current harvest week", () => {
   );
 });
 
-test("offer one shared next-tree, next-four, or whole-path route display", () => {
+function checkboxGroup(values) {
+  const checkboxes = Object.entries(values).map(([value, checked]) => ({
+    value,
+    checked,
+  }));
+  return {
+    checkboxes,
+    querySelectorAll(selector) {
+      return selector.endsWith(":checked")
+        ? checkboxes.filter(({ checked }) => checked)
+        : checkboxes;
+    },
+  };
+}
+
+test("share harvested-part checkbox state between filter and tour views", () => {
+  const functionStart = indexHtml.indexOf("function selectedPartValues");
+  const functionEnd = indexHtml.indexOf(
+    "function selectedHarvestPartValues",
+    functionStart,
+  );
+  assert.notEqual(functionStart, -1);
+  assert.notEqual(functionEnd, -1);
+
+  const mapFilters = checkboxGroup({ fruit: true, flower: false, cone: true });
+  const tourFilters = checkboxGroup({ fruit: false, flower: true, cone: false });
+  const context = { mapFilters, tourFilters };
+  vm.runInNewContext(
+    `${indexHtml.slice(functionStart, functionEnd)}\nsynchronizeHarvestPartFilters(mapFilters, tourFilters);`,
+    context,
+  );
+  assert.deepEqual(
+    tourFilters.checkboxes.map(({ checked }) => checked),
+    [true, false, true],
+  );
+
+  tourFilters.checkboxes[0].checked = false;
+  tourFilters.checkboxes[1].checked = true;
+  vm.runInNewContext(
+    `${indexHtml.slice(functionStart, functionEnd)}\nsynchronizeHarvestPartFilters(tourFilters, mapFilters);`,
+    context,
+  );
+  assert.deepEqual(
+    mapFilters.checkboxes.map(({ checked }) => checked),
+    [false, true, true],
+  );
+  assert.match(
+    indexHtml,
+    /shareHarvestPartSelection\(harvestMapPartFilters\)/,
+  );
+  assert.match(indexHtml, /shareHarvestPartSelection\(harvestPartFilters\)/);
+});
+
+test("keep active watering and harvest banners compact on mobile", () => {
+  const mobileStart = indexHtml.indexOf("@media (max-width: 430px)");
+  const mobileCss = indexHtml.slice(
+    mobileStart,
+    indexHtml.indexOf("</style>", mobileStart),
+  );
+  assert.notEqual(mobileStart, -1);
+  assert.match(
+    mobileCss,
+    /#watering-tree-banner,[\s\S]*?#harvest-tree-banner \{[\s\S]*?font-size: 12px;[\s\S]*?padding: 5px 6px;/,
+  );
+  assert.match(
+    mobileCss,
+    /#harvest-tree-banner \{[\s\S]*?flex-direction: row;/,
+  );
+  assert.match(
+    mobileCss,
+    /#watering-done,[\s\S]*?#harvest-defer-tree \{[\s\S]*?min-height: 40px;/,
+  );
+});
+
+test("place one shared route display inside the active tour tool", () => {
+  const wateringPanel = sectionMarkup("watering-panel");
+  const harvestPanel = sectionMarkup("harvest-tour-panel");
   assert.equal(indexHtml.match(/id="tour-route-display"/g)?.length, 1);
   assert.equal(indexHtml.match(/id="tour-route-display-control"/g)?.length, 1);
   assert.doesNotMatch(indexHtml, /id="watering-show-route"/);
   assert.doesNotMatch(indexHtml, /id="harvest-route-display"/);
+  assert.match(wateringPanel, /id="watering-route-display-slot"/);
+  assert.match(wateringPanel, /id="tour-route-display-control"/);
+  assert.match(harvestPanel, /id="harvest-route-display-slot"/);
+  assert.ok(
+    wateringPanel.indexOf('id="watering-target-scope"') <
+      wateringPanel.indexOf('id="watering-row-field"'),
+  );
+  assert.ok(
+    wateringPanel.indexOf('id="watering-row-field"') <
+      wateringPanel.indexOf('id="tour-route-display-control"'),
+  );
+  assert.ok(
+    harvestPanel.indexOf('id="harvest-target-scope"') <
+      harvestPanel.indexOf('id="harvest-species-field"'),
+  );
+  assert.ok(
+    harvestPanel.indexOf('id="harvest-species-field"') <
+      harvestPanel.indexOf('id="harvest-route-display-slot"'),
+  );
+  assert.match(
+    indexHtml,
+    /showTourRouteDisplayIn\(wateringRouteDisplaySlot\)/,
+  );
+  assert.match(
+    indexHtml,
+    /showTourRouteDisplayIn\(harvestRouteDisplaySlot\)/,
+  );
   assert.match(indexHtml, /<option value="next">Next tree only<\/option>/);
   assert.match(
     indexHtml,

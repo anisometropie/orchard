@@ -234,7 +234,6 @@
       .workflow-panel[hidden],
       #watering-tree-banner[hidden],
       #harvest-tree-banner[hidden],
-      #tour-route-display-control[hidden],
       #watering-row-field[hidden],
       #watering-source-controls[hidden],
       #watering-cancel[hidden],
@@ -389,28 +388,6 @@
       }
       #watering-zoom-controls {
         display: none;
-      }
-      #tour-route-display-control {
-        background: rgba(255, 255, 255, 0.98);
-        border: 1px solid #777;
-        border-radius: 8px;
-        box-shadow: 0 2px 9px rgba(0, 0, 0, 0.3);
-        box-sizing: border-box;
-        font: 600 13px sans-serif;
-        left: 50%;
-        padding: 7px 9px;
-        position: absolute;
-        top: 88px;
-        transform: translateX(-50%);
-        z-index: 39;
-      }
-      #tour-route-display-control select {
-        background: white;
-        border: 1px solid #777;
-        border-radius: 5px;
-        font: inherit;
-        margin-left: 6px;
-        padding: 5px 7px;
       }
       .map-mode-switch {
         display: flex;
@@ -1227,28 +1204,62 @@
         }
         #watering-tree-banner,
         #harvest-tree-banner {
-          font-size: 15px;
-          gap: 10px;
-          padding: 10px 12px;
+          border-width: 1px;
+          font-size: 12px;
+          gap: 6px;
+          left: 6px;
+          max-width: none;
+          overflow: hidden;
+          padding: 5px 6px;
+          right: 6px;
+          transform: none;
+        }
+        #watering-tree-banner > div:first-child,
+        #harvest-tree-banner > div:first-child {
+          min-width: 0;
         }
         #watering-tree-name,
         #harvest-tree-name {
-          font-size: 18px;
+          font-size: 14px;
+          line-height: 1.1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        #watering-tree-progress,
+        #harvest-tree-progress {
+          font-size: 11px;
+          line-height: 1.15;
+          margin-top: 1px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         #watering-done,
         #harvest-complete-tree,
         #harvest-defer-tree {
-          font-size: 16px;
-          min-height: 50px;
-          min-width: 78px;
+          font-size: 12px;
+          line-height: 1.1;
+          min-height: 40px;
+          min-width: 0;
+          padding: 5px 8px;
+        }
+        #watering-done {
+          flex: 0 0 auto;
+          min-width: 58px;
         }
         #harvest-tree-banner {
-          align-items: stretch;
-          flex-direction: column;
-          width: min(390px, calc(100vw - 20px));
+          align-items: center;
+          flex-direction: row;
+          width: auto;
+        }
+        .harvest-tree-actions {
+          flex: 0 0 auto;
+          gap: 4px;
         }
         .harvest-tree-actions button {
-          flex: 1 1 0;
+          flex: 0 1 auto;
+          max-width: 100px;
         }
         #watering-zoom-controls:not([hidden]) {
           bottom: max(18px, env(safe-area-inset-bottom));
@@ -1378,6 +1389,18 @@
         Row
         <select id="watering-row"></select>
       </label>
+      <div id="watering-route-display-slot">
+        <div id="tour-route-display-control">
+          <label>
+            Route display
+            <select id="tour-route-display">
+              <option value="next">Next tree only</option>
+              <option value="four" selected>Next 4 trees</option>
+              <option value="route">Whole path</option>
+            </select>
+          </label>
+        </div>
+      </div>
       <p id="watering-help" class="workflow-help">Trees are visited in their saved order. Dead trees are skipped.</p>
       <div id="watering-source-controls" hidden>
         <p id="watering-source-status" class="workflow-status"></p>
@@ -1411,6 +1434,7 @@
         Species
         <select id="harvest-species"></select>
       </label>
+      <div id="harvest-route-display-slot"></div>
       <button id="harvest-start" type="button">Start harvesting</button>
       <button id="harvest-cancel" class="danger" type="button" hidden>Cancel harvest tour</button>
       <p id="harvest-job-status" class="workflow-status" hidden></p>
@@ -1462,16 +1486,6 @@
         <button id="harvest-defer-tree" type="button">Done for now</button>
       </div>
     </section>
-    <div id="tour-route-display-control" hidden>
-      <label>
-        Route display
-        <select id="tour-route-display">
-          <option value="next">Next tree only</option>
-          <option value="four" selected>Next 4 trees</option>
-          <option value="route">Whole path</option>
-        </select>
-      </label>
-    </div>
     <div id="watering-zoom-controls" role="group" aria-label="Watering map zoom" hidden>
       <button
         id="watering-zoom-close"
@@ -2063,6 +2077,12 @@
         "tour-route-display-control",
       );
       const tourRouteDisplay = document.getElementById("tour-route-display");
+      const wateringRouteDisplaySlot = document.getElementById(
+        "watering-route-display-slot",
+      );
+      const harvestRouteDisplaySlot = document.getElementById(
+        "harvest-route-display-slot",
+      );
       const compactMobileLayout = window.matchMedia("(max-width: 430px)");
 
       function setMobileMenuOpen(container, toggle, isOpen) {
@@ -2100,7 +2120,6 @@
             mapToolbar,
             wateringTreeBanner,
             harvestTreeBanner,
-            tourRouteDisplayControl,
           ].filter((element) => !element.hidden);
           blockers.forEach((blocker) => {
             const bounds = blocker.getBoundingClientRect();
@@ -2140,7 +2159,7 @@
               : mobileMapMenuToggle.getBoundingClientRect().bottom,
           );
           let top = Math.ceil(controlBottom + 8);
-          [wateringTreeBanner, harvestTreeBanner, tourRouteDisplayControl]
+          [wateringTreeBanner, harvestTreeBanner]
             .filter((banner) => !banner.hidden)
             .forEach((banner) => {
               banner.style.top = `${top}px`;
@@ -2153,7 +2172,7 @@
           ? 0
           : mapToolbar.getBoundingClientRect().bottom;
         let top = Math.ceil(Math.max(accessBottom, toolbarBottom) + 12);
-        [wateringTreeBanner, harvestTreeBanner, tourRouteDisplayControl]
+        [wateringTreeBanner, harvestTreeBanner]
           .filter((banner) => !banner.hidden)
           .forEach((banner) => {
             banner.style.top = `${top}px`;
@@ -2172,7 +2191,7 @@
         }
         const viewportInset = window.innerWidth <= 760 ? 10 : 20;
         const bannerBottom = Math.max(
-          ...[wateringTreeBanner, harvestTreeBanner, tourRouteDisplayControl]
+          ...[wateringTreeBanner, harvestTreeBanner]
             .filter((banner) => !banner.hidden)
             .map((banner) => banner.getBoundingClientRect().bottom),
           0,
@@ -2201,7 +2220,6 @@
       mapControlsObserver.observe(mapToolbar);
       mapControlsObserver.observe(wateringTreeBanner);
       mapControlsObserver.observe(harvestTreeBanner);
-      mapControlsObserver.observe(tourRouteDisplayControl);
       window.addEventListener("resize", layoutMapControls);
       compactMobileLayout.addEventListener("change", (event) => {
         if (!event.matches) closeMobileMenus();
@@ -2236,16 +2254,36 @@
       }
 
       function renderHarvestPartFilters() {
-        appendHarvestPartFilters(harvestMapPartFilters, applyHarvestWindow);
-        appendHarvestPartFilters(harvestPartFilters, () => {
-          if (isEditable() && !harvestProgress) void loadHarvestCandidates();
-        });
+        appendHarvestPartFilters(harvestMapPartFilters, () =>
+          shareHarvestPartSelection(harvestMapPartFilters),
+        );
+        appendHarvestPartFilters(harvestPartFilters, () =>
+          shareHarvestPartSelection(harvestPartFilters),
+        );
       }
 
       function selectedPartValues(container) {
         return [
           ...container.querySelectorAll('input[type="checkbox"]:checked'),
         ].map((input) => input.value);
+      }
+
+      function synchronizeHarvestPartFilters(source, target) {
+        const selectedParts = new Set(selectedPartValues(source));
+        target
+          .querySelectorAll('input[type="checkbox"]')
+          .forEach((input) => {
+            input.checked = selectedParts.has(input.value);
+          });
+      }
+
+      function shareHarvestPartSelection(source) {
+        const target = source === harvestMapPartFilters
+          ? harvestPartFilters
+          : harvestMapPartFilters;
+        synchronizeHarvestPartFilters(source, target);
+        applyHarvestWindow();
+        if (isEditable() && !harvestProgress) void loadHarvestCandidates();
       }
 
       function selectedHarvestPartValues() {
@@ -3006,6 +3044,12 @@
         setMapMode("harvest");
       }
 
+      function showTourRouteDisplayIn(slot) {
+        if (tourRouteDisplayControl.parentElement !== slot) {
+          slot.append(tourRouteDisplayControl);
+        }
+      }
+
       function setWorkflowPanel(openPanel) {
         if (openPanel !== wateringPanel && placingWaterSource) {
           placingWaterSource = false;
@@ -3044,7 +3088,6 @@
         });
         wateringToggle.hidden = !presentation.wateringLauncherVisible;
         harvestTourToggle.hidden = !presentation.harvestLauncherVisible;
-        tourRouteDisplayControl.hidden = !presentation.routeDisplayVisible;
         if (harvestProgress && !wateringPanel.hidden) setWorkflowPanel(null);
         if (wateringProgress && !harvestTourPanel.hidden) setWorkflowPanel(null);
       }
@@ -3784,6 +3827,8 @@
         const targetsSpecies = harvestTargetScope.value === "species";
         const active = harvestProgress != null;
         harvestPartFilters.disabled = active;
+        harvestMapPartFilters.disabled =
+          active || !harvestFilterEnabled.checked;
         harvestSpeciesField.hidden = !targetsSpecies;
         harvestTargetScope.disabled = active;
         harvestSpecies.disabled = active;
@@ -4029,6 +4074,10 @@
             .forEach((input) => {
               input.checked = activeParts.has(input.value);
             });
+          synchronizeHarvestPartFilters(
+            harvestPartFilters,
+            harvestMapPartFilters,
+          );
         }
         if (progress.plant_identity_id != null) {
           harvestSpecies.value = String(progress.plant_identity_id);
@@ -5346,7 +5395,8 @@
             ? "this week"
             : `in ${offset} week${offset === 1 ? "" : "s"}`;
         harvestWeeksLabel.textContent = `${weeks} week${weeks === 1 ? "" : "s"}`;
-        harvestMapPartFilters.disabled = !harvestFilterEnabled.checked;
+        harvestMapPartFilters.disabled =
+          harvestProgress != null || !harvestFilterEnabled.checked;
         const selectedParts = selectedMapHarvestPartValues();
 
         const mapFeatures = filterTreeFeaturesByIdentity(
@@ -5500,7 +5550,10 @@
       });
       wateringToggle.addEventListener("click", () => {
         const opensWateringPanel = wateringPanel.hidden;
-        if (opensWateringPanel) refreshWorkflowRows();
+        if (opensWateringPanel) {
+          showTourRouteDisplayIn(wateringRouteDisplaySlot);
+          refreshWorkflowRows();
+        }
         setWorkflowPanel(opensWateringPanel ? wateringPanel : null);
       });
       wateringClose.addEventListener("click", () => setWorkflowPanel(null));
@@ -5510,6 +5563,7 @@
           setWorkflowPanel(null);
           return;
         }
+        showTourRouteDisplayIn(harvestRouteDisplaySlot);
         setWorkflowPanel(harvestTourPanel);
         showCurrentHarvestAvailability();
         refreshHarvestJobControls();

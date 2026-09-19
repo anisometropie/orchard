@@ -23,6 +23,5 @@ export function tourPresentation({
   return {
     wateringLauncherVisible: canWater && !harvestActive,
     harvestLauncherVisible: canHarvest && !wateringActive,
-    routeDisplayVisible: wateringActive || harvestActive,
   };
 }

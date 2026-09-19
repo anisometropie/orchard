@@ -44,7 +44,7 @@ test("harvest mode shows only harvest controls and optional harvest pins", () =>
   );
 });
 
-test("an active tour hides the other launcher and shows one route control", () => {
+test("an active tour hides the other launcher", () => {
   assert.deepEqual(
     tourPresentation({
       canWater: true,
@@ -55,7 +55,6 @@ test("an active tour hides the other launcher and shows one route control", () =
     {
       wateringLauncherVisible: true,
       harvestLauncherVisible: false,
-      routeDisplayVisible: true,
     },
   );
   assert.deepEqual(
@@ -68,12 +67,11 @@ test("an active tour hides the other launcher and shows one route control", () =
     {
       wateringLauncherVisible: false,
       harvestLauncherVisible: true,
-      routeDisplayVisible: true,
     },
   );
 });
 
-test("route display stays hidden until a tour starts", () => {
+test("both tour launchers show while no tour is active", () => {
   assert.deepEqual(
     tourPresentation({
       canWater: true,
@@ -84,7 +82,6 @@ test("route display stays hidden until a tour starts", () => {
     {
       wateringLauncherVisible: true,
       harvestLauncherVisible: true,
-      routeDisplayVisible: false,
     },
   );
 });
