@@ -11,17 +11,36 @@ export function orchardRows(features) {
   return [...rows.entries()]
     .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
     .map(([name, trees]) => {
-      const ranks = trees
-        .map((tree) => Number(tree.properties?.row_rank))
-        .sort((left, right) => left - right);
+      const livingTrees = trees.filter(
+        (tree) => tree.properties?.is_alive !== false,
+      );
       return {
         name,
         treeCount: trees.length,
-        livingTreeCount: trees.filter((tree) => tree.properties?.is_alive !== false)
-          .length,
-        isOrdered: ranks.every((rank, index) => rank === index + 1),
+        livingTreeCount: livingTrees.length,
+        isOrdered: livingTrees.every((tree) => {
+          const rank = Number(tree.properties?.row_rank);
+          return Number.isInteger(rank) && rank > 0;
+        }),
       };
     });
+}
+
+export function wateringRowIsOrdered(rows, rowName) {
+  return rows.some((row) => row.name === rowName && row.isOrdered);
+}
+
+export function wateringStartConflictMessage(code) {
+  if (code === "watering_row_not_ordered") {
+    return "Order every living tree in this row before starting watering.";
+  }
+  if (code === "harvest_run_active") {
+    return "Finish or cancel the active harvest tour first.";
+  }
+  if (code === "watering_run_active") {
+    return "Finish or cancel the active watering tour first.";
+  }
+  return "Watering could not start because its state changed. Reload the page.";
 }
 
 export function treeIdsInRow(features, rowName) {

@@ -1806,11 +1806,13 @@
         wateringCarryCapacity,
         wateringCancellationNeedsConfirmation,
         wateringRouteWindow,
+        wateringRowIsOrdered,
         wateringStartRequest,
+        wateringStartConflictMessage,
         wateringTargetGeoJson,
         wateringWideCenter,
         waterSourceGeoJson,
-      } from "./watering.mjs?v=13";
+      } from "./watering.mjs?v=14";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -3276,6 +3278,10 @@
         wateringTargetScope.querySelector('option[value="danger"]').textContent =
           `Danger trees · ${currentDangerTreeCount}`;
         const watersDangerTrees = wateringTargetScope.value === "danger";
+        const selectedRowIsOrdered = wateringRowIsOrdered(
+          rows,
+          wateringRow.value,
+        );
         const carryCapacity = wateringCarryCapacity(
           wateringCarryCapacityInput.value,
         );
@@ -3307,13 +3313,15 @@
             : carryCapacity === 1
               ? "The route starts at the tree closest to the source, then follows one optimized path through every danger tree. Returns to the source are not shown."
               : `Blue and purple loops show every source → ${carryCapacity} trees → source trip. Done always advances to the next tree.`
-          : "Trees are visited in their saved order. Dead trees are skipped.";
+          : !selectedRowIsOrdered
+            ? "Order every living tree in this row before starting watering."
+            : "Trees are visited in their saved order. Dead trees are skipped.";
         wateringStart.disabled =
           wateringProgress != null ||
           harvestProgress != null ||
           (watersDangerTrees
             ? currentDangerTreeCount === 0 || !wateringSource || carryCapacity == null
-            : !wateringRow.value);
+            : !wateringRow.value || !selectedRowIsOrdered);
         wateringStart.hidden = wateringProgress != null;
         wateringCancel.hidden = wateringProgress == null;
         rowOrderAutomatic.disabled = rows.length === 0;
@@ -3755,7 +3763,8 @@
             },
           );
           if (response.status === 409) {
-            throw new Error("Finish the active watering or harvest tour first.");
+            const conflict = await response.json().catch(() => ({}));
+            throw new Error(wateringStartConflictMessage(conflict.code));
           }
           if (response.status === 404) {
             throw new Error(

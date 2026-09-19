@@ -502,7 +502,7 @@ async fn start_watering_run_handler<U>(
     Path(orchard_id): Path<u64>,
     headers: HeaderMap,
     request: Result<Json<StartWateringRunRequest>, JsonRejection>,
-) -> Result<Json<Value>, StatusCode>
+) -> Result<Response, StatusCode>
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
@@ -518,24 +518,18 @@ where
             request.water_source,
             request.carry_capacity,
         ) {
-            (Some(row_name), None, None, None) => start_watering_run(
+            (Some(row_name), None, None, None) => match start_watering_run(
                 WateringRunStartRequested {
                     orchard_id,
                     row_name,
                 },
                 &mut *storage,
-            )
-            .map_err(|error| match error {
-                WateringRunStartError::RowNotFound => StatusCode::NOT_FOUND,
-                WateringRunStartError::RowNotOrdered
-                | WateringRunStartError::AnotherWateringRunIsActive
-                | WateringRunStartError::HarvestRunIsActive => StatusCode::CONFLICT,
-                WateringRunStartError::WateringRunCouldNotBeStarted => {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            })?,
+            ) {
+                Ok(progress) => progress,
+                Err(error) => return Ok(watering_start_error_response(error)),
+            },
             (None, Some(RequestedWateringTarget::Danger), Some(water_source), carry_capacity) => {
-                start_danger_watering_run(
+                match start_danger_watering_run(
                     DangerWateringRunStartRequested {
                         orchard_id,
                         water_source: GeoPoint {
@@ -545,24 +539,66 @@ where
                         carry_capacity: carry_capacity.unwrap_or(2),
                     },
                     &mut *storage,
-                )
-                .map_err(|error| match error {
-                    DangerWateringRunStartError::InvalidWaterSource => StatusCode::BAD_REQUEST,
-                    DangerWateringRunStartError::InvalidCarryCapacity => StatusCode::BAD_REQUEST,
-                    DangerWateringRunStartError::NoDangerTrees => StatusCode::NOT_FOUND,
-                    DangerWateringRunStartError::AnotherWateringRunIsActive
-                    | DangerWateringRunStartError::HarvestRunIsActive => StatusCode::CONFLICT,
-                    DangerWateringRunStartError::WateringRunCouldNotBeStarted => {
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    }
-                })?
+                ) {
+                    Ok(progress) => progress,
+                    Err(error) => return Ok(danger_watering_start_error_response(error)),
+                }
             }
             _ => return Err(StatusCode::BAD_REQUEST),
         };
-        Ok(Json(watering_progress_json(progress)))
+        Ok(Json(watering_progress_json(progress)).into_response())
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+fn watering_start_error_response(error: WateringRunStartError) -> Response {
+    match error {
+        WateringRunStartError::RowNotFound => StatusCode::NOT_FOUND.into_response(),
+        WateringRunStartError::RowNotOrdered => watering_conflict_response(
+            "watering_row_not_ordered",
+            "Order every living tree in this row before starting watering.",
+        ),
+        WateringRunStartError::AnotherWateringRunIsActive => {
+            watering_conflict_response("watering_run_active", "A watering tour is already active.")
+        }
+        WateringRunStartError::HarvestRunIsActive => {
+            watering_conflict_response("harvest_run_active", "A harvest tour is already active.")
+        }
+        WateringRunStartError::WateringRunCouldNotBeStarted => {
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+fn danger_watering_start_error_response(error: DangerWateringRunStartError) -> Response {
+    match error {
+        DangerWateringRunStartError::InvalidWaterSource
+        | DangerWateringRunStartError::InvalidCarryCapacity => {
+            StatusCode::BAD_REQUEST.into_response()
+        }
+        DangerWateringRunStartError::NoDangerTrees => StatusCode::NOT_FOUND.into_response(),
+        DangerWateringRunStartError::AnotherWateringRunIsActive => {
+            watering_conflict_response("watering_run_active", "A watering tour is already active.")
+        }
+        DangerWateringRunStartError::HarvestRunIsActive => {
+            watering_conflict_response("harvest_run_active", "A harvest tour is already active.")
+        }
+        DangerWateringRunStartError::WateringRunCouldNotBeStarted => {
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+fn watering_conflict_response(code: &str, message: &str) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "code": code,
+            "message": message,
+        })),
+    )
+        .into_response()
 }
 
 async fn active_watering_run_handler<U>(

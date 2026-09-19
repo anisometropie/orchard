@@ -379,6 +379,19 @@ async fn only_a_watering_link_can_water_and_only_the_owner_can_order_a_row() {
         StatusCode::NOT_FOUND
     );
 
+    let unordered = client
+        .post(format!("{}/orchards/7/watering-runs", server.url()))
+        .header("x-orchard-share-token", &watering_token)
+        .json(&serde_json::json!({ "row_name": "North" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unordered.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        unordered.json::<serde_json::Value>().await.unwrap()["code"],
+        "watering_row_not_ordered"
+    );
+
     let ordered = client
         .put(format!("{}/orchards/7/row-order", server.url()))
         .header(header::COOKIE, &cookie)

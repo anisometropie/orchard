@@ -13,6 +13,8 @@ import {
   treeIdsInRow,
   wateringCarryCapacity,
   wateringRouteWindow,
+  wateringRowIsOrdered,
+  wateringStartConflictMessage,
   wateringCancellationNeedsConfirmation,
   wateringStartRequest,
   waterSourceGeoJson,
@@ -29,7 +31,7 @@ const feature = (id, rowName, rowRank, isAlive = true) => ({
   },
 });
 
-test("list named rows and show whether every tree has a complete saved order", () => {
+test("list named rows and show whether every living tree has a saved order", () => {
   const rows = orchardRows([
     feature(1, "South", 2),
     feature(2, "North", 1),
@@ -48,6 +50,28 @@ test("list named rows and show whether every tree has a complete saved order", (
       isOrdered: false,
     },
   ]);
+});
+
+test("explain why row watering cannot start instead of claiming a tour is active", () => {
+  const rows = orchardRows([
+    feature(1, "Ordered", 1),
+    feature(2, "Unordered", null),
+  ]);
+
+  assert.equal(wateringRowIsOrdered(rows, "Ordered"), true);
+  assert.equal(wateringRowIsOrdered(rows, "Unordered"), false);
+  assert.equal(
+    wateringStartConflictMessage("watering_row_not_ordered"),
+    "Order every living tree in this row before starting watering.",
+  );
+  assert.equal(
+    wateringStartConflictMessage("harvest_run_active"),
+    "Finish or cancel the active harvest tour first.",
+  );
+  assert.equal(
+    wateringStartConflictMessage("watering_run_active"),
+    "Finish or cancel the active watering tour first.",
+  );
 });
 
 test("manual ordering accepts each tree in the selected row exactly once", () => {
