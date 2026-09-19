@@ -89,6 +89,22 @@ fn persist_password_sessions_ownership_and_multiple_permanent_share_tokens() {
             permission: OrchardSharePermission::Watering,
         })
     );
+    let harvest_watering_share_token = storage
+        .create_share_token(
+            user.id,
+            OrchardId(1),
+            OrchardSharePermission::HarvestAndWatering,
+        )
+        .unwrap();
+    assert_eq!(
+        storage
+            .orchard_share_for_token(&harvest_watering_share_token)
+            .unwrap(),
+        Some(orchard_api::hexagon::models::OrchardShareAccess {
+            orchard_id: OrchardId(1),
+            permission: OrchardSharePermission::HarvestAndWatering,
+        })
+    );
     let second_share_token = storage
         .create_share_token(user.id, OrchardId(1), OrchardSharePermission::View)
         .unwrap();
@@ -2133,6 +2149,33 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/022_add_harvest_tree_undo.sql"
+            ))
+            .unwrap();
+    }
+    let harvest_watering_share_permission_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM pg_constraint constraint_definition
+                JOIN pg_class table_definition
+                  ON table_definition.oid = constraint_definition.conrelid
+                JOIN pg_namespace schema_definition
+                  ON schema_definition.oid = table_definition.relnamespace
+                WHERE schema_definition.nspname = current_schema()
+                  AND table_definition.relname = 'orchard_share_tokens'
+                  AND constraint_definition.conname =
+                      'orchard_share_tokens_permission_check'
+                  AND pg_get_constraintdef(constraint_definition.oid)
+                      LIKE '%harvest_watering%'
+             )",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !harvest_watering_share_permission_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/023_add_harvest_watering_share_permission.sql"
             ))
             .unwrap();
     }

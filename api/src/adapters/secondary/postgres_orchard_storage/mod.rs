@@ -157,6 +157,7 @@ impl AccessControl for PostgresOrchardStorage {
         let permission = match permission {
             OrchardSharePermission::View => "view",
             OrchardSharePermission::Watering => "watering",
+            OrchardSharePermission::HarvestAndWatering => "harvest_watering",
         };
         let changed = self
             .client
@@ -196,6 +197,7 @@ impl AccessControl for PostgresOrchardStorage {
                 let permission = match row.get::<_, String>(1).as_str() {
                     "view" => OrchardSharePermission::View,
                     "watering" => OrchardSharePermission::Watering,
+                    "harvest_watering" => OrchardSharePermission::HarvestAndWatering,
                     _ => return Err(AccessControlError::ShareTokenCouldNotBeRead),
                 };
                 Ok(OrchardShareAccess {

@@ -16,6 +16,7 @@ pub struct Orchard {
 pub enum OrchardSharePermission {
     View,
     Watering,
+    HarvestAndWatering,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

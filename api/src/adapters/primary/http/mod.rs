@@ -28,6 +28,10 @@ use crate::hexagon::ports::{
 use crate::hexagon::use_cases::add_tree_photo::{
     TreePhotoAddError, TreePhotoAdded, add_tree_photo,
 };
+use crate::hexagon::use_cases::authorize_orchard_harvester::{
+    OrchardHarvestingAccessError, OrchardHarvestingAccessRequested, OrchardHarvestingCredential,
+    authorize_orchard_harvester,
+};
 use crate::hexagon::use_cases::authorize_orchard_owner::{
     OrchardOwnerAccessError, OrchardOwnerAccessRequested, authorize_orchard_owner,
 };
@@ -171,6 +175,10 @@ where
         .route(
             "/orchards/{orchard_id}/share/watering",
             post(share_orchard_for_watering_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/share/harvest-watering",
+            post(share_orchard_for_harvest_and_watering_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/row-order",
@@ -377,6 +385,23 @@ where
         OrchardId(orchard_id),
         headers,
         OrchardSharePermission::Watering,
+    )
+    .await
+}
+
+async fn share_orchard_for_harvest_and_watering_handler<U>(
+    State(access_control): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + Send + 'static,
+{
+    create_share_link(
+        access_control,
+        OrchardId(orchard_id),
+        headers,
+        OrchardSharePermission::HarvestAndWatering,
     )
     .await
 }
@@ -776,13 +801,13 @@ async fn harvest_candidates_handler<U>(
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_harvesting_credential(&headers)?;
     let harvested_parts =
         parse_harvested_parts(&query.harvested_parts).ok_or(StatusCode::BAD_REQUEST)?;
     tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        authorize_harvesting_access(&mut *storage, orchard_id, credential)?;
         list_harvest_candidates(
             HarvestCandidatesRequested {
                 orchard_id,
@@ -820,7 +845,7 @@ async fn start_harvest_run_handler<U>(
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_harvesting_credential(&headers)?;
     let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
     let target = match (request.target, request.plant_identity_id) {
         (RequestedHarvestTarget::All, None) => HarvestRunTarget::All,
@@ -832,7 +857,7 @@ where
     tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        authorize_harvesting_access(&mut *storage, orchard_id, credential)?;
         start_harvest_run(
             HarvestRunStartRequested {
                 orchard_id,
@@ -865,11 +890,11 @@ async fn active_harvest_run_handler<U>(
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_harvesting_credential(&headers)?;
     tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        authorize_harvesting_access(&mut *storage, orchard_id, credential)?;
         load_active_harvest_run(orchard_id, &query.on_date, &mut *storage)
             .map(|progress| match progress {
                 Some(progress) => Json(harvest_progress_json(progress)).into_response(),
@@ -903,7 +928,7 @@ async fn record_tree_harvested_handler<U>(
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_harvesting_credential(&headers)?;
     let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
     if request.extend_window.is_some() {
         return Err(StatusCode::BAD_REQUEST);
@@ -911,7 +936,7 @@ where
     let response = tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        if let Err(status) = authorize_owner_access(&mut *storage, orchard_id, session_token) {
+        if let Err(status) = authorize_harvesting_access(&mut *storage, orchard_id, credential) {
             return status.into_response();
         }
         match record_tree_harvested(
@@ -964,11 +989,11 @@ async fn cancel_harvest_run_handler<U>(
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_harvesting_credential(&headers)?;
     tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        authorize_harvesting_access(&mut *storage, orchard_id, credential)?;
         cancel_harvest_run(
             HarvestRunCancellationRequested {
                 orchard_id,
@@ -998,13 +1023,13 @@ async fn defer_harvest_tree_handler<U>(
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_harvesting_credential(&headers)?;
     let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
     let action_date = request.action_date.clone();
     let response = tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        if let Err(status) = authorize_owner_access(&mut *storage, orchard_id, session_token) {
+        if let Err(status) = authorize_harvesting_access(&mut *storage, orchard_id, credential) {
             return status.into_response();
         }
         match defer_harvest_tree(
@@ -1079,12 +1104,12 @@ async fn undo_last_harvest_tree_action_handler<U>(
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
-    let session_token = owner_session_token(&headers)?;
+    let credential = orchard_harvesting_credential(&headers)?;
     let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
     let response = tokio::task::spawn_blocking(move || {
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        if let Err(status) = authorize_owner_access(&mut *storage, orchard_id, session_token) {
+        if let Err(status) = authorize_harvesting_access(&mut *storage, orchard_id, credential) {
             return status.into_response();
         }
         match undo_last_harvest_tree_action(
@@ -1243,6 +1268,22 @@ fn orchard_watering_credential(
         .ok_or(StatusCode::UNAUTHORIZED)
 }
 
+fn orchard_harvesting_credential(
+    headers: &HeaderMap,
+) -> Result<OrchardHarvestingCredential, StatusCode> {
+    if let Some(share_token) = headers
+        .get("x-orchard-share-token")
+        .and_then(|value| value.to_str().ok())
+    {
+        return Ok(OrchardHarvestingCredential::ShareToken(
+            share_token.to_owned(),
+        ));
+    }
+    cookie_value(headers, "orchard_session")
+        .map(OrchardHarvestingCredential::OwnerSession)
+        .ok_or(StatusCode::UNAUTHORIZED)
+}
+
 fn owner_session_token(headers: &HeaderMap) -> Result<String, StatusCode> {
     if headers.contains_key("x-orchard-share-token") {
         return Err(StatusCode::FORBIDDEN);
@@ -1286,6 +1327,25 @@ fn authorize_watering_access(
         OrchardWateringAccessError::AccessNotFound => StatusCode::NOT_FOUND,
         OrchardWateringAccessError::PermissionDenied => StatusCode::FORBIDDEN,
         OrchardWateringAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+fn authorize_harvesting_access(
+    access_control: &mut impl AccessControl,
+    orchard_id: OrchardId,
+    credential: OrchardHarvestingCredential,
+) -> Result<(), StatusCode> {
+    authorize_orchard_harvester(
+        OrchardHarvestingAccessRequested {
+            orchard_id,
+            credential,
+        },
+        access_control,
+    )
+    .map_err(|error| match error {
+        OrchardHarvestingAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+        OrchardHarvestingAccessError::PermissionDenied => StatusCode::FORBIDDEN,
+        OrchardHarvestingAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
     })
 }
 

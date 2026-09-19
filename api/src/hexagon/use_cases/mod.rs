@@ -1,4 +1,5 @@
 pub mod add_tree_photo;
+pub mod authorize_orchard_harvester;
 pub mod authorize_orchard_owner;
 pub mod authorize_orchard_reader;
 pub mod authorize_orchard_waterer;

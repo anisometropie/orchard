@@ -1578,6 +1578,7 @@
       <select id="orchard-select" aria-label="Open orchard" hidden></select>
       <button id="share-view-orchard" type="button" hidden>Share view-only link</button>
       <button id="share-watering-orchard" type="button" hidden>Share watering link</button>
+      <button id="share-harvest-watering-orchard" type="button" hidden>Share harvest + watering link</button>
       <button id="logout" class="secondary" type="button" hidden>Log out</button>
       <div id="share-result" hidden>
         <input id="share-link" aria-label="Shared orchard link" readonly />
@@ -1787,12 +1788,13 @@
       } from "./harvest-job.mjs?v=4";
       import {
         accessHeaders,
+        canHarvestOrchard,
         canWaterOrchard,
         hasOpenOrchard,
         orchardResourceUrl,
         resolveOrchardAccess,
         sharedOrchardUrl,
-      } from "./orchard-access.mjs?v=4";
+      } from "./orchard-access.mjs?v=5";
       import {
         adaptiveWateringWideZoom,
         appendManualTree,
@@ -2058,6 +2060,9 @@
       const shareViewOrchard = document.getElementById("share-view-orchard");
       const shareWateringOrchard = document.getElementById(
         "share-watering-orchard",
+      );
+      const shareHarvestWateringOrchard = document.getElementById(
+        "share-harvest-watering-orchard",
       );
       const logout = document.getElementById("logout");
       const shareResult = document.getElementById("share-result");
@@ -2339,7 +2344,9 @@
           : harvestMapPartFilters;
         synchronizeHarvestPartFilters(source, target);
         applyHarvestWindow();
-        if (isEditable() && !harvestProgress) void loadHarvestCandidates();
+        if (canHarvestOrchard(currentAccess) && !harvestProgress) {
+          void loadHarvestCandidates();
+        }
       }
 
       function selectedHarvestPartValues() {
@@ -3138,7 +3145,7 @@
       function refreshTourPresentation() {
         const presentation = tourPresentation({
           canWater: canWaterOrchard(currentAccess),
-          canHarvest: isEditable(),
+          canHarvest: canHarvestOrchard(currentAccess),
           wateringActive: wateringProgress != null,
           harvestActive: harvestProgress != null,
         });
@@ -3940,7 +3947,7 @@
         onDate = localIsoDate(),
         harvestedParts = selectedHarvestPartValues(),
       ) {
-        if (!isEditable()) return false;
+        if (!canHarvestOrchard(currentAccess)) return false;
         const harvestedPartKey = harvestedParts.join(",");
         harvestCandidateTreeIds = new Set();
         harvestCandidatesLoaded = false;
@@ -4222,7 +4229,7 @@
 
       async function restoreActiveHarvestRun() {
         resetCompletedHarvestPresentation();
-        if (!isEditable()) return;
+        if (!canHarvestOrchard(currentAccess)) return;
         const response = await fetch(
           orchardResourceUrl(
             currentAccess,
@@ -5185,7 +5192,7 @@
         try {
           await loadMapConfiguration();
           await fetchOrchardTrees();
-          if (isEditable()) await loadHarvestCandidates();
+          if (canHarvestOrchard(currentAccess)) await loadHarvestCandidates();
           await restoreActiveWateringRun();
           await restoreActiveHarvestRun();
           status.hidden = true;
@@ -5339,7 +5346,7 @@
         const status = document.getElementById("map-status");
         try {
           await fetchOrchardTrees();
-          if (isEditable()) {
+          if (canHarvestOrchard(currentAccess)) {
             try {
               await loadHarvestCandidates();
             } catch (error) {
@@ -5366,7 +5373,7 @@
           wateringTreeBanner.hidden = true;
           wateringZoomControls.hidden = true;
         }
-        if (!isEditable()) {
+        if (!canHarvestOrchard(currentAccess)) {
           if (!harvestTourPanel.hidden) setWorkflowPanel(null);
           harvestProgress = null;
           harvestRoute = [];
@@ -5380,6 +5387,7 @@
         logout.hidden = !loggedIn;
         shareViewOrchard.hidden = !isEditable();
         shareWateringOrchard.hidden = !isEditable();
+        shareHarvestWateringOrchard.hidden = !isEditable();
         shareResult.hidden = true;
         refreshTourPresentation();
 
@@ -5387,6 +5395,8 @@
           accessMode.textContent = "Shared orchard · view only";
         } else if (currentAccess.mode === "watering") {
           accessMode.textContent = "Shared orchard · view and water";
+        } else if (currentAccess.mode === "harvest-watering") {
+          accessMode.textContent = "Shared orchard · harvest and water";
         } else if (isEditable()) {
           accessMode.textContent = currentAccess.orchard.name;
         } else if (currentAccess.mode === "login-required") {
@@ -5457,7 +5467,11 @@
       async function logOut() {
         await fetch("/api/session", { method: "DELETE" });
         session = null;
-        if (!["read-only", "watering"].includes(currentAccess.mode)) {
+        if (
+          !["read-only", "watering", "harvest-watering"].includes(
+            currentAccess.mode,
+          )
+        ) {
           window.location.hash = "";
         }
         await openOrchardFromLocation();
@@ -5468,7 +5482,11 @@
         const response = await fetch(
           orchardResourceUrl(
             currentAccess,
-            permission === "watering" ? "share/watering" : "share",
+            permission === "watering"
+              ? "share/watering"
+              : permission === "harvest-watering"
+                ? "share/harvest-watering"
+                : "share",
           ),
           { method: "POST" },
         );
@@ -5489,7 +5507,9 @@
           "aria-label",
           permission === "watering"
             ? "Orchard watering link"
-            : "View-only orchard link",
+            : permission === "harvest-watering"
+              ? "Orchard harvest and watering link"
+              : "View-only orchard link",
         );
         shareResult.hidden = false;
         shareLink.select();
@@ -5802,6 +5822,9 @@
       shareViewOrchard.addEventListener("click", () => createShareLink("view"));
       shareWateringOrchard.addEventListener("click", () =>
         createShareLink("watering"),
+      );
+      shareHarvestWateringOrchard.addEventListener("click", () =>
+        createShareLink("harvest-watering"),
       );
       copyShareLink.addEventListener("click", async () => {
         shareLink.select();

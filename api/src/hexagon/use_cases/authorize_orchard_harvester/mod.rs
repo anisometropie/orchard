@@ -4,29 +4,29 @@ use crate::hexagon::use_cases::authorize_orchard_owner::{
     OrchardOwnerAccessError, OrchardOwnerAccessRequested, authorize_orchard_owner,
 };
 
-pub enum OrchardWateringCredential {
+pub enum OrchardHarvestingCredential {
     OwnerSession(String),
     ShareToken(String),
 }
 
-pub struct OrchardWateringAccessRequested {
+pub struct OrchardHarvestingAccessRequested {
     pub orchard_id: OrchardId,
-    pub credential: OrchardWateringCredential,
+    pub credential: OrchardHarvestingCredential,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum OrchardWateringAccessError {
+pub enum OrchardHarvestingAccessError {
     AccessNotFound,
     PermissionDenied,
     AccessCouldNotBeChecked,
 }
 
-pub fn authorize_orchard_waterer(
-    event: OrchardWateringAccessRequested,
+pub fn authorize_orchard_harvester(
+    event: OrchardHarvestingAccessRequested,
     access_control: &mut impl AccessControl,
-) -> Result<(), OrchardWateringAccessError> {
+) -> Result<(), OrchardHarvestingAccessError> {
     match event.credential {
-        OrchardWateringCredential::OwnerSession(session_token) => authorize_orchard_owner(
+        OrchardHarvestingCredential::OwnerSession(session_token) => authorize_orchard_owner(
             OrchardOwnerAccessRequested {
                 orchard_id: event.orchard_id,
                 session_token,
@@ -36,23 +36,23 @@ pub fn authorize_orchard_waterer(
         .map(|_| ())
         .map_err(|error| match error {
             OrchardOwnerAccessError::SessionNotFound | OrchardOwnerAccessError::OrchardNotOwned => {
-                OrchardWateringAccessError::AccessNotFound
+                OrchardHarvestingAccessError::AccessNotFound
             }
             OrchardOwnerAccessError::AccessCouldNotBeChecked => {
-                OrchardWateringAccessError::AccessCouldNotBeChecked
+                OrchardHarvestingAccessError::AccessCouldNotBeChecked
             }
         }),
-        OrchardWateringCredential::ShareToken(share_token) => {
+        OrchardHarvestingCredential::ShareToken(share_token) => {
             let access = access_control
                 .orchard_share_for_token(&share_token)
-                .map_err(|_| OrchardWateringAccessError::AccessCouldNotBeChecked)?
+                .map_err(|_| OrchardHarvestingAccessError::AccessCouldNotBeChecked)?
                 .filter(|access| access.orchard_id == event.orchard_id)
-                .ok_or(OrchardWateringAccessError::AccessNotFound)?;
+                .ok_or(OrchardHarvestingAccessError::AccessNotFound)?;
             match access.permission {
-                OrchardSharePermission::Watering | OrchardSharePermission::HarvestAndWatering => {
-                    Ok(())
+                OrchardSharePermission::HarvestAndWatering => Ok(()),
+                OrchardSharePermission::View | OrchardSharePermission::Watering => {
+                    Err(OrchardHarvestingAccessError::PermissionDenied)
                 }
-                OrchardSharePermission::View => Err(OrchardWateringAccessError::PermissionDenied),
             }
         }
     }

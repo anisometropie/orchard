@@ -507,6 +507,222 @@ async fn only_a_watering_link_can_water_and_only_the_owner_can_order_a_row() {
 }
 
 #[tokio::test]
+async fn a_combined_link_can_water_and_run_the_complete_harvest_workflow_but_cannot_edit() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let watering_token = create_watering_share_token(&client, server.url(), &cookie).await;
+    let worker_token = create_harvest_watering_share_token(&client, server.url(), &cookie).await;
+
+    assert_eq!(
+        client
+            .patch(format!("{}/orchards/7/trees/1", server.url()))
+            .header("x-orchard-share-token", &worker_token)
+            .json(&serde_json::json!({ "is_in_danger": true }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let schedule_url = format!(
+        "{}/orchards/7/plant-identities/1/harvest-windows",
+        server.url()
+    );
+    let schedule_request = serde_json::json!({
+        "reference_region": "Example Region, France",
+        "windows": [{
+            "start": { "month": 9, "day": 1 },
+            "end": { "month": 9, "day": 20 },
+            "harvested_part": "fruit"
+        }]
+    });
+    assert_eq!(
+        client
+            .put(&schedule_url)
+            .header("x-orchard-share-token", &worker_token)
+            .json(&schedule_request)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .put(format!("{}/orchards/7/row-order", server.url()))
+            .header("x-orchard-share-token", &worker_token)
+            .json(&serde_json::json!({
+                "row_name": "North",
+                "order": { "method": "east_to_west" }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .post(format!("{}/orchards/7/share", server.url()))
+            .header("x-orchard-share-token", &worker_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .put(&schedule_url)
+            .header(header::COOKIE, &cookie)
+            .json(&schedule_request)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    assert_eq!(
+        client
+            .put(format!("{}/orchards/7/row-order", server.url()))
+            .header(header::COOKIE, &cookie)
+            .json(&serde_json::json!({
+                "row_name": "North",
+                "order": { "method": "east_to_west" }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let watering = client
+        .post(format!("{}/orchards/7/watering-runs", server.url()))
+        .header("x-orchard-share-token", &worker_token)
+        .json(&serde_json::json!({ "row_name": "North" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(watering.status(), StatusCode::OK);
+    let watering_run_id = watering.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        client
+            .delete(format!(
+                "{}/orchards/7/watering-runs/{watering_run_id}",
+                server.url()
+            ))
+            .header("x-orchard-share-token", &worker_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let candidates_url = format!("{}/orchards/7/harvest-candidates", server.url());
+    assert_eq!(
+        client
+            .get(&candidates_url)
+            .header("x-orchard-share-token", &watering_token)
+            .query(&[("on_date", "2026-09-17"), ("harvested_parts", "fruit")])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .get(&candidates_url)
+            .header("x-orchard-share-token", &worker_token)
+            .query(&[("on_date", "2026-09-17"), ("harvested_parts", "fruit")])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+
+    let started = client
+        .post(format!("{}/orchards/7/harvest-runs", server.url()))
+        .header("x-orchard-share-token", &worker_token)
+        .json(&serde_json::json!({
+            "target": "all",
+            "plant_identity_id": null,
+            "harvested_parts": ["fruit"],
+            "on_date": "2026-09-17"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(started.status(), StatusCode::OK);
+    let run_id = started.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_u64()
+        .unwrap();
+    let defer_url = format!("{}/orchards/7/harvest-runs/{run_id}/deferred", server.url());
+    let proposal = client
+        .post(&defer_url)
+        .header("x-orchard-share-token", &worker_token)
+        .json(&serde_json::json!({
+            "tree_id": 1,
+            "action_date": "2026-09-17"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(proposal.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        proposal.json::<serde_json::Value>().await.unwrap()["code"],
+        "harvest_window_extension_required"
+    );
+    assert_eq!(
+        client
+            .post(&defer_url)
+            .header("x-orchard-share-token", &worker_token)
+            .json(&serde_json::json!({
+                "tree_id": 1,
+                "action_date": "2026-09-17",
+                "extend_window": true
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .post(format!(
+                "{}/orchards/7/harvest-runs/{run_id}/previous",
+                server.url()
+            ))
+            .header("x-orchard-share-token", &worker_token)
+            .json(&serde_json::json!({ "action_date": "2026-09-17" }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .delete(format!("{}/orchards/7/harvest-runs/{run_id}", server.url()))
+            .header("x-orchard-share-token", worker_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[tokio::test]
 async fn a_watering_link_can_cancel_an_active_run_but_a_view_link_cannot() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await
@@ -1028,6 +1244,25 @@ async fn create_share_token(client: &Client, server_url: &str, cookie: &str) -> 
 async fn create_watering_share_token(client: &Client, server_url: &str, cookie: &str) -> String {
     client
         .post(format!("{server_url}/orchards/7/share/watering"))
+        .header(header::COOKIE, cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["share_token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn create_harvest_watering_share_token(
+    client: &Client,
+    server_url: &str,
+    cookie: &str,
+) -> String {
+    client
+        .post(format!("{server_url}/orchards/7/share/harvest-watering"))
         .header(header::COOKIE, cookie)
         .send()
         .await
