@@ -9,6 +9,45 @@ export function treeTooltipFields(properties = {}) {
   ].filter(([, value]) => value != null && value !== "");
 }
 
+export function treeEditorPresentation() {
+  return {
+    fields: ["danger", "dead"],
+    actions: ["cancel", "save"],
+  };
+}
+
+export function treePopupPresentation(
+  properties = {},
+  {
+    interaction = "selected",
+    canMove = false,
+    canEdit = false,
+    canAddPhotos = false,
+  } = {},
+) {
+  if (interaction === "hover") {
+    return {
+      fields: [["Name", properties.name || "Tree"]],
+      showPhoto: properties.has_photo === true,
+      actions: [],
+    };
+  }
+
+  const canFilter =
+    properties.plant_identity_id != null ||
+    properties.plant_identity_taxon_name;
+  return {
+    fields: treeTooltipFields(properties),
+    showPhoto: properties.has_photo === true,
+    actions: [
+      canMove && "move",
+      canEdit && "edit",
+      canFilter && "filter",
+      canAddPhotos && "photo",
+    ].filter(Boolean),
+  };
+}
+
 export function filterTreeFeatures(
   features,
   { role = "", genus = "", species = "" } = {},

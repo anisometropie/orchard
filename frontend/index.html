@@ -141,38 +141,25 @@
       .tree-editor-error {
         color: #b42318;
       }
-      .tree-editor-actions,
-      .tree-editor-photo-actions {
+      .tree-editor-actions {
         display: flex;
         gap: 8px;
         margin-top: 12px;
-      }
-      .tree-editor-actions {
         justify-content: flex-end;
       }
-      .tree-editor-photo-actions {
-        border-top: 1px solid #ddd;
-        flex-wrap: wrap;
-        padding-top: 10px;
-      }
-      .tree-editor-actions button,
-      .tree-editor-photo-actions button {
+      .tree-editor-actions button {
         border: 1px solid #777;
         border-radius: 4px;
         cursor: pointer;
         font: inherit;
         padding: 5px 10px;
       }
-      .tree-editor-photo-actions button {
-        flex: 1 1 auto;
-      }
       .tree-editor-actions button[type="submit"] {
         background: #245c2a;
         border-color: #245c2a;
         color: white;
       }
-      .tree-editor-actions button:disabled,
-      .tree-editor-photo-actions button:disabled {
+      .tree-editor-actions button:disabled {
         cursor: wait;
         opacity: 0.6;
       }
@@ -871,6 +858,15 @@
         width: 24px;
       }
       .inventory-filter-button svg {
+        display: block;
+        flex: none;
+        height: 15px;
+        pointer-events: none;
+        width: 15px;
+      }
+      .tree-photo-action-button svg {
+        display: block;
+        flex: none;
         height: 15px;
         pointer-events: none;
         width: 15px;
@@ -896,24 +892,40 @@
         padding-top: 7px;
       }
       .tree-tooltip-actions .inventory-row-action {
+        font-size: 18px;
+        height: 28px;
         opacity: 1;
         pointer-events: auto;
+        width: 28px;
+      }
+      .tree-tooltip-actions .inventory-filter-button svg {
+        height: 17px;
+        transform: translateX(0.75px);
+        width: 17px;
+      }
+      .tree-tooltip-error {
+        color: #b42318;
+        font-size: 12px;
+        margin-top: 7px;
       }
       .tree-tooltip-photo {
         background: transparent;
         border: 0;
         border-radius: 6px;
+        box-sizing: border-box;
         cursor: zoom-in;
         display: block;
         margin: 8px 0 0;
+        max-width: 100%;
         overflow: hidden;
         padding: 0;
-        width: min(240px, 70vw);
+        width: min(220px, calc(70vw - 20px));
       }
       .tree-tooltip-photo img {
         display: block;
         height: auto;
         max-height: 160px;
+        max-width: 100%;
         object-fit: cover;
         width: 100%;
       }
@@ -1382,17 +1394,23 @@
           height: 20px;
           width: 20px;
         }
+        .tree-photo-action-button svg {
+          height: 18px;
+          width: 18px;
+        }
+        .tree-tooltip-actions .inventory-row-action {
+          font-size: 24px;
+          height: 48px;
+          width: 48px;
+        }
+        .tree-tooltip-actions .inventory-filter-button svg {
+          height: 22px;
+          width: 22px;
+        }
         .tree-editor-actions button,
-        .tree-editor-photo-actions button,
         .tree-photo-viewer-close {
           min-height: 52px;
           min-width: 52px;
-        }
-        .tree-editor-photo-actions {
-          flex-direction: column;
-        }
-        .tree-editor-photo-actions button {
-          width: 100%;
         }
         .tree-photo-viewer {
           padding: 10px;
@@ -2002,7 +2020,7 @@
         treeMovePresentation,
         treeMoveRequest,
         treeMoveTransition,
-      } from "./tree-move.mjs?v=1";
+      } from "./tree-move.mjs?v=2";
       import {
         filterTreeFeatures,
         filterTreeFeaturesByIdentity,
@@ -2011,8 +2029,9 @@
         harvestWindowSpan,
         summarizeSpecies,
         taxonomyOptions,
-        treeTooltipFields,
-      } from "./orchard-inventory.mjs?v=6";
+        treeEditorPresentation,
+        treePopupPresentation,
+      } from "./orchard-inventory.mjs?v=7";
       import {
         formatHarvestWindows,
         harvestAvailability,
@@ -2195,6 +2214,7 @@
 
       let treeTooltip;
       let treeTooltipTreeId;
+      let treeTooltipInteraction;
       let treeTooltipHideTimer;
       let treeEditor;
       let treePhotoViewer;
@@ -2426,6 +2446,9 @@
         "harvest-route-display-slot",
       );
       const compactMobileLayout = window.matchMedia("(max-width: 430px)");
+      const treeHoverLayout = window.matchMedia(
+        "(hover: hover) and (pointer: fine)",
+      );
 
       function setMobileMenuOpen(container, toggle, isOpen) {
         container.classList.toggle("mobile-menu-open", isOpen);
@@ -2824,8 +2847,11 @@
         icon.setAttribute("viewBox", "0 0 24 24");
         icon.setAttribute("aria-hidden", "true");
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path.setAttribute("d", "M3 5h18l-7 8v5l-4 2v-7L3 5z");
-        path.setAttribute("fill", "currentColor");
+        path.setAttribute("d", "M4 5.5h16L13.5 13v6h-3v-6L4 5.5z");
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", "currentColor");
+        path.setAttribute("stroke-linejoin", "round");
+        path.setAttribute("stroke-width", "2");
         icon.append(path);
         button.append(icon);
         button.addEventListener("click", onClick);
@@ -3001,14 +3027,112 @@
         buttons[nextIndex].focus({ preventScroll: true });
       });
 
-      function createTreeTooltip(
-        properties,
-        interactiveHover = false,
-        feature = null,
-      ) {
-        const tooltip = document.createElement("div");
+      function createTreeEditButton(feature) {
+        const button = document.createElement("button");
+        const treeName = feature.properties.name || "tree";
+        button.type = "button";
+        button.className = "inventory-row-action harvest-edit-button";
+        button.textContent = "✎";
+        button.title = `Edit ${treeName}`;
+        button.setAttribute("aria-label", `Edit ${treeName}`);
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openTreeEditorPopup(feature);
+        });
+        return button;
+      }
 
-        treeTooltipFields(properties).forEach(([label, value]) => {
+      function createTreePhotoButton(feature, tooltip, actions) {
+        const treeName = feature.properties.name || "tree";
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.setAttribute("capture", "environment");
+        input.className = "visually-hidden tree-tooltip-photo-input";
+
+        const error = document.createElement("div");
+        error.className = "tree-tooltip-error";
+        error.setAttribute("aria-live", "polite");
+        error.hidden = true;
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "inventory-row-action tree-photo-action-button";
+        button.title = `Take a photo of ${treeName}`;
+        button.setAttribute("aria-label", `Take a photo of ${treeName}`);
+        const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        icon.setAttribute("viewBox", "0 0 24 24");
+        icon.setAttribute("aria-hidden", "true");
+        const body = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        body.setAttribute(
+          "d",
+          "M9 5.5h6L16.5 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2.5L9 5.5z",
+        );
+        body.setAttribute("fill", "none");
+        body.setAttribute("stroke", "currentColor");
+        body.setAttribute("stroke-linejoin", "round");
+        body.setAttribute("stroke-width", "2");
+        const lens = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        lens.setAttribute("cx", "12");
+        lens.setAttribute("cy", "13");
+        lens.setAttribute("fill", "none");
+        lens.setAttribute("r", "3.25");
+        lens.setAttribute("stroke", "currentColor");
+        lens.setAttribute("stroke-width", "2");
+        icon.append(body, lens);
+        button.append(icon);
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          input.click();
+        });
+        input.addEventListener("change", async () => {
+          const file = input.files?.[0];
+          if (!file) return;
+          error.hidden = true;
+          const actionButtons = [...actions.querySelectorAll("button")];
+          actionButtons.forEach((actionButton) => {
+            actionButton.disabled = true;
+          });
+          icon.style.visibility = "hidden";
+          button.setAttribute("aria-busy", "true");
+          try {
+            const photo = await prepareTreePhoto(file);
+            await uploadTreePhoto(feature.id, photo);
+            markTreeHasPhoto(feature);
+            closeTreeTooltip();
+            openTreeSelectedPopup(feature);
+          } catch (requestError) {
+            error.textContent = requestError.message;
+            error.hidden = false;
+          } finally {
+            input.value = "";
+            icon.style.removeProperty("visibility");
+            button.removeAttribute("aria-busy");
+            actionButtons.forEach((actionButton) => {
+              actionButton.disabled = false;
+            });
+          }
+        });
+        tooltip.append(input, error);
+        return button;
+      }
+
+      function createTreeTooltip(feature, interaction) {
+        const tooltip = document.createElement("div");
+        const properties = feature.properties;
+        const presentation = treePopupPresentation(properties, {
+          interaction,
+          canMove:
+            isEditable() &&
+            !wateringProgress &&
+            !harvestProgress &&
+            !manualOrder &&
+            !placingWaterSource,
+          canEdit: isEditable(),
+          canAddPhotos: canAddPhotosToOrchard(currentAccess),
+        });
+
+        presentation.fields.forEach(([label, value]) => {
           const field = document.createElement("div");
           const labelElement = document.createElement("strong");
           labelElement.textContent = `${label}: `;
@@ -3016,72 +3140,40 @@
           tooltip.append(field);
         });
 
-        if (
-          interactiveHover &&
-          feature?.id != null &&
-          properties.has_photo === true
-        ) {
+        if (presentation.showPhoto && feature.id != null) {
           appendLatestTreePhoto(tooltip, feature);
         }
 
-        const canFilter =
-          properties.plant_identity_id != null ||
-          properties.plant_identity_taxon_name;
-        const canManageTree =
-          interactiveHover &&
-          feature &&
-          (isEditable() || canAddPhotosToOrchard(currentAccess));
-        if (interactiveHover && (canFilter || canManageTree)) {
+        if (presentation.actions.length > 0) {
           const actions = document.createElement("div");
           actions.className = "tree-tooltip-actions";
-          if (canManageTree) {
-            if (
-              isEditable() &&
-              !wateringProgress &&
-              !harvestProgress &&
-              !manualOrder &&
-              !placingWaterSource
-            ) {
+          presentation.actions.forEach((action) => {
+            if (action === "move") {
               actions.append(createTreeMoveButton(feature));
+            } else if (action === "edit") {
+              actions.append(createTreeEditButton(feature));
+            } else if (action === "filter") {
+              const selection = speciesFilterSelection(properties);
+              actions.append(
+                createInventoryFilterButton(
+                  `Show only ${selection.label} on the map`,
+                  (event) => {
+                    event.stopPropagation();
+                    setMapIdentityFilter(selection);
+                    closeTreeTooltip();
+                  },
+                ),
+              );
+            } else if (action === "photo") {
+              actions.append(createTreePhotoButton(feature, tooltip, actions));
             }
-            const editButton = document.createElement("button");
-            editButton.type = "button";
-            editButton.className = "inventory-row-action harvest-edit-button";
-            editButton.textContent = isEditable() ? "✎" : "📷";
-            editButton.title = isEditable()
-              ? `Edit ${properties.name || "tree"}`
-              : `Add a photo of ${properties.name || "tree"}`;
-            editButton.setAttribute(
-              "aria-label",
-              isEditable()
-                ? `Edit ${properties.name || "tree"}`
-                : `Add a photo of ${properties.name || "tree"}`,
-            );
-            editButton.addEventListener("click", (event) => {
-              event.stopPropagation();
-              openTreeClickPopup(feature);
-            });
-            actions.append(editButton);
-          }
-          if (canFilter) {
-            const selection = speciesFilterSelection(properties);
-            actions.append(
-              createInventoryFilterButton(
-                `Show only ${selection.label} on the map`,
-                (event) => {
-                  event.stopPropagation();
-                  setMapIdentityFilter(selection);
-                  closeTreeTooltip();
-                },
-              ),
-            );
-          }
+          });
           tooltip.append(actions);
         }
 
-        if (interactiveHover) {
+        if (interaction === "hover") {
           tooltip.addEventListener("mouseenter", cancelTreeTooltipClose);
-          tooltip.addEventListener("mouseleave", closeTreeTooltip);
+          tooltip.addEventListener("mouseleave", scheduleTreeTooltipClose);
         }
 
         return tooltip;
@@ -3097,42 +3189,73 @@
         treeTooltip?.remove();
         treeTooltip = undefined;
         treeTooltipTreeId = undefined;
+        treeTooltipInteraction = undefined;
       }
 
       function openTreeHoverPopup(feature) {
-        if (treeTooltip && treeTooltipTreeId === feature.id) return;
+        if (treeTooltipInteraction === "selected") return;
+        if (
+          treeTooltip &&
+          treeTooltipTreeId === feature.id &&
+          treeTooltipInteraction === "hover"
+        ) return;
 
         closeTreeTooltip();
-        treeTooltip = new maplibregl.Popup({
+        const popup = new maplibregl.Popup({
           closeButton: false,
           closeOnClick: false,
           offset: 10,
         })
           .setLngLat(feature.geometry.coordinates)
-          .setDOMContent(createTreeTooltip(feature.properties, true, feature))
+          .setDOMContent(createTreeTooltip(feature, "hover"))
           .addTo(map);
+        treeTooltip = popup;
         treeTooltipTreeId = feature.id;
+        treeTooltipInteraction = "hover";
+        popup.on("close", () => {
+          if (treeTooltip !== popup) return;
+          treeTooltip = undefined;
+          treeTooltipTreeId = undefined;
+          treeTooltipInteraction = undefined;
+        });
       }
 
-      function openTreeClickPopup(feature) {
+      function openTreeSelectedPopup(feature) {
         closeTreeTooltip();
         closeTreeEditor();
 
-        const editable = isEditable();
-        const canOpenEditor = editable || canAddPhotosToOrchard(currentAccess);
         const popup = new maplibregl.Popup({
-          closeButton: !canOpenEditor,
+          closeButton: false,
+          closeOnClick: true,
+          offset: 12,
+        })
+          .setLngLat(feature.geometry.coordinates)
+          .setDOMContent(createTreeTooltip(feature, "selected"))
+          .addTo(map);
+        treeTooltip = popup;
+        treeTooltipTreeId = feature.id;
+        treeTooltipInteraction = "selected";
+        popup.on("close", () => {
+          if (treeTooltip !== popup) return;
+          treeTooltip = undefined;
+          treeTooltipTreeId = undefined;
+          treeTooltipInteraction = undefined;
+        });
+      }
+
+      function openTreeEditorPopup(feature) {
+        if (!isEditable()) return;
+        closeTreeTooltip();
+        closeTreeEditor();
+
+        const popup = new maplibregl.Popup({
+          closeButton: false,
           closeOnClick: false,
           offset: 12,
         })
           .setLngLat(feature.geometry.coordinates)
-          .setDOMContent(
-            canOpenEditor
-              ? createTreeEditor(feature)
-              : createTreeTooltip(feature.properties),
-          )
+          .setDOMContent(createTreeEditor(feature))
           .addTo(map);
-        if (!canOpenEditor) return;
         treeEditor = popup;
         popup.on("close", () => {
           if (treeEditor === popup) treeEditor = undefined;
@@ -3140,6 +3263,7 @@
       }
 
       function scheduleTreeTooltipClose() {
+        if (treeTooltipInteraction !== "hover") return;
         cancelTreeTooltipClose();
         treeTooltipHideTimer = setTimeout(closeTreeTooltip, 180);
       }
@@ -3501,6 +3625,7 @@
         const form = document.createElement("form");
         form.className = "tree-editor";
         const editable = isEditable();
+        const presentation = treeEditorPresentation();
         const originalIsAlive = feature.properties.is_alive !== false;
         const originalIsInDanger = feature.properties.is_in_danger === true;
 
@@ -3545,17 +3670,6 @@
 
         const actions = document.createElement("div");
         actions.className = "tree-editor-actions";
-        const photoActions = document.createElement("div");
-        photoActions.className = "tree-editor-photo-actions";
-        const photoInput = document.createElement("input");
-        photoInput.type = "file";
-        photoInput.accept = "image/*";
-        photoInput.className = "visually-hidden tree-editor-photo-input";
-        const photoButton = document.createElement("button");
-        photoButton.type = "button";
-        photoButton.textContent = "📷 Add photo";
-        photoButton.addEventListener("click", () => photoInput.click());
-        photoActions.append(photoButton);
         const cancelButton = document.createElement("button");
         cancelButton.type = "button";
         cancelButton.textContent = "Cancel";
@@ -3563,56 +3677,21 @@
         const saveButton = document.createElement("button");
         saveButton.type = "submit";
         saveButton.textContent = "OK";
-        actions.append(cancelButton, saveButton);
+        if (presentation.actions.includes("cancel")) actions.append(cancelButton);
+        if (presentation.actions.includes("save")) actions.append(saveButton);
 
-        dangerField.hidden = !editable;
-        deadField.hidden = !editable;
-        saveButton.hidden = !editable;
+        dangerField.hidden =
+          !editable || !presentation.fields.includes("danger");
+        deadField.hidden = !editable || !presentation.fields.includes("dead");
 
         form.append(title, dangerField, deadField, note);
-        form.append(photoInput, photoActions, error, actions);
-
-        async function addSelectedPhoto(photoInput, busyButton) {
-          const file = photoInput.files?.[0];
-          if (!file) return;
-          error.hidden = true;
-          dangerCheckbox.disabled = true;
-          deadCheckbox.disabled = true;
-          photoButton.disabled = true;
-          cancelButton.disabled = true;
-          saveButton.disabled = true;
-          busyButton.textContent = "Preparing…";
-          try {
-            const photo = await prepareTreePhoto(file);
-            busyButton.textContent = "Uploading…";
-            await uploadTreePhoto(feature.id, photo);
-            markTreeHasPhoto(feature);
-            closeTreeEditor();
-            openTreeHoverPopup(feature);
-          } catch (requestError) {
-            error.textContent = requestError.message;
-            error.hidden = false;
-            deadCheckbox.disabled = false;
-            syncConditionControls();
-            photoButton.disabled = false;
-            cancelButton.disabled = false;
-            saveButton.disabled = false;
-          } finally {
-            photoInput.value = "";
-            photoButton.textContent = "📷 Add photo";
-          }
-        }
-
-        photoInput.addEventListener("change", () =>
-          addSelectedPhoto(photoInput, photoButton),
-        );
+        form.append(error, actions);
 
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           error.hidden = true;
           dangerCheckbox.disabled = true;
           deadCheckbox.disabled = true;
-          photoButton.disabled = true;
           cancelButton.disabled = true;
           saveButton.disabled = true;
           saveButton.textContent = "Saving…";
@@ -3639,7 +3718,6 @@
             error.hidden = false;
             deadCheckbox.disabled = false;
             syncConditionControls();
-            photoButton.disabled = false;
             cancelButton.disabled = false;
             saveButton.disabled = false;
             saveButton.textContent = "OK";
@@ -4005,8 +4083,7 @@
         const rowName = rowOrderRow.value;
         if (!rowName) return;
         closeTreeEditor();
-        treeTooltip?.remove();
-        treeTooltip = undefined;
+        closeTreeTooltip();
         manualOrder = {
           rowName,
           allowedTreeIds: treeIdsInRow(orchardFeatures, rowName),
@@ -4270,8 +4347,7 @@
           return;
         }
         closeTreeEditor();
-        treeTooltip?.remove();
-        treeTooltip = undefined;
+        closeTreeTooltip();
         wateringTreeName.textContent = progress.next_tree.name;
         wateringTreeProgress.textContent = `${targetLabel} · tree ${progress.next_tree.row_rank} of ${progress.total_tree_count} · ${progress.watered_tree_count} done`;
         map
@@ -4790,8 +4866,7 @@
           harvestSpecies.value = String(progress.plant_identity_id);
         }
         closeTreeEditor();
-        treeTooltip?.remove();
-        treeTooltip = undefined;
+        closeTreeTooltip();
         harvestTreeName.textContent = progress.next_tree.name;
         const resolvedCount =
           progress.resolved_tree_count ?? progress.handled_tree_count ?? 0;
@@ -5551,13 +5626,12 @@
 
       map.on("mousemove", "trees", (event) => {
         if (treeMovePresentation(treeMoveState).interactionLocked) return;
+        if (!treeHoverLayout.matches) return;
         cancelTreeTooltipClose();
         map.getCanvas().style.cursor =
           manualOrder || placingWaterSource ? "crosshair" : "pointer";
         if (manualOrder || placingWaterSource) {
-          treeTooltip?.remove();
-          treeTooltip = undefined;
-          treeTooltipTreeId = undefined;
+          closeTreeTooltip();
           return;
         }
         if (treeEditor) return;
@@ -5578,12 +5652,7 @@
         if (placingWaterSource) return;
         const feature = event.features[0];
         if (selectManualOrderTree(feature)) return;
-        if (compactMobileLayout.matches) {
-          closeTreeEditor();
-          openTreeHoverPopup(feature);
-          return;
-        }
-        openTreeClickPopup(feature);
+        openTreeSelectedPopup(feature);
       });
 
       map.on("click", (event) => {

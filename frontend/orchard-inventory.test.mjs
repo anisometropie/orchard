@@ -9,10 +9,73 @@ import {
   harvestWindowSpan,
   summarizeSpecies,
   taxonomyOptions,
+  treeEditorPresentation,
+  treePopupPresentation,
   treeTooltipFields,
 } from "./orchard-inventory.mjs";
 
-test("include every harvest window in the tree hover fields", () => {
+test("the tree editor leaves photo capture to the separate camera action", () => {
+  assert.deepEqual(treeEditorPresentation(), {
+    fields: ["danger", "dead"],
+    actions: ["cancel", "save"],
+  });
+});
+
+test("clicking a tree presents one compact card with all four owner actions", () => {
+  const tree = {
+    name: "Test tree",
+    latin_name: "Testus arbor",
+    planted_on: "2024-02-03",
+    plant_identity_id: 17,
+    has_photo: true,
+  };
+
+  const selectedCard = treePopupPresentation(tree, {
+    interaction: "selected",
+    canMove: true,
+    canEdit: true,
+    canAddPhotos: true,
+  });
+
+  const expectedCard = {
+    fields: [
+      ["Name", "Test tree"],
+      ["Latin name", "Testus arbor"],
+      ["Date", "2024-02-03"],
+      ["Harvest", "Not set"],
+    ],
+    showPhoto: true,
+    actions: ["move", "edit", "filter", "photo"],
+  };
+  assert.deepEqual(selectedCard, expectedCard);
+});
+
+test("hovering a tree on desktop presents only its name and existing photo", () => {
+  assert.deepEqual(
+    treePopupPresentation(
+      {
+        name: "Test tree",
+        latin_name: "Testus arbor",
+        planted_on: "2024-02-03",
+        plant_identity_id: 17,
+        has_photo: true,
+      },
+      {
+        interaction: "hover",
+        canMove: true,
+        canEdit: true,
+        canAddPhotos: true,
+      },
+    ),
+    {
+      fields: [["Name", "Test tree"]],
+      showPhoto: true,
+      actions: [],
+    },
+  );
+});
+
+test("include every harvest window in the selected tree fields", () => {
   assert.deepEqual(
     treeTooltipFields({
       name: "Apple",
