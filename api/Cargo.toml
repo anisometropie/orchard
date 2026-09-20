@@ -85,6 +85,10 @@ name = "revoke_orchard_share_unit"
 path = "src/hexagon/use_cases/revoke_orchard_share/revoke_orchard_share_unit_test.rs"
 
 [[test]]
+name = "list_orchard_run_history_unit"
+path = "src/hexagon/use_cases/list_orchard_run_history/list_orchard_run_history_unit_test.rs"
+
+[[test]]
 name = "order_orchard_row_unit"
 path = "src/hexagon/use_cases/order_orchard_row/order_orchard_row_unit_test.rs"
 

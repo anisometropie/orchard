@@ -9,8 +9,9 @@ use sha2::{Digest, Sha256};
 
 use crate::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
-    CreatedOrchardShareToken, GeoPoint, HarvestDataOrigin, HarvestDate, HarvestPeriod, HarvestRun,
-    HarvestRunId, HarvestRunTarget, HarvestRunTree, HarvestScheduleOwner, HarvestTreeActionUndo,
+    CompletedHarvestRun, CompletedWateringRun, CompletedWateringRunTree, CreatedOrchardShareToken,
+    GeoPoint, HarvestDataOrigin, HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId,
+    HarvestRunTarget, HarvestRunTree, HarvestScheduleOwner, HarvestTreeActionUndo,
     HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension, HarvestedPart,
     IdentificationStatus, IssuedOrchardShareToken, LegacyPlantIdentification, LegacyTreeSource,
     MapConfiguration, Orchard, OrchardId, OrchardShareAccess, OrchardSharePermissions,
@@ -867,6 +868,64 @@ impl OrchardStorage for PostgresOrchardStorage {
             .transpose()
     }
 
+    fn completed_watering_runs(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<CompletedWateringRun>, OrchardStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| OrchardStorageError::RunHistoryCouldNotBeRead)?;
+        let rows = self
+            .client
+            .query(
+                "SELECT id, orchard_id, target_kind, row_name, completed_at IS NOT NULL,
+                        ST_X(water_source), ST_Y(water_source), carry_capacity,
+                        floor(extract(epoch FROM started_at))::BIGINT,
+                        floor(extract(epoch FROM completed_at))::BIGINT
+                 FROM watering_runs
+                 WHERE orchard_id = $1 AND completed_at IS NOT NULL
+                 ORDER BY completed_at DESC, id DESC",
+                &[&orchard_id],
+            )
+            .map_err(|_| OrchardStorageError::RunHistoryCouldNotBeRead)?;
+        let mut history = Vec::with_capacity(rows.len());
+        for row in rows {
+            let run = watering_run_from_row(&mut self.client, &row)
+                .map_err(|_| OrchardStorageError::RunHistoryCouldNotBeRead)?;
+            let stored_run_id = i64::try_from(run.id.0)
+                .map_err(|_| OrchardStorageError::RunHistoryCouldNotBeRead)?;
+            let trees = self
+                .client
+                .query(
+                    "SELECT tree_id, floor(extract(epoch FROM watered_at))::BIGINT
+                     FROM watering_run_trees
+                     WHERE watering_run_id = $1
+                     ORDER BY row_rank",
+                    &[&stored_run_id],
+                )
+                .map_err(|_| OrchardStorageError::RunHistoryCouldNotBeRead)?
+                .into_iter()
+                .map(|tree| {
+                    Ok(CompletedWateringRunTree {
+                        tree_id: TreeId(
+                            u64::try_from(tree.get::<_, i64>(0))
+                                .map_err(|_| OrchardStorageError::RunHistoryCouldNotBeRead)?,
+                        ),
+                        watered_at_unix_seconds: tree.get(1),
+                    })
+                })
+                .collect::<Result<Vec<_>, OrchardStorageError>>()?;
+            history.push(CompletedWateringRun {
+                id: run.id,
+                target: run.target,
+                carry_capacity: run.carry_capacity,
+                started_at_unix_seconds: row.get(8),
+                completed_at_unix_seconds: row.get(9),
+                trees,
+            });
+        }
+        Ok(history)
+    }
+
     fn create_watering_run(
         &mut self,
         orchard_id: OrchardId,
@@ -1069,6 +1128,40 @@ impl OrchardStorage for PostgresOrchardStorage {
             .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeRead)?;
         run.map(|row| harvest_run_from_row(&mut self.client, &row))
             .transpose()
+    }
+
+    fn completed_harvest_runs(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<CompletedHarvestRun>, OrchardStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| OrchardStorageError::RunHistoryCouldNotBeRead)?;
+        let rows = self
+            .client
+            .query(
+                "SELECT id, orchard_id, target_kind, plant_identity_id,
+                        harvested_parts, started_on::text, completed_at IS NOT NULL,
+                        floor(extract(epoch FROM completed_at))::BIGINT
+                 FROM harvest_runs
+                 WHERE orchard_id = $1 AND completed_at IS NOT NULL
+                 ORDER BY completed_at DESC, id DESC",
+                &[&orchard_id],
+            )
+            .map_err(|_| OrchardStorageError::RunHistoryCouldNotBeRead)?;
+        rows.into_iter()
+            .map(|row| {
+                let run = harvest_run_from_row(&mut self.client, &row)
+                    .map_err(|_| OrchardStorageError::RunHistoryCouldNotBeRead)?;
+                Ok(CompletedHarvestRun {
+                    id: run.id,
+                    target: run.target,
+                    harvested_parts: run.harvested_parts,
+                    started_on: run.started_on,
+                    completed_at_unix_seconds: row.get(7),
+                    ordered_trees: run.ordered_trees,
+                })
+            })
+            .collect()
     }
 
     fn create_harvest_run(

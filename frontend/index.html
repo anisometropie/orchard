@@ -366,6 +366,64 @@
       .workflow-error {
         color: #b42318;
       }
+      #history-panel {
+        width: min(460px, calc(100vw - 40px));
+      }
+      .history-tabs {
+        display: grid;
+        gap: 6px;
+        grid-template-columns: 1fr 1fr;
+        margin-bottom: 10px;
+      }
+      #history-panel .history-tab {
+        background: white;
+        border-color: #777;
+        color: #333;
+        margin: 0;
+      }
+      #history-panel .history-tab[aria-selected="true"] {
+        background: #245c2a;
+        border-color: #245c2a;
+        color: white;
+      }
+      .history-view[hidden] {
+        display: none;
+      }
+      .history-list {
+        display: grid;
+        gap: 7px;
+      }
+      .history-run {
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 8px;
+      }
+      .history-run summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .history-run-meta,
+      .history-empty {
+        color: #555;
+        font-size: 12px;
+      }
+      .history-run-meta {
+        margin: 7px 0;
+      }
+      .history-tree-list {
+        display: grid;
+        gap: 6px;
+        margin: 0;
+        padding-left: 24px;
+      }
+      .history-tree-list li {
+        line-height: 1.35;
+      }
+      .history-tree-detail {
+        color: #555;
+        display: block;
+        font-size: 12px;
+      }
       .manual-order-actions {
         display: flex;
         flex-wrap: wrap;
@@ -1426,6 +1484,16 @@
       >
         Tree inventory
       </button>
+      <button
+        id="history-toggle"
+        class="inventory-button"
+        type="button"
+        aria-controls="history-panel"
+        aria-expanded="false"
+        hidden
+      >
+        History
+      </button>
       <div class="map-mode-switch" role="group" aria-label="Map mode">
         <button
           class="map-mode-button"
@@ -1548,6 +1616,24 @@
         <button id="manual-order-cancel" class="secondary" type="button">Cancel</button>
       </div>
       <p id="row-order-error" class="workflow-error" role="alert" hidden></p>
+    </section>
+    <section id="history-panel" class="workflow-panel" aria-labelledby="history-title" hidden>
+      <header>
+        <h2 id="history-title">Run history</h2>
+        <button id="history-close" class="workflow-panel-close" type="button" aria-label="Close run history">×</button>
+      </header>
+      <p id="history-status" class="workflow-status">Loading run history…</p>
+      <p id="history-error" class="workflow-error" role="alert" hidden></p>
+      <div class="history-tabs" role="tablist" aria-label="Run type">
+        <button id="watering-history-tab" class="history-tab" type="button" role="tab" aria-controls="watering-history-view" aria-selected="true">Watering</button>
+        <button id="harvest-history-tab" class="history-tab" type="button" role="tab" aria-controls="harvest-history-view" aria-selected="false">Harvest</button>
+      </div>
+      <section id="watering-history-view" class="history-view" role="tabpanel" aria-labelledby="watering-history-tab">
+        <div id="watering-history-list" class="history-list"></div>
+      </section>
+      <section id="harvest-history-view" class="history-view" role="tabpanel" aria-labelledby="harvest-history-tab" hidden>
+        <div id="harvest-history-list" class="history-list"></div>
+      </section>
     </section>
     <section id="watering-tree-banner" aria-live="polite" hidden>
       <div>
@@ -1857,6 +1943,12 @@
         sharedOrchardUrl,
       } from "./orchard-access.mjs?v=6";
       import {
+        harvestOutcomeLabel,
+        harvestPartsLabel,
+        harvestRunStatus,
+        visibleHarvestTrees,
+      } from "./run-history.mjs?v=1";
+      import {
         adaptiveWateringWideZoom,
         appendManualTree,
         dangerWateringNumberGeoJson,
@@ -2153,6 +2245,27 @@
       const rowOrderManual = document.getElementById("row-order-manual");
       const rowOrderStatus = document.getElementById("row-order-status");
       const rowOrderError = document.getElementById("row-order-error");
+      const historyToggle = document.getElementById("history-toggle");
+      const historyPanel = document.getElementById("history-panel");
+      const historyClose = document.getElementById("history-close");
+      const historyStatus = document.getElementById("history-status");
+      const historyError = document.getElementById("history-error");
+      const wateringHistoryTab = document.getElementById(
+        "watering-history-tab",
+      );
+      const harvestHistoryTab = document.getElementById("harvest-history-tab");
+      const wateringHistoryView = document.getElementById(
+        "watering-history-view",
+      );
+      const harvestHistoryView = document.getElementById(
+        "harvest-history-view",
+      );
+      const wateringHistoryList = document.getElementById(
+        "watering-history-list",
+      );
+      const harvestHistoryList = document.getElementById(
+        "harvest-history-list",
+      );
       const manualOrderActions = document.getElementById("manual-order-actions");
       const manualOrderUndo = document.getElementById("manual-order-undo");
       const manualOrderSave = document.getElementById("manual-order-save");
@@ -3199,6 +3312,7 @@
         wateringPanel.hidden = openPanel !== wateringPanel;
         harvestTourPanel.hidden = openPanel !== harvestTourPanel;
         rowOrderPanel.hidden = openPanel !== rowOrderPanel;
+        historyPanel.hidden = openPanel !== historyPanel;
         mapFilterPanel.hidden = openPanel != null || !hasOpenOrchard(currentAccess);
         wateringToggle.setAttribute(
           "aria-expanded",
@@ -3211,6 +3325,10 @@
         rowOrderToggle.setAttribute(
           "aria-expanded",
           String(openPanel === rowOrderPanel),
+        );
+        historyToggle.setAttribute(
+          "aria-expanded",
+          String(openPanel === historyPanel),
         );
         if (openPanel) {
           closeMobileMenus();
@@ -5332,6 +5450,12 @@
         newlyCreatedShareLinks.clear();
         issuedShareTokens.replaceChildren();
         shareManagementError.hidden = true;
+        wateringHistoryList.replaceChildren();
+        harvestHistoryList.replaceChildren();
+        historyStatus.textContent = "Loading run history…";
+        historyStatus.hidden = false;
+        historyError.hidden = true;
+        selectHistoryView("watering");
         placingWaterSource = false;
         reopenWateringPanelAfterSourcePlacement = false;
         wateringCameraMode = "wide";
@@ -5471,6 +5595,8 @@
         mapToolbar.hidden = !orchardIsOpen;
         mapFilterPanel.hidden = !orchardIsOpen;
         rowOrderToggle.hidden = !isEditable();
+        historyToggle.hidden = !isEditable();
+        if (!isEditable() && !historyPanel.hidden) setWorkflowPanel(null);
         if (!canWaterOrchard(currentAccess)) {
           cancelManualRowOrder();
           setWorkflowPanel(null);
@@ -5771,6 +5897,138 @@
         renderIssuedShareTokens(shares);
       }
 
+      function historyDateTime(unixSeconds) {
+        return new Date(unixSeconds * 1000).toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        });
+      }
+
+      function selectHistoryView(view) {
+        const wateringSelected = view === "watering";
+        wateringHistoryTab.setAttribute(
+          "aria-selected",
+          String(wateringSelected),
+        );
+        harvestHistoryTab.setAttribute(
+          "aria-selected",
+          String(!wateringSelected),
+        );
+        wateringHistoryView.hidden = !wateringSelected;
+        harvestHistoryView.hidden = wateringSelected;
+      }
+
+      function historyEmpty(message) {
+        const empty = document.createElement("div");
+        empty.className = "history-empty";
+        empty.textContent = message;
+        return empty;
+      }
+
+      function historyTreeItem(name, details) {
+        const item = document.createElement("li");
+        const title = document.createElement("strong");
+        title.textContent = name;
+        item.append(title);
+        details.forEach((detail) => {
+          const line = document.createElement("span");
+          line.className = "history-tree-detail";
+          line.textContent = detail;
+          item.append(line);
+        });
+        return item;
+      }
+
+      function renderWateringHistory(runs) {
+        if (runs.length === 0) {
+          wateringHistoryList.replaceChildren(
+            historyEmpty("No completed watering runs."),
+          );
+          return;
+        }
+        const cards = runs.map((run) => {
+          const card = document.createElement("details");
+          card.className = "history-run";
+          const summary = document.createElement("summary");
+          summary.textContent = `#${run.run_id} · ${run.target_label} · ${historyDateTime(run.completed_at_unix_seconds)}`;
+          const meta = document.createElement("div");
+          meta.className = "history-run-meta";
+          const capacity = run.carry_capacity == null
+            ? ""
+            : ` · ${run.carry_capacity} watering cans per trip`;
+          meta.textContent = `${run.watered_tree_count} of ${run.total_tree_count} trees watered · Started ${historyDateTime(run.started_at_unix_seconds)}${capacity}`;
+          const trees = document.createElement("ol");
+          trees.className = "history-tree-list";
+          trees.append(
+            ...run.trees.map((tree) =>
+              historyTreeItem(tree.name, [
+                tree.watered_at_unix_seconds == null
+                  ? "Not watered"
+                  : `Watered ${historyDateTime(tree.watered_at_unix_seconds)}`,
+              ]),
+            ),
+          );
+          card.append(summary, meta, trees);
+          return card;
+        });
+        wateringHistoryList.replaceChildren(...cards);
+      }
+
+      function renderHarvestHistory(runs) {
+        if (runs.length === 0) {
+          harvestHistoryList.replaceChildren(
+            historyEmpty("No completed harvest runs."),
+          );
+          return;
+        }
+        const cards = runs.map((run) => {
+          const card = document.createElement("details");
+          card.className = "history-run";
+          const summary = document.createElement("summary");
+          summary.textContent = `#${run.run_id} · ${run.target_label} · ${harvestRunStatus(run)} · ${historyDateTime(run.completed_at_unix_seconds)}`;
+          const meta = document.createElement("div");
+          meta.className = "history-run-meta";
+          meta.textContent = `${harvestPartsLabel(run.harvested_parts)} · Started ${run.started_on} · ${run.handled_tree_count} of ${run.total_tree_count} trees handled`;
+          const trees = document.createElement("ol");
+          trees.className = "history-tree-list";
+          trees.append(
+            ...visibleHarvestTrees(run).map((tree) =>
+              historyTreeItem(tree.name, [
+                harvestOutcomeLabel(tree.outcome),
+                `${harvestPartsLabel(tree.harvested_parts)} · window ${tree.window_start} to ${tree.window_end}`,
+              ]),
+            ),
+          );
+          card.append(summary, meta, trees);
+          return card;
+        });
+        harvestHistoryList.replaceChildren(...cards);
+      }
+
+      async function loadRunHistory() {
+        if (!isEditable()) return;
+        historyError.hidden = true;
+        historyStatus.textContent = "Loading run history…";
+        historyStatus.hidden = false;
+        wateringHistoryList.replaceChildren();
+        harvestHistoryList.replaceChildren();
+        try {
+          const response = await fetch(
+            orchardResourceUrl(currentAccess, "run-history"),
+            { cache: "no-store" },
+          );
+          if (!response.ok) throw new Error("Could not load run history.");
+          const history = await response.json();
+          renderWateringHistory(history.watering_runs || []);
+          renderHarvestHistory(history.harvest_runs || []);
+          historyStatus.hidden = true;
+        } catch (error) {
+          historyError.textContent = error.message;
+          historyError.hidden = false;
+          historyStatus.hidden = true;
+        }
+      }
+
       function currentMapModePresentation() {
         return mapModePresentation(mapMode, {
           harvestEnabled: harvestFilterEnabled.checked,
@@ -5782,7 +6040,8 @@
         const workflowPanelOpen =
           !wateringPanel.hidden ||
           !harvestTourPanel.hidden ||
-          !rowOrderPanel.hidden;
+          !rowOrderPanel.hidden ||
+          !historyPanel.hidden;
         mapModeButtons.forEach((button) => {
           button.setAttribute(
             "aria-pressed",
@@ -5999,6 +6258,18 @@
       );
       inventoryToggle.addEventListener("click", () => setInventoryOpen(true));
       inventoryClose.addEventListener("click", () => setInventoryOpen(false));
+      historyToggle.addEventListener("click", async () => {
+        const opensHistory = historyPanel.hidden;
+        setWorkflowPanel(opensHistory ? historyPanel : null);
+        if (opensHistory) await loadRunHistory();
+      });
+      historyClose.addEventListener("click", () => setWorkflowPanel(null));
+      wateringHistoryTab.addEventListener("click", () =>
+        selectHistoryView("watering"),
+      );
+      harvestHistoryTab.addEventListener("click", () =>
+        selectHistoryView("harvest"),
+      );
       treesTab.addEventListener("click", () => selectInventoryView("trees"));
       speciesTab.addEventListener("click", () =>
         selectInventoryView("species"),

@@ -29,3 +29,19 @@ pub struct WateringRun {
     pub watered_tree_ids: Vec<TreeId>,
     pub completed: bool,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletedWateringRunTree {
+    pub tree_id: TreeId,
+    pub watered_at_unix_seconds: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompletedWateringRun {
+    pub id: WateringRunId,
+    pub target: WateringRunTarget,
+    pub carry_capacity: Option<u32>,
+    pub started_at_unix_seconds: i64,
+    pub completed_at_unix_seconds: i64,
+    pub trees: Vec<CompletedWateringRunTree>,
+}

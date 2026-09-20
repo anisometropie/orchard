@@ -2,10 +2,12 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use orchard_api::adapters::primary::http::start_http_server;
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
-    AerialOverlay, AerialOverlayId, AerialOverlayImage, BotanicalTaxon, GeoPoint,
+    AerialOverlay, AerialOverlayId, AerialOverlayImage, BotanicalTaxon, GeoPoint, HarvestDate,
+    HarvestPeriod, HarvestRunTarget, HarvestRunTree, HarvestTreeOutcome, HarvestedPart,
     IdentificationStatus, MapConfiguration, NamedTaxon, Orchard, OrchardId, PlantIdentity,
-    PlantIdentityId, Tree,
+    PlantIdentityId, Tree, TreeId, WateringRunTarget,
 };
+use orchard_api::hexagon::ports::OrchardStorage;
 use reqwest::{Client, StatusCode, header};
 
 const USERNAME: &str = "owner";
@@ -460,6 +462,96 @@ async fn an_owner_lists_changes_and_revokes_hashed_share_tokens_with_independent
             .unwrap()
             .status(),
         StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn only_the_owner_lists_completed_watering_and_harvest_run_details() {
+    let mut storage = owned_storage();
+    let watering_run_id = storage
+        .transaction(|orchard| {
+            orchard.create_watering_run(
+                OrchardId(7),
+                &WateringRunTarget::Row("North".into()),
+                None,
+                None,
+                &[TreeId(1)],
+            )
+        })
+        .unwrap();
+    storage
+        .transaction(|orchard| {
+            orchard.mark_watering_tree_watered(watering_run_id, TreeId(1))?;
+            orchard.complete_watering_run(watering_run_id)
+        })
+        .unwrap();
+    let harvest_run_id = storage
+        .transaction(|orchard| {
+            orchard.create_harvest_run(
+                OrchardId(7),
+                HarvestRunTarget::All,
+                &[HarvestedPart::Fruit],
+                HarvestDate::parse_iso("2026-09-18").unwrap(),
+                &[HarvestRunTree {
+                    tree_id: TreeId(1),
+                    harvested_parts: vec![HarvestedPart::Fruit],
+                    period: HarvestPeriod {
+                        start: HarvestDate::parse_iso("2026-09-01").unwrap(),
+                        end: HarvestDate::parse_iso("2026-09-30").unwrap(),
+                    },
+                    outcome: None,
+                }],
+            )
+        })
+        .unwrap();
+    storage
+        .transaction(|orchard| {
+            orchard.record_harvest_tree_outcome(
+                harvest_run_id,
+                TreeId(1),
+                HarvestTreeOutcome::HarvestedEverything {
+                    harvested_on: HarvestDate::parse_iso("2026-09-18").unwrap(),
+                },
+            )?;
+            orchard.complete_harvest_run(harvest_run_id)
+        })
+        .unwrap();
+    let server = start_http_server(storage, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let history_url = format!("{}/orchards/7/run-history", server.url());
+
+    let response = client
+        .get(&history_url)
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let history = response.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(history["watering_runs"][0]["target_label"], "North");
+    assert_eq!(history["watering_runs"][0]["trees"][0]["name"], "Apple");
+    assert_eq!(
+        history["harvest_runs"][0]["target_label"],
+        "All currently available"
+    );
+    assert_eq!(
+        history["harvest_runs"][0]["trees"][0]["outcome"]["kind"],
+        "harvested_everything"
+    );
+
+    let share_token = create_harvest_watering_share_token(&client, server.url(), &cookie).await;
+    assert_eq!(
+        client
+            .get(history_url)
+            .header("x-orchard-share-token", share_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
     );
 }
 

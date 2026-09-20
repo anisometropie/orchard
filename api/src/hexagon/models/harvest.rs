@@ -138,6 +138,16 @@ pub struct HarvestRun {
     pub completed: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletedHarvestRun {
+    pub id: HarvestRunId,
+    pub target: HarvestRunTarget,
+    pub harvested_parts: Vec<HarvestedPart>,
+    pub started_on: HarvestDate,
+    pub completed_at_unix_seconds: i64,
+    pub ordered_trees: Vec<HarvestRunTree>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HarvestTreeOutcomeRecord {
     pub tree_id: TreeId,

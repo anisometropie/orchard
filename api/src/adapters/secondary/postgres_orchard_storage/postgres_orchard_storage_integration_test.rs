@@ -259,6 +259,27 @@ fn persist_row_ranks_and_resumable_watering_progress() {
         .transaction(|orchard| orchard.complete_watering_run(run_id))
         .unwrap();
     assert_eq!(storage.active_watering_run(OrchardId(1)).unwrap(), None);
+    let watering_history = storage.completed_watering_runs(OrchardId(1)).unwrap();
+    assert_eq!(watering_history.len(), 1);
+    assert_eq!(watering_history[0].id, run_id);
+    assert_eq!(
+        watering_history[0]
+            .trees
+            .iter()
+            .map(|tree| tree.tree_id)
+            .collect::<Vec<_>>(),
+        vec![TreeId(2), TreeId(1)]
+    );
+    assert!(
+        watering_history[0].trees[0]
+            .watered_at_unix_seconds
+            .is_some()
+    );
+    assert_eq!(watering_history[0].trees[1].watered_at_unix_seconds, None);
+    assert!(
+        watering_history[0].completed_at_unix_seconds
+            >= watering_history[0].started_at_unix_seconds
+    );
 
     let danger_run_id = storage
         .transaction(|orchard| {
@@ -509,12 +530,18 @@ fn persist_resumable_harvest_progress_history_and_exact_window_extension() {
         storage.harvest_run(run_id).unwrap().unwrap().ordered_trees[0].outcome,
         Some(revisited)
     );
+    ordered_trees[0].outcome = Some(revisited);
 
     storage
         .transaction(|orchard| orchard.complete_harvest_run(run_id))
         .unwrap();
     assert_eq!(storage.active_harvest_run(OrchardId(1)).unwrap(), None);
     assert!(storage.harvest_run(run_id).unwrap().unwrap().completed);
+    let harvest_history = storage.completed_harvest_runs(OrchardId(1)).unwrap();
+    assert_eq!(harvest_history.len(), 1);
+    assert_eq!(harvest_history[0].id, run_id);
+    assert_eq!(harvest_history[0].target, target);
+    assert_eq!(harvest_history[0].ordered_trees, ordered_trees);
 
     let disposable_run_id = storage
         .transaction(|orchard| {

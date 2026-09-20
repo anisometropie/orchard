@@ -18,10 +18,10 @@ use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::hexagon::models::{
     AerialOverlayId, AnnualDate, BotanicalTaxon, GeoPoint, HarvestDate, HarvestRunId,
-    HarvestRunTarget, HarvestScheduleOwner, HarvestedPart, InfraspecificRank, MapConfiguration,
-    NamedTaxon, OrchardId, OrchardSharePermission, OrchardSharePermissions, OrchardShareTokenId,
-    OrchardTree, PlantCultivarId, PlantIdentity, PlantIdentityId, Tree, TreeId, TreePhotoVariant,
-    WateringRunId, WateringRunTarget,
+    HarvestRunTarget, HarvestScheduleOwner, HarvestTreeOutcome, HarvestedPart, InfraspecificRank,
+    MapConfiguration, NamedTaxon, OrchardId, OrchardSharePermission, OrchardSharePermissions,
+    OrchardShareTokenId, OrchardTree, PlantCultivarId, PlantIdentity, PlantIdentityId, Tree,
+    TreeId, TreePhotoVariant, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, MapConfigurationStorage, OrchardStorage, TreePhotoStorage,
@@ -66,6 +66,10 @@ use crate::hexagon::use_cases::defer_harvest_tree::{
 };
 use crate::hexagon::use_cases::list_harvest_candidates::{
     HarvestCandidatesError, HarvestCandidatesRequested, list_harvest_candidates,
+};
+use crate::hexagon::use_cases::list_orchard_run_history::{
+    HarvestRunHistory, OrchardRunHistory, OrchardRunHistoryError, OrchardRunHistoryRequested,
+    WateringRunHistory, list_orchard_run_history,
 };
 use crate::hexagon::use_cases::list_orchard_shares::{
     OrchardSharesListError, OrchardSharesRequested, list_orchard_shares,
@@ -207,6 +211,10 @@ where
             "/orchards/{orchard_id}/share-tokens/{share_id}",
             patch(change_share_token_permissions_handler::<U>)
                 .delete(revoke_share_token_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/run-history",
+            get(run_history_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/row-order",
@@ -622,6 +630,117 @@ where
         OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
         OrchardReadAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
     })
+}
+
+async fn run_history_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        list_orchard_run_history(
+            OrchardRunHistoryRequested {
+                orchard_id: OrchardId(orchard_id),
+                session_token,
+            },
+            &mut *storage.lock().unwrap(),
+        )
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(|history| Json(run_history_json(history)))
+    .map_err(|error| match error {
+        OrchardRunHistoryError::SessionNotFound => StatusCode::UNAUTHORIZED,
+        OrchardRunHistoryError::OrchardNotOwned => StatusCode::NOT_FOUND,
+        OrchardRunHistoryError::HistoryCouldNotBeRead => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+fn run_history_json(history: OrchardRunHistory) -> Value {
+    json!({
+        "watering_runs": history
+            .watering_runs
+            .into_iter()
+            .map(watering_run_history_json)
+            .collect::<Vec<_>>(),
+        "harvest_runs": history
+            .harvest_runs
+            .into_iter()
+            .map(harvest_run_history_json)
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn watering_run_history_json(run: WateringRunHistory) -> Value {
+    let watered_tree_count = run
+        .trees
+        .iter()
+        .filter(|tree| tree.watered_at_unix_seconds.is_some())
+        .count();
+    json!({
+        "run_id": run.run_id.0,
+        "target_label": run.target_label,
+        "carry_capacity": run.carry_capacity,
+        "started_at_unix_seconds": run.started_at_unix_seconds,
+        "completed_at_unix_seconds": run.completed_at_unix_seconds,
+        "watered_tree_count": watered_tree_count,
+        "total_tree_count": run.trees.len(),
+        "trees": run.trees.into_iter().map(|tree| json!({
+            "tree_id": tree.tree_id.0,
+            "name": tree.name,
+            "watered_at_unix_seconds": tree.watered_at_unix_seconds,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn harvest_run_history_json(run: HarvestRunHistory) -> Value {
+    let handled_tree_count = run.trees.len();
+    json!({
+        "run_id": run.run_id.0,
+        "target_label": run.target_label,
+        "harvested_parts": run.harvested_parts.into_iter()
+            .map(HarvestedPart::as_str)
+            .collect::<Vec<_>>(),
+        "started_on": run.started_on.to_string(),
+        "completed_at_unix_seconds": run.completed_at_unix_seconds,
+        "handled_tree_count": handled_tree_count,
+        "total_tree_count": run.total_tree_count,
+        "trees": run.trees.into_iter().map(|tree| json!({
+            "tree_id": tree.tree_id.0,
+            "name": tree.name,
+            "harvested_parts": tree.harvested_parts.into_iter()
+                .map(HarvestedPart::as_str)
+                .collect::<Vec<_>>(),
+            "window_start": tree.period.start.to_string(),
+            "window_end": tree.period.end.to_string(),
+            "outcome": harvest_history_outcome_json(tree.outcome),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn harvest_history_outcome_json(outcome: HarvestTreeOutcome) -> Value {
+    match outcome {
+        HarvestTreeOutcome::HarvestedEverything { harvested_on } => json!({
+            "kind": "harvested_everything",
+            "recorded_on": harvested_on.to_string(),
+        }),
+        HarvestTreeOutcome::DoneForWindow { recorded_on } => json!({
+            "kind": "done_for_window",
+            "recorded_on": recorded_on.to_string(),
+        }),
+        HarvestTreeOutcome::Deferred {
+            deferred_on,
+            retry_on,
+        } => json!({
+            "kind": "deferred",
+            "recorded_on": deferred_on.to_string(),
+            "retry_on": retry_on.to_string(),
+        }),
+    }
 }
 
 #[derive(Deserialize)]

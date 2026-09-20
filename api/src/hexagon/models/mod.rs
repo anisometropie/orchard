@@ -7,13 +7,14 @@ mod tree;
 mod tree_photo;
 mod watering;
 
+pub use harvest::{
+    CompletedHarvestRun, HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget,
+    HarvestRunTree, HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
+    HarvestWindowExtension,
+};
 pub(crate) use harvest::{
     EligibleHarvestTree, concrete_harvest_period, current_harvest_part_periods,
     current_harvest_parts_and_period, eligible_harvest_trees, normalized_harvested_parts,
-};
-pub use harvest::{
-    HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree,
-    HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension,
 };
 pub use legacy_tree_source::{LegacyPlantIdentification, LegacyTreeSource};
 pub use map_configuration::{
@@ -32,7 +33,9 @@ pub use plant_identity::{
 };
 pub use tree::{ReproductiveRole, Tree, TreeId};
 pub use tree_photo::{TreePhoto, TreePhotoVariant};
-pub use watering::{WateringRun, WateringRunId, WateringRunTarget};
+pub use watering::{
+    CompletedWateringRun, CompletedWateringRunTree, WateringRun, WateringRunId, WateringRunTarget,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrchardTree {

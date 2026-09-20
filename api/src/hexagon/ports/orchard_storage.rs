@@ -1,8 +1,9 @@
 use crate::hexagon::models::{
-    AnnualHarvestWindow, GeoPoint, HarvestDate, HarvestRun, HarvestRunId, HarvestRunTarget,
-    HarvestRunTree, HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome,
-    HarvestTreeOutcomeRecord, HarvestWindowExtension, OrchardId, OrchardTree, PlantIdentification,
-    PlantIdentityReference, Tree, TreeId, WateringRun, WateringRunId, WateringRunTarget,
+    AnnualHarvestWindow, CompletedHarvestRun, CompletedWateringRun, GeoPoint, HarvestDate,
+    HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree, HarvestScheduleOwner,
+    HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension,
+    OrchardId, OrchardTree, PlantIdentification, PlantIdentityReference, Tree, TreeId, WateringRun,
+    WateringRunId, WateringRunTarget,
 };
 
 #[derive(Debug, PartialEq)]
@@ -25,6 +26,7 @@ pub enum OrchardStorageError {
     HarvestRunCouldNotBeChanged,
     HarvestRunCouldNotBeDeleted,
     HarvestHistoryCouldNotBeRead,
+    RunHistoryCouldNotBeRead,
     HarvestWindowCouldNotBeExtended,
     AtomicOperationCouldNotCommit,
     TreesCouldNotBeRead,
@@ -93,6 +95,10 @@ pub trait OrchardStorage {
         &mut self,
         watering_run_id: WateringRunId,
     ) -> Result<Option<WateringRun>, OrchardStorageError>;
+    fn completed_watering_runs(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<CompletedWateringRun>, OrchardStorageError>;
     fn create_watering_run(
         &mut self,
         orchard_id: OrchardId,
@@ -126,6 +132,10 @@ pub trait OrchardStorage {
         &mut self,
         harvest_run_id: HarvestRunId,
     ) -> Result<Option<HarvestRun>, OrchardStorageError>;
+    fn completed_harvest_runs(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<CompletedHarvestRun>, OrchardStorageError>;
     fn create_harvest_run(
         &mut self,
         orchard_id: OrchardId,

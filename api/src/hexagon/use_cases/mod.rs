@@ -12,6 +12,7 @@ pub mod create_tree;
 pub mod defer_harvest_tree;
 pub mod import_legacy_orchard;
 pub mod list_harvest_candidates;
+pub mod list_orchard_run_history;
 pub mod list_orchard_shares;
 pub mod list_orchard_trees;
 pub mod load_active_harvest_run;

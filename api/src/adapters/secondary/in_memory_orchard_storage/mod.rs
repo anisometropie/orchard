@@ -1,14 +1,15 @@
 use std::sync::{Arc, Mutex};
 
 use crate::hexagon::models::{
-    AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, GeoPoint,
-    HarvestDataOrigin, HarvestDate, HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree,
-    HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
-    HarvestWindowExtension, HarvestedPart, IssuedOrchardShareToken, MapConfiguration, Orchard,
-    OrchardId, OrchardShareAccess, OrchardSharePermissions, OrchardShareTokenId, OrchardTree,
-    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
-    PlantIdentityReference, Tree, TreeId, TreePhoto, TreePhotoVariant, User, UserId, WateringRun,
-    WateringRunId, WateringRunTarget,
+    AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, CompletedHarvestRun,
+    CompletedWateringRun, CompletedWateringRunTree, GeoPoint, HarvestDataOrigin, HarvestDate,
+    HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree, HarvestScheduleOwner,
+    HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension,
+    HarvestedPart, IssuedOrchardShareToken, MapConfiguration, Orchard, OrchardId,
+    OrchardShareAccess, OrchardSharePermissions, OrchardShareTokenId, OrchardTree, PlantCultivar,
+    PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
+    Tree, TreeId, TreePhoto, TreePhotoVariant, User, UserId, WateringRun, WateringRunId,
+    WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -1277,6 +1278,52 @@ impl OrchardStorage for InMemoryOrchardStorage {
             .cloned())
     }
 
+    fn completed_watering_runs(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<CompletedWateringRun>, OrchardStorageError> {
+        let orchard = self.orchard.lock().unwrap();
+        let mut runs = orchard
+            .watering_runs
+            .iter()
+            .filter(|run| run.orchard_id == orchard_id && run.completed)
+            .map(|run| {
+                let started_at_unix_seconds = i64::try_from(run.id.0)
+                    .ok()
+                    .and_then(|id| id.checked_mul(100))
+                    .ok_or(OrchardStorageError::RunHistoryCouldNotBeRead)?;
+                let trees = run
+                    .ordered_tree_ids
+                    .iter()
+                    .enumerate()
+                    .map(|(index, tree_id)| CompletedWateringRunTree {
+                        tree_id: *tree_id,
+                        watered_at_unix_seconds: run.watered_tree_ids.contains(tree_id).then(
+                            || {
+                                started_at_unix_seconds
+                                    + i64::try_from(index + 1).unwrap_or(i64::MAX)
+                            },
+                        ),
+                    })
+                    .collect::<Vec<_>>();
+                let completed_at_unix_seconds = i64::try_from(trees.len() + 1)
+                    .ok()
+                    .and_then(|offset| started_at_unix_seconds.checked_add(offset))
+                    .ok_or(OrchardStorageError::RunHistoryCouldNotBeRead)?;
+                Ok(CompletedWateringRun {
+                    id: run.id,
+                    target: run.target.clone(),
+                    carry_capacity: run.carry_capacity,
+                    started_at_unix_seconds,
+                    completed_at_unix_seconds,
+                    trees,
+                })
+            })
+            .collect::<Result<Vec<_>, OrchardStorageError>>()?;
+        runs.sort_by_key(|run| std::cmp::Reverse(run.id.0));
+        Ok(runs)
+    }
+
     fn create_watering_run(
         &mut self,
         orchard_id: OrchardId,
@@ -1404,6 +1451,34 @@ impl OrchardStorage for InMemoryOrchardStorage {
             .iter()
             .find(|run| run.id == harvest_run_id)
             .cloned())
+    }
+
+    fn completed_harvest_runs(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<CompletedHarvestRun>, OrchardStorageError> {
+        let orchard = self.orchard.lock().unwrap();
+        let mut runs = orchard
+            .harvest_runs
+            .iter()
+            .filter(|run| run.orchard_id == orchard_id && run.completed)
+            .map(|run| {
+                let completed_at_unix_seconds = i64::try_from(run.id.0)
+                    .ok()
+                    .and_then(|id| id.checked_add(2_000_000))
+                    .ok_or(OrchardStorageError::RunHistoryCouldNotBeRead)?;
+                Ok(CompletedHarvestRun {
+                    id: run.id,
+                    target: run.target,
+                    harvested_parts: run.harvested_parts.clone(),
+                    started_on: run.started_on,
+                    completed_at_unix_seconds,
+                    ordered_trees: run.ordered_trees.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, OrchardStorageError>>()?;
+        runs.sort_by_key(|run| std::cmp::Reverse(run.id.0));
+        Ok(runs)
     }
 
     fn create_harvest_run(
