@@ -41,6 +41,79 @@
       #map-status[hidden] {
         display: none;
       }
+      #tree-move-lock {
+        background: rgba(0, 0, 0, 0.08);
+        inset: 0;
+        pointer-events: none;
+        position: fixed;
+        z-index: 60;
+      }
+      #tree-move-lock[hidden],
+      #tree-move-panel[hidden] {
+        display: none;
+      }
+      #tree-move-panel {
+        background: rgba(255, 255, 255, 0.98);
+        border: 2px solid #245c2a;
+        border-radius: 10px;
+        box-shadow: 0 3px 16px rgba(0, 0, 0, 0.35);
+        box-sizing: border-box;
+        font: 13px sans-serif;
+        left: 50%;
+        max-width: calc(100vw - 24px);
+        padding: 12px;
+        position: fixed;
+        top: max(12px, env(safe-area-inset-top));
+        transform: translateX(-50%);
+        width: 330px;
+        z-index: 65;
+      }
+      #tree-move-title {
+        display: block;
+        font-size: 16px;
+      }
+      #tree-move-help,
+      #tree-move-error {
+        margin: 6px 0 0;
+      }
+      #tree-move-help {
+        color: #555;
+      }
+      #tree-move-error {
+        color: #b42318;
+      }
+      #tree-move-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 10px;
+      }
+      #tree-move-actions button {
+        border: 1px solid #245c2a;
+        border-radius: 5px;
+        cursor: pointer;
+        font: 600 13px sans-serif;
+        padding: 7px 14px;
+      }
+      #tree-move-cancel {
+        background: white;
+        color: #245c2a;
+      }
+      #tree-move-confirm {
+        background: #245c2a;
+        color: white;
+      }
+      #tree-move-actions button:disabled {
+        cursor: wait;
+        opacity: 0.55;
+      }
+      .maplibregl-marker.tree-move-marker {
+        cursor: grab;
+        z-index: 62;
+      }
+      .maplibregl-marker.tree-move-marker:active {
+        cursor: grabbing;
+      }
       .tree-editor {
         min-width: 190px;
         font: 13px sans-serif;
@@ -1435,6 +1508,23 @@
   <body>
     <div id="map"></div>
     <div id="map-status">Loading orchard trees…</div>
+    <div id="tree-move-lock" hidden></div>
+    <section
+      id="tree-move-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="tree-move-title"
+      tabindex="-1"
+      hidden
+    >
+      <strong id="tree-move-title">Move tree</strong>
+      <p id="tree-move-help">Drag the pin to the tree’s new position, then choose OK or Cancel.</p>
+      <p id="tree-move-error" role="alert" hidden></p>
+      <div id="tree-move-actions">
+        <button id="tree-move-cancel" type="button">Cancel</button>
+        <button id="tree-move-confirm" type="button">OK</button>
+      </div>
+    </section>
     <div id="map-toolbar" hidden>
       <button
         id="mobile-map-menu-toggle"
@@ -1907,6 +1997,13 @@
       } from "./harvest-marker.mjs?v=3";
       import { mapModePresentation, tourPresentation } from "./map-mode.mjs?v=4";
       import {
+        idleTreeMoveState,
+        treeMoveInteractionPolicy,
+        treeMovePresentation,
+        treeMoveRequest,
+        treeMoveTransition,
+      } from "./tree-move.mjs?v=1";
+      import {
         filterTreeFeatures,
         filterTreeFeaturesByIdentity,
         harvestScheduleEndpoint,
@@ -2101,6 +2198,12 @@
       let treeTooltipHideTimer;
       let treeEditor;
       let treePhotoViewer;
+      let treeMoveState = idleTreeMoveState();
+      let treeMoveMarker;
+      let treeMovePreviousFocus;
+      let treeMoveBackgroundInertSnapshot;
+      let treeMoveMapGestureSnapshot;
+      let treeMoveCanvasTabIndex;
       let orchardFeatures = [];
       let activeMapIdentityFilter = null;
       let mapMode = "normal";
@@ -2144,6 +2247,12 @@
       const identityInventoryBody = document.getElementById(
         "identity-inventory-body",
       );
+      const treeMoveLock = document.getElementById("tree-move-lock");
+      const treeMovePanel = document.getElementById("tree-move-panel");
+      const treeMoveTitle = document.getElementById("tree-move-title");
+      const treeMoveError = document.getElementById("tree-move-error");
+      const treeMoveCancel = document.getElementById("tree-move-cancel");
+      const treeMoveConfirm = document.getElementById("tree-move-confirm");
       const harvestFilterEnabled = document.getElementById(
         "harvest-filter-enabled",
       );
@@ -2723,6 +2832,21 @@
         return button;
       }
 
+      function createTreeMoveButton(feature) {
+        const button = document.createElement("button");
+        const treeName = feature.properties.name || "tree";
+        button.type = "button";
+        button.className = "inventory-row-action tree-move-button";
+        button.textContent = "✥";
+        button.title = `Move ${treeName}`;
+        button.setAttribute("aria-label", `Move ${treeName}`);
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          beginTreeMove(feature);
+        });
+        return button;
+      }
+
       function setMapIdentityFilter(selection) {
         activeMapIdentityFilter = selection;
         activeMapFilterLabel.textContent = `${selection.kind === "cultivar" ? "Cultivar" : "Species"}: ${selection.label}`;
@@ -2850,6 +2974,33 @@
         if (event.key === "Escape") closeTreePhotoViewer();
       });
 
+      treeMovePanel.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cancelTreeMove();
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const buttons = [treeMoveCancel, treeMoveConfirm].filter(
+          (button) => !button.disabled,
+        );
+        if (buttons.length === 0) {
+          event.preventDefault();
+          treeMovePanel.focus({ preventScroll: true });
+          return;
+        }
+        const currentIndex = buttons.indexOf(document.activeElement);
+        const nextIndex = event.shiftKey
+          ? currentIndex <= 0
+            ? buttons.length - 1
+            : currentIndex - 1
+          : currentIndex < 0 || currentIndex === buttons.length - 1
+            ? 0
+            : currentIndex + 1;
+        event.preventDefault();
+        buttons[nextIndex].focus({ preventScroll: true });
+      });
+
       function createTreeTooltip(
         properties,
         interactiveHover = false,
@@ -2884,6 +3035,15 @@
           const actions = document.createElement("div");
           actions.className = "tree-tooltip-actions";
           if (canManageTree) {
+            if (
+              isEditable() &&
+              !wateringProgress &&
+              !harvestProgress &&
+              !manualOrder &&
+              !placingWaterSource
+            ) {
+              actions.append(createTreeMoveButton(feature));
+            }
             const editButton = document.createElement("button");
             editButton.type = "button";
             editButton.className = "inventory-row-action harvest-edit-button";
@@ -2987,6 +3147,240 @@
       function closeTreeEditor() {
         treeEditor?.remove();
         treeEditor = undefined;
+      }
+
+      function restoreFocusAfterTreeMove() {
+        const previousFocus = treeMovePreviousFocus;
+        treeMovePreviousFocus = undefined;
+        if (previousFocus?.isConnected) {
+          previousFocus.focus({ preventScroll: true });
+          return;
+        }
+        map.getCanvas().focus({ preventScroll: true });
+      }
+
+      function treeMoveBackgroundElements() {
+        const mapContainer = map.getContainer();
+        return [...document.body.children].filter(
+          (element) =>
+            element !== mapContainer &&
+            element !== treeMoveLock &&
+            element !== treeMovePanel &&
+            element.tagName !== "SCRIPT",
+        );
+      }
+
+      function treeMoveMapGestureHandlers() {
+        return [
+          map.boxZoom,
+          map.doubleClickZoom,
+          map.dragPan,
+          map.dragRotate,
+          map.keyboard,
+          map.scrollZoom,
+          map.touchZoomRotate,
+        ].filter(
+          (handler) =>
+            handler &&
+            typeof handler.disable === "function" &&
+            typeof handler.enable === "function" &&
+            typeof handler.isEnabled === "function",
+        );
+      }
+
+      function applyTreeMoveInteractionPolicy(policy) {
+        treeMoveLock.style.pointerEvents = policy.scrimInterceptsPointer
+          ? "auto"
+          : "none";
+
+        if (
+          policy.backgroundControlsInert &&
+          !treeMoveBackgroundInertSnapshot
+        ) {
+          treeMoveBackgroundInertSnapshot = treeMoveBackgroundElements().map(
+            (element) => [element, element.inert],
+          );
+          treeMoveBackgroundInertSnapshot.forEach(([element]) => {
+            element.inert = true;
+          });
+        } else if (
+          !policy.backgroundControlsInert &&
+          treeMoveBackgroundInertSnapshot
+        ) {
+          treeMoveBackgroundInertSnapshot.forEach(([element, wasInert]) => {
+            element.inert = wasInert;
+          });
+          treeMoveBackgroundInertSnapshot = undefined;
+        }
+
+        if (!policy.mapGesturesEnabled && !treeMoveMapGestureSnapshot) {
+          treeMoveMapGestureSnapshot = treeMoveMapGestureHandlers().map(
+            (handler) => [handler, handler.isEnabled()],
+          );
+          treeMoveMapGestureSnapshot.forEach(([handler]) => handler.disable());
+          const canvas = map.getCanvas();
+          treeMoveCanvasTabIndex = canvas.getAttribute("tabindex");
+          canvas.setAttribute("tabindex", "-1");
+          if (document.activeElement === canvas) canvas.blur();
+        } else if (policy.mapGesturesEnabled && treeMoveMapGestureSnapshot) {
+          treeMoveMapGestureSnapshot.forEach(([handler, wasEnabled]) => {
+            if (wasEnabled) handler.enable();
+          });
+          treeMoveMapGestureSnapshot = undefined;
+          const canvas = map.getCanvas();
+          if (treeMoveCanvasTabIndex == null) {
+            canvas.removeAttribute("tabindex");
+          } else {
+            canvas.setAttribute("tabindex", treeMoveCanvasTabIndex);
+          }
+          treeMoveCanvasTabIndex = undefined;
+        }
+      }
+
+      function renderTreeMove() {
+        const presentation = treeMovePresentation(treeMoveState);
+        applyTreeMoveInteractionPolicy(
+          treeMoveInteractionPolicy(treeMoveState),
+        );
+        treeMoveLock.hidden = !presentation.interactionLocked;
+        treeMovePanel.hidden = !presentation.active;
+        if (!presentation.active) {
+          treeMoveMarker?.remove();
+          treeMoveMarker = undefined;
+          treeMoveError.textContent = "";
+          treeMoveError.hidden = true;
+          return;
+        }
+
+        treeMoveTitle.textContent = `Move ${treeMoveState.treeName}`;
+        treeMoveConfirm.disabled = !presentation.confirmEnabled;
+        treeMoveCancel.disabled = !presentation.cancelEnabled;
+        treeMoveConfirm.textContent = presentation.saving ? "Saving…" : "OK";
+        treeMoveError.textContent = presentation.error || "";
+        treeMoveError.hidden = !presentation.error;
+        if (treeMoveMarker && presentation.pin) {
+          treeMoveMarker.setLngLat(presentation.pin.position);
+          treeMoveMarker.setDraggable(presentation.pin.draggable);
+        }
+        if (presentation.saving) treeMovePanel.focus({ preventScroll: true });
+      }
+
+      function beginTreeMove(feature) {
+        if (!isEditable() || treeMovePresentation(treeMoveState).active) return;
+        const position = feature.geometry?.coordinates;
+        if (
+          feature.id == null ||
+          !Array.isArray(position) ||
+          !Number.isFinite(Number(position[0])) ||
+          !Number.isFinite(Number(position[1]))
+        ) return;
+
+        treeMovePreviousFocus = document.activeElement;
+        closeTreeEditor();
+        closeTreeTooltip();
+        closeTreePhotoViewer();
+        setWorkflowPanel(null);
+        setInventoryOpen(false);
+        closeMobileMenus();
+        treeMoveState = treeMoveTransition(treeMoveState, {
+          type: "USER_CLICKED_MOVE_TREE",
+          treeId: Number(feature.id),
+          treeName: feature.properties.name || "tree",
+          position: [Number(position[0]), Number(position[1])],
+        });
+        treeMoveMarker = new maplibregl.Marker({ draggable: true })
+          .setLngLat(position)
+          .addTo(map);
+        treeMoveMarker.getElement().classList.add("tree-move-marker");
+        treeMoveMarker.on("dragend", () => {
+          const point = treeMoveMarker.getLngLat();
+          treeMoveState = treeMoveTransition(treeMoveState, {
+            type: "USER_DRAGGED_TREE_MOVE_PIN",
+            position: [point.lng, point.lat],
+          });
+          renderTreeMove();
+        });
+        renderTreeMove();
+        treeMoveConfirm.focus({ preventScroll: true });
+      }
+
+      function cancelTreeMove() {
+        if (!treeMovePresentation(treeMoveState).cancelEnabled) return;
+        treeMoveState = treeMoveTransition(treeMoveState, {
+          type: "USER_CANCELLED_TREE_MOVE",
+        });
+        renderTreeMove();
+        restoreFocusAfterTreeMove();
+      }
+
+      function resetTreeMove() {
+        treeMoveState = idleTreeMoveState();
+        renderTreeMove();
+        treeMovePreviousFocus = undefined;
+      }
+
+      async function confirmTreeMove() {
+        if (!treeMovePresentation(treeMoveState).confirmEnabled) return;
+        treeMoveState = treeMoveTransition(treeMoveState, {
+          type: "USER_CONFIRMED_TREE_MOVE",
+        });
+        renderTreeMove();
+        const request = treeMoveRequest(treeMoveState);
+        try {
+          const response = await fetch(
+            orchardResourceUrl(
+              currentAccess,
+              `trees/${encodeURIComponent(request.treeId)}/position`,
+            ),
+            {
+              method: "PUT",
+              headers: {
+                "content-type": "application/json",
+                ...accessHeaders(currentAccess),
+              },
+              body: JSON.stringify({
+                longitude: request.longitude,
+                latitude: request.latitude,
+              }),
+            },
+          );
+          if (response.status === 404) {
+            throw new Error("This tree no longer exists.");
+          }
+          if (response.status === 400) {
+            throw new Error("Choose a valid position on the map.");
+          }
+          if (!response.ok) {
+            throw new Error("Could not move this tree. Please try again.");
+          }
+
+          orchardFeatures = orchardFeatures.map((feature) =>
+            Number(feature.id) === request.treeId
+              ? {
+                  ...feature,
+                  geometry: {
+                    ...feature.geometry,
+                    coordinates: [request.longitude, request.latitude],
+                  },
+                }
+              : feature,
+          );
+          treeMoveState = treeMoveTransition(treeMoveState, {
+            type: "TREE_MOVE_SUCCEEDED",
+          });
+          renderTreeMove();
+          applyHarvestWindow();
+          refreshWorkflowRows();
+          renderInventory();
+          restoreFocusAfterTreeMove();
+        } catch (error) {
+          treeMoveState = treeMoveTransition(treeMoveState, {
+            type: "TREE_MOVE_FAILED",
+            message: error.message,
+          });
+          renderTreeMove();
+          treeMoveConfirm.focus({ preventScroll: true });
+        }
       }
 
       function loadPhotoFile(file) {
@@ -5156,6 +5550,7 @@
       }
 
       map.on("mousemove", "trees", (event) => {
+        if (treeMovePresentation(treeMoveState).interactionLocked) return;
         cancelTreeTooltipClose();
         map.getCanvas().style.cursor =
           manualOrder || placingWaterSource ? "crosshair" : "pointer";
@@ -5172,12 +5567,14 @@
       });
 
       map.on("mouseleave", "trees", () => {
+        if (treeMovePresentation(treeMoveState).interactionLocked) return;
         map.getCanvas().style.cursor =
           manualOrder || placingWaterSource ? "crosshair" : "";
         scheduleTreeTooltipClose();
       });
 
       map.on("click", "trees", (event) => {
+        if (treeMovePresentation(treeMoveState).interactionLocked) return;
         if (placingWaterSource) return;
         const feature = event.features[0];
         if (selectManualOrderTree(feature)) return;
@@ -5190,6 +5587,7 @@
       });
 
       map.on("click", (event) => {
+        if (treeMovePresentation(treeMoveState).interactionLocked) return;
         if (!placingWaterSource) return;
         placeWaterSource(event.lngLat.lng, event.lngLat.lat);
       });
@@ -5429,6 +5827,7 @@
       }
 
       function clearOrchardPresentation() {
+        resetTreeMove();
         closeMobileMenus();
         closeTreePhotoViewer();
         closeTreeEditor();
@@ -5596,6 +5995,9 @@
         mapFilterPanel.hidden = !orchardIsOpen;
         rowOrderToggle.hidden = !isEditable();
         historyToggle.hidden = !isEditable();
+        if (!isEditable() && treeMovePresentation(treeMoveState).active) {
+          resetTreeMove();
+        }
         if (!isEditable() && !historyPanel.hidden) setWorkflowPanel(null);
         if (!canWaterOrchard(currentAccess)) {
           cancelManualRowOrder();
@@ -6219,6 +6621,8 @@
       dateMaxSlider.addEventListener("input", applyDateFilter);
       dateFilterEnabled.addEventListener("change", applyDateFilter);
       clearMapFilter.addEventListener("click", clearMapIdentityFilter);
+      treeMoveCancel.addEventListener("click", cancelTreeMove);
+      treeMoveConfirm.addEventListener("click", confirmTreeMove);
       harvestFilterEnabled.addEventListener("change", applyHarvestWindow);
       harvestOffset.addEventListener("input", applyHarvestWindow);
       harvestWeeks.addEventListener("input", applyHarvestWindow);

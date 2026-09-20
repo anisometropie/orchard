@@ -674,6 +674,24 @@ impl OrchardStorage for PostgresOrchardStorage {
         }
     }
 
+    fn change_tree_position(
+        &mut self,
+        tree_id: TreeId,
+        position: GeoPoint,
+    ) -> Result<(), OrchardStorageError> {
+        let tree_id = i64::try_from(tree_id.0)
+            .map_err(|_| OrchardStorageError::TreePositionCouldNotBeChanged)?;
+        match self.client.execute(
+            "UPDATE trees
+             SET location = ST_SetSRID(ST_MakePoint($2, $3), 4326)
+             WHERE id = $1",
+            &[&tree_id, &position.longitude, &position.latitude],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::TreePositionCouldNotBeChanged),
+        }
+    }
+
     fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardStorageError> {
         self.client
             .query(

@@ -16,6 +16,7 @@ pub enum OrchardStorageError {
     TreeCouldNotBeRead,
     TreeDangerCouldNotBeChanged,
     TreeLifeStatusCouldNotBeChanged,
+    TreePositionCouldNotBeChanged,
     RowOrderCouldNotBeSaved,
     WateringRunCouldNotBeRead,
     WateringRunCouldNotBeCreated,
@@ -70,6 +71,11 @@ pub trait OrchardStorage {
         &mut self,
         tree_id: TreeId,
         is_alive: bool,
+    ) -> Result<(), OrchardStorageError>;
+    fn change_tree_position(
+        &mut self,
+        tree_id: TreeId,
+        position: GeoPoint,
     ) -> Result<(), OrchardStorageError>;
     fn trees(&mut self) -> Result<Vec<OrchardTree>, OrchardStorageError>;
     fn trees_in_orchard(

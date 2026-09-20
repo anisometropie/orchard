@@ -77,6 +77,19 @@ async fn anonymous_and_legacy_global_requests_never_expose_or_modify_trees() {
             .status(),
         StatusCode::UNAUTHORIZED
     );
+    assert_eq!(
+        client
+            .put(format!("{}/orchards/7/trees/1/position", server.url()))
+            .json(&serde_json::json!({
+                "longitude": 12.25,
+                "latitude": -34.24
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
@@ -126,6 +139,41 @@ async fn owner_reads_and_modifies_only_the_orchard_in_the_route() {
 }
 
 #[tokio::test]
+async fn owner_confirms_a_new_tree_position_and_reads_it_back() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+
+    let moved = client
+        .put(format!("{}/orchards/7/trees/1/position", server.url()))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "longitude": 12.25,
+            "latitude": -34.24
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(moved.status(), StatusCode::NO_CONTENT);
+    let orchard = client
+        .get(format!("{}/orchards/7/trees.geojson", server.url()))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        orchard["features"][0]["geometry"]["coordinates"],
+        serde_json::json!([12.25, -34.24])
+    );
+}
+
+#[tokio::test]
 async fn additional_view_links_preserve_existing_links_and_neither_permission_can_edit_trees() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await
@@ -150,6 +198,20 @@ async fn additional_view_links_preserve_existing_links_and_neither_permission_ca
             .patch(format!("{}/orchards/7/trees/1", server.url()))
             .header("x-orchard-share-token", &first_token)
             .json(&serde_json::json!({ "is_in_danger": true }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .put(format!("{}/orchards/7/trees/1/position", server.url()))
+            .header("x-orchard-share-token", &first_token)
+            .json(&serde_json::json!({
+                "longitude": 12.25,
+                "latitude": -34.24
+            }))
             .send()
             .await
             .unwrap()

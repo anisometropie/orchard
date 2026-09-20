@@ -1299,6 +1299,52 @@ fn change_tree_life_status_by_numeric_id_and_clear_danger() {
 }
 
 #[test]
+fn change_tree_position_by_numeric_id() {
+    let _database_lock = database_lock();
+    let (database_url, mut verification_connection) = empty_orchard_database();
+    let apple = PlantIdentity {
+        common_name: "Apple".into(),
+        botanical_taxon: BotanicalTaxon::Named(NamedTaxon {
+            genus: "Malus".into(),
+            species: Some("domestica".into()),
+            species_is_hybrid: false,
+            infraspecific: None,
+            is_aggregate: false,
+            cultivar_group: None,
+        }),
+    };
+    let mut orchard_storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    orchard_storage
+        .transaction(|orchard| {
+            let plant_identity_id =
+                orchard.resolve_plant_identification(identification(apple, None))?;
+            orchard.save_tree(tree(plant_identity_id, 17))
+        })
+        .unwrap();
+
+    orchard_storage
+        .transaction(|orchard| {
+            orchard.change_tree_position(
+                TreeId(1),
+                GeoPoint {
+                    longitude: 12.25,
+                    latitude: -34.24,
+                },
+            )
+        })
+        .unwrap();
+
+    let row = verification_connection
+        .query_one(
+            "SELECT ST_X(location), ST_Y(location) FROM trees WHERE id = 1",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(row.get::<_, f64>(0), 12.25);
+    assert_eq!(row.get::<_, f64>(1), -34.24);
+}
+
+#[test]
 fn read_default_map_configuration_and_aerial_image() {
     let _database_lock = database_lock();
     let (database_url, mut connection) = empty_orchard_database();

@@ -22,6 +22,7 @@ pub mod load_latest_tree_photo;
 pub mod load_map_configuration;
 pub mod log_in_user;
 pub mod log_out_user;
+pub mod move_tree;
 pub mod order_orchard_row;
 pub mod record_tree_harvested;
 pub mod record_tree_watered;

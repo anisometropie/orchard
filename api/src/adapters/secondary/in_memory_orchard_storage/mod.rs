@@ -82,6 +82,7 @@ struct InMemoryOrchardTransaction {
         Vec<(OrchardId, HarvestScheduleOwner, Vec<AnnualHarvestWindow>)>,
     staged_tree_danger_changes: Vec<(TreeId, bool)>,
     staged_tree_life_status_changes: Vec<(TreeId, bool)>,
+    staged_tree_position_changes: Vec<(TreeId, GeoPoint)>,
     staged_row_orders: Vec<(OrchardId, String, Vec<TreeId>)>,
     staged_watering_runs: Vec<WateringRun>,
     staged_watered_trees: Vec<(WateringRunId, TreeId)>,
@@ -716,6 +717,16 @@ impl OrchardStorage for InMemoryOrchardStorage {
                         .expect("a staged life-status change should target an existing tree")
                         .is_alive = is_alive;
                 }
+                for (tree_id, position) in transaction.staged_tree_position_changes {
+                    let index = tree_index(tree_id)
+                        .expect("a staged position change should have a positive tree ID");
+                    let tree = committed_orchard
+                        .trees
+                        .get_mut(index)
+                        .expect("a staged position change should target an existing tree");
+                    tree.longitude = position.longitude;
+                    tree.latitude = position.latitude;
+                }
                 for (orchard_id, row_name, ordered_tree_ids) in transaction.staged_row_orders {
                     for index in 0..committed_orchard.trees.len() {
                         let belongs_to_row = committed_orchard.tree_orchard_ids.get(index)
@@ -1115,6 +1126,24 @@ impl OrchardStorage for InMemoryOrchardStorage {
             .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
             .staged_tree_life_status_changes
             .push((tree_id, is_alive));
+        Ok(())
+    }
+
+    fn change_tree_position(
+        &mut self,
+        tree_id: TreeId,
+        position: GeoPoint,
+    ) -> Result<(), OrchardStorageError> {
+        let tree_exists = tree_index(tree_id)
+            .is_some_and(|index| self.orchard.lock().unwrap().trees.get(index).is_some());
+        if !tree_exists {
+            return Err(OrchardStorageError::TreePositionCouldNotBeChanged);
+        }
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_tree_position_changes
+            .push((tree_id, position));
         Ok(())
     }
 

@@ -92,6 +92,9 @@ use crate::hexagon::use_cases::load_map_configuration::{
 };
 use crate::hexagon::use_cases::log_in_user::{UserLoginError, UserLoginRequested, log_in_user};
 use crate::hexagon::use_cases::log_out_user::log_out_user;
+use crate::hexagon::use_cases::move_tree::{
+    OrchardTreeMoveConfirmed, OrchardTreeMoveError, move_orchard_tree,
+};
 use crate::hexagon::use_cases::order_orchard_row::{
     OrchardRowOrderError, OrchardRowOrderRequested, RowOrder, order_orchard_row,
 };
@@ -166,6 +169,10 @@ where
         .route(
             "/orchards/{orchard_id}/trees/{tree_id}",
             patch(change_tree_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/trees/{tree_id}/position",
+            put(move_tree_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/trees/{tree_id}/photos",
@@ -1862,6 +1869,13 @@ struct ChangeTreeRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct MoveTreeRequest {
+    longitude: f64,
+    latitude: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AddTreePhotoRequest {
     full_webp_base64: String,
     thumbnail_webp_base64: String,
@@ -2142,6 +2156,52 @@ where
             TreeConditionChangeError::TreeNotFound => StatusCode::NOT_FOUND,
             TreeConditionChangeError::DeadTreeCannotBeInDanger => StatusCode::CONFLICT,
             TreeConditionChangeError::TreeCouldNotBeChanged => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    {
+        Ok(Ok(())) => StatusCode::NO_CONTENT,
+        Ok(Err(status)) => status,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn move_tree_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, tree_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<MoveTreeRequest>, JsonRejection>,
+) -> StatusCode
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    if headers.contains_key("x-orchard-share-token") {
+        return StatusCode::FORBIDDEN;
+    }
+    let Some(session_token) = cookie_value(&headers, "orchard_session") else {
+        return StatusCode::UNAUTHORIZED;
+    };
+    let Ok(Json(request)) = request else {
+        return StatusCode::BAD_REQUEST;
+    };
+    match tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        authorize_owner_access(&mut *storage, OrchardId(orchard_id), session_token)?;
+        move_orchard_tree(
+            OrchardTreeMoveConfirmed {
+                orchard_id: OrchardId(orchard_id),
+                tree_id: TreeId(tree_id),
+                position: GeoPoint {
+                    longitude: request.longitude,
+                    latitude: request.latitude,
+                },
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            OrchardTreeMoveError::InvalidPosition => StatusCode::BAD_REQUEST,
+            OrchardTreeMoveError::TreeNotFound => StatusCode::NOT_FOUND,
+            OrchardTreeMoveError::TreeCouldNotBeMoved => StatusCode::INTERNAL_SERVER_ERROR,
         })
     })
     .await
