@@ -10,6 +10,7 @@ import {
   dangerWateringPathGeoJson,
   dangerTreeCount,
   orchardRows,
+  rowOrderPreview,
   treeIdsInRow,
   wateringCarryCapacity,
   wateringRouteWindow,
@@ -82,6 +83,30 @@ test("manual ordering accepts each tree in the selected row exactly once", () =>
   assert.deepEqual(appendManualTree([2], 2, allowed), [2]);
   assert.deepEqual(appendManualTree([2], 9, allowed), [2]);
   assert.deepEqual(appendManualTree([2], 1, allowed), [2, 1]);
+});
+
+test("preview the selected row in its saved order only when requested", () => {
+  const features = [
+    feature(1, "North", 2),
+    feature(2, "South", 1),
+    feature(3, "North", 1),
+  ];
+
+  assert.deepEqual(
+    rowOrderPreview(features, "North", true).map(({ id }) => id),
+    [3, 1],
+  );
+  assert.deepEqual(rowOrderPreview(features, "North", false), []);
+});
+
+test("do not preview a selected row until every living tree is ordered", () => {
+  const features = [
+    feature(1, "North", 1),
+    feature(2, "North", null),
+    feature(3, "South", 1),
+  ];
+
+  assert.deepEqual(rowOrderPreview(features, "North", true), []);
 });
 
 test("put only the current watering tree in the target pin source", () => {

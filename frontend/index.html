@@ -489,7 +489,7 @@
         flex-wrap: wrap;
         gap: 6px;
       }
-      .manual-order-marker {
+      .row-order-marker {
         align-items: center;
         background: #245c2a;
         border: 2px solid white;
@@ -2073,6 +2073,7 @@
         dangerTreeCount,
         defaultWaterSource,
         orchardRows,
+        rowOrderPreview,
         treeIdsInRow,
         wateringCarryCapacity,
         wateringCancellationNeedsConfirmation,
@@ -2083,7 +2084,7 @@
         wateringTargetGeoJson,
         wateringWideCenter,
         waterSourceGeoJson,
-      } from "./watering.mjs?v=14";
+      } from "./watering.mjs?v=15";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -2232,6 +2233,7 @@
       let aerialOverlaySources = [];
       let manualOrder = null;
       let manualOrderMarkers = [];
+      let rowOrderPreviewMarkers = [];
       let wateringProgress = null;
       let wateringSource = null;
       let wateringRoute = [];
@@ -3806,6 +3808,7 @@
           closeMobileMenus();
           setInventoryOpen(false);
         }
+        renderSavedRowOrderPreview();
         layoutMapControls();
       }
 
@@ -3948,6 +3951,7 @@
         const rows = orchardRows(orchardFeatures);
         replaceRowOptions(wateringRow, rows.filter((row) => row.livingTreeCount > 0));
         replaceRowOptions(rowOrderRow, rows);
+        renderSavedRowOrderPreview();
         const currentDangerTreeCount = dangerTreeCount(orchardFeatures);
         wateringTargetScope.querySelector('option[value="danger"]').textContent =
           `Danger trees · ${currentDangerTreeCount}`;
@@ -4047,6 +4051,37 @@
         manualOrderMarkers = [];
       }
 
+      function clearRowOrderPreviewMarkers() {
+        rowOrderPreviewMarkers.forEach((marker) => marker.remove());
+        rowOrderPreviewMarkers = [];
+      }
+
+      function rowOrderMarker(feature, number, markerClass) {
+        const element = document.createElement("div");
+        element.className = `row-order-marker ${markerClass}`;
+        element.textContent = String(number);
+        element.setAttribute("aria-hidden", "true");
+        return new maplibregl.Marker({ element })
+          .setLngLat(feature.geometry.coordinates)
+          .addTo(map);
+      }
+
+      function renderSavedRowOrderPreview() {
+        clearRowOrderPreviewMarkers();
+        const features = rowOrderPreview(
+          orchardFeatures,
+          rowOrderRow.value,
+          !rowOrderPanel.hidden && manualOrder == null,
+        );
+        rowOrderPreviewMarkers = features.map((feature) =>
+          rowOrderMarker(
+            feature,
+            Number(feature.properties.row_rank),
+            "saved-row-order-marker",
+          ),
+        );
+      }
+
       function renderManualOrder() {
         clearManualOrderMarkers();
         if (!manualOrder) {
@@ -4058,13 +4093,8 @@
             (candidate) => Number(candidate.id) === treeId,
           );
           if (!feature) return;
-          const element = document.createElement("div");
-          element.className = "manual-order-marker";
-          element.textContent = String(index + 1);
           manualOrderMarkers.push(
-            new maplibregl.Marker({ element })
-              .setLngLat(feature.geometry.coordinates)
-              .addTo(map),
+            rowOrderMarker(feature, index + 1, "manual-order-marker"),
           );
         });
         const selected = manualOrder.treeIds.length;
@@ -4090,6 +4120,7 @@
           treeIds: [],
         };
         rowOrderError.hidden = true;
+        renderSavedRowOrderPreview();
         renderManualOrder();
       }
 
@@ -4099,6 +4130,7 @@
         manualOrderActions.hidden = true;
         rowOrderStatus.hidden = true;
         map.getCanvas().style.cursor = "";
+        renderSavedRowOrderPreview();
       }
 
       function selectManualOrderTree(feature) {
@@ -6795,6 +6827,7 @@
       });
       rowOrderAutomatic.addEventListener("click", applyAutomaticRowOrder);
       rowOrderManual.addEventListener("click", beginManualRowOrder);
+      rowOrderRow.addEventListener("change", renderSavedRowOrderPreview);
       manualOrderUndo.addEventListener("click", () => {
         if (!manualOrder) return;
         manualOrder.treeIds.pop();

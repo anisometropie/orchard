@@ -30,6 +30,26 @@ export function wateringRowIsOrdered(rows, rowName) {
   return rows.some((row) => row.name === rowName && row.isOrdered);
 }
 
+export function rowOrderPreview(features, rowName, visible) {
+  if (!visible || !wateringRowIsOrdered(orchardRows(features), rowName)) {
+    return [];
+  }
+
+  return features
+    .filter((feature) => {
+      const rank = Number(feature.properties?.row_rank);
+      return (
+        feature.properties?.row_name === rowName &&
+        Number.isInteger(rank) &&
+        rank > 0
+      );
+    })
+    .sort(
+      (left, right) =>
+        Number(left.properties.row_rank) - Number(right.properties.row_rank),
+    );
+}
+
 export function wateringStartConflictMessage(code) {
   if (code === "watering_row_not_ordered") {
     return "Order every living tree in this row before starting watering.";
