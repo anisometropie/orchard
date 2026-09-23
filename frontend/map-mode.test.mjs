@@ -1,7 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mapModePresentation, tourPresentation } from "./map-mode.mjs";
+import {
+  TREE_FILTER_LAYER_IDS,
+  TREE_INTERACTION_LAYER_ID,
+  mapModePresentation,
+  tourPresentation,
+  treeHitTargetLayer,
+} from "./map-mode.mjs";
+
+test("give every tree the largest dot's hit area without changing its appearance", () => {
+  assert.deepEqual(treeHitTargetLayer(), {
+    id: "tree-hit-targets",
+    type: "circle",
+    source: "orchard",
+    paint: {
+      "circle-radius": 9,
+      "circle-opacity": 0,
+      "circle-stroke-opacity": 0,
+    },
+  });
+  assert.equal(TREE_INTERACTION_LAYER_ID, "tree-hit-targets");
+  assert.deepEqual(TREE_FILTER_LAYER_IDS, ["trees", "tree-hit-targets"]);
+});
 
 test("normal mode shows only planting-date controls and no status pins", () => {
   assert.deepEqual(mapModePresentation("normal"), {

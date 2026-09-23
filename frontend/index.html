@@ -2035,7 +2035,13 @@
         harvestPinImageName,
         selectHarvestParts,
       } from "./harvest-marker.mjs?v=3";
-      import { mapModePresentation, tourPresentation } from "./map-mode.mjs?v=4";
+      import {
+        TREE_FILTER_LAYER_IDS,
+        TREE_INTERACTION_LAYER_ID,
+        mapModePresentation,
+        tourPresentation,
+        treeHitTargetLayer,
+      } from "./map-mode.mjs?v=5";
       import {
         idleTreeMoveState,
         treeMoveInteractionPolicy,
@@ -2202,6 +2208,7 @@
                 ],
               },
             },
+            treeHitTargetLayer(),
             {
               id: "harvest-pins",
               type: "symbol",
@@ -5682,7 +5689,7 @@
         return "Healthy";
       }
 
-      map.on("mousemove", "trees", (event) => {
+      map.on("mousemove", TREE_INTERACTION_LAYER_ID, (event) => {
         if (treeMovePresentation(treeMoveState).interactionLocked) return;
         if (!treeHoverLayout.matches) return;
         cancelTreeTooltipClose();
@@ -5698,14 +5705,14 @@
         openTreeHoverPopup(feature);
       });
 
-      map.on("mouseleave", "trees", () => {
+      map.on("mouseleave", TREE_INTERACTION_LAYER_ID, () => {
         if (treeMovePresentation(treeMoveState).interactionLocked) return;
         map.getCanvas().style.cursor =
           manualOrder || placingWaterSource ? "crosshair" : "";
         scheduleTreeTooltipClose();
       });
 
-      map.on("click", "trees", (event) => {
+      map.on("click", TREE_INTERACTION_LAYER_ID, (event) => {
         if (treeMovePresentation(treeMoveState).interactionLocked) return;
         if (placingWaterSource) return;
         const feature = event.features[0];
@@ -6703,14 +6710,20 @@
         return d.toISOString().slice(0, 10);
       }
 
+      function setTreeLayerFilter(filter) {
+        TREE_FILTER_LAYER_IDS.forEach((layerId) => {
+          if (map.getLayer(layerId)) map.setFilter(layerId, filter);
+        });
+      }
+
       function applyDateFilter() {
         if (!currentMapModePresentation().plantingDateFilterActive) {
-          if (map.getLayer("trees")) map.setFilter("trees", null);
+          setTreeLayerFilter(null);
           return;
         }
 
         if (!dateFilterEnabled.checked) {
-          if (map.getLayer("trees")) map.setFilter("trees", null);
+          setTreeLayerFilter(null);
           dateLabel.textContent = "All dates";
           dateMinSlider.disabled = true;
           dateMaxSlider.disabled = true;
@@ -6734,14 +6747,12 @@
 
         dateLabel.textContent = `${formatDate(from)} → ${formatDate(to)}`;
 
-        if (map.getLayer("trees")) {
-          const plantingDateFilter = [
-            "all",
-            [">=", ["get", "planted_on"], formatDate(from)],
-            ["<=", ["get", "planted_on"], formatDate(to)],
-          ];
-          map.setFilter("trees", plantingDateFilter);
-        }
+        const plantingDateFilter = [
+          "all",
+          [">=", ["get", "planted_on"], formatDate(from)],
+          ["<=", ["get", "planted_on"], formatDate(to)],
+        ];
+        setTreeLayerFilter(plantingDateFilter);
       }
 
       dateMinSlider.addEventListener("input", applyDateFilter);
