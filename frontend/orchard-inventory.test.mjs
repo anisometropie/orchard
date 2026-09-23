@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -13,6 +14,8 @@ import {
   treePopupPresentation,
   treeTooltipFields,
 } from "./orchard-inventory.mjs";
+
+const indexHtml = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 
 test("the tree editor leaves photo capture to the separate camera action", () => {
   assert.deepEqual(treeEditorPresentation(), {
@@ -48,6 +51,17 @@ test("clicking a tree presents one compact card with the photo library after the
     actions: ["move", "edit", "filter", "photo", "library"],
   };
   assert.deepEqual(selectedCard, expectedCard);
+});
+
+test("the five selected-tree action buttons stay round instead of shrinking into ovals", () => {
+  assert.match(
+    indexHtml,
+    /\.tree-tooltip-actions\s*\{[^}]*flex-wrap:\s*wrap;/s,
+  );
+  assert.match(
+    indexHtml,
+    /\.tree-tooltip-actions \.inventory-row-action\s*\{[^}]*flex:\s*none;/s,
+  );
 });
 
 test("a read-only tree still exposes its photo library without an upload action", () => {
