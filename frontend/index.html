@@ -3542,67 +3542,14 @@
         }
       }
 
-      function loadPhotoFile(file) {
-        return new Promise((resolve, reject) => {
-          const objectUrl = URL.createObjectURL(file);
-          const image = new Image();
-          image.onload = () => {
-            URL.revokeObjectURL(objectUrl);
-            resolve(image);
-          };
-          image.onerror = () => {
-            URL.revokeObjectURL(objectUrl);
-            reject(new Error("This image format cannot be opened."));
-          };
-          image.src = objectUrl;
-        });
-      }
-
-      function webpVariant(image, maximumDimension, quality) {
-        const scale = Math.min(
-          1,
-          maximumDimension / Math.max(image.naturalWidth, image.naturalHeight),
-        );
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-        canvas
-          .getContext("2d")
-          .drawImage(image, 0, 0, canvas.width, canvas.height);
-        return new Promise((resolve, reject) => {
-          canvas.toBlob(
-            (blob) => {
-              if (!blob || blob.type !== "image/webp") {
-                reject(new Error("This browser cannot create WebP photos."));
-                return;
-              }
-              resolve(blob);
-            },
-            "image/webp",
-            quality,
-          );
-        });
-      }
-
-      async function prepareTreePhoto(file) {
+      function prepareTreePhoto(file) {
         if (!file.type.startsWith("image/")) {
           throw new Error("Choose an image file.");
         }
         if (file.size > 40 * 1024 * 1024) {
           throw new Error("Choose an image smaller than 40 MB.");
         }
-        const image = await loadPhotoFile(file);
-        const [fullWebp, thumbnailWebp] = await Promise.all([
-          webpVariant(image, 2400, 0.86),
-          webpVariant(image, 480, 0.66),
-        ]);
-        if (fullWebp.size > 8 * 1024 * 1024) {
-          throw new Error("The compressed photo is still larger than 8 MB.");
-        }
-        if (thumbnailWebp.size > 512 * 1024) {
-          throw new Error("The photo thumbnail is too large.");
-        }
-        return { fullWebp, thumbnailWebp };
+        return file;
       }
 
       function blobBase64(blob) {
@@ -3619,10 +3566,7 @@
           throw new Error("This shared link cannot add photos.");
         }
         if (treeId == null) throw new Error("This tree has no editable ID.");
-        const [fullWebpBase64, thumbnailWebpBase64] = await Promise.all([
-          blobBase64(photo.fullWebp),
-          blobBase64(photo.thumbnailWebp),
-        ]);
+        const imageBase64 = await blobBase64(photo);
         const response = await fetch(
           orchardResourceUrl(
             currentAccess,
@@ -3635,15 +3579,14 @@
               ...accessHeaders(currentAccess),
             },
             body: JSON.stringify({
-              full_webp_base64: fullWebpBase64,
-              thumbnail_webp_base64: thumbnailWebpBase64,
+              image_base64: imageBase64,
             }),
           },
         );
         if (response.ok) return;
         if (response.status === 404) throw new Error("This tree no longer exists.");
         if (response.status === 413) throw new Error("This photo is too large.");
-        if (response.status === 400) throw new Error("The WebP photo is invalid.");
+        if (response.status === 400) throw new Error("The photo could not be converted.");
         throw new Error("Could not save this photo. Please try again.");
       }
 

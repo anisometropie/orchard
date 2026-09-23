@@ -130,6 +130,10 @@ use crate::hexagon::use_cases::undo_last_harvest_tree_action::{
     LastHarvestTreeActionUndoError, LastHarvestTreeActionUndone, undo_last_harvest_tree_action,
 };
 
+mod tree_photo_image;
+
+use self::tree_photo_image::{TreePhotoPreparationError, prepare_tree_photo};
+
 pub async fn start_http_server<U>(
     orchard_storage: U,
     address: SocketAddr,
@@ -176,7 +180,7 @@ where
         )
         .route(
             "/orchards/{orchard_id}/trees/{tree_id}/photos",
-            post(add_tree_photo_handler::<U>).layer(DefaultBodyLimit::max(13 * 1024 * 1024)),
+            post(add_tree_photo_handler::<U>).layer(DefaultBodyLimit::max(55 * 1024 * 1024)),
         )
         .route(
             "/orchards/{orchard_id}/trees/{tree_id}/photos/latest",
@@ -1876,9 +1880,30 @@ struct MoveTreeRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AddTreePhotoRequest {
+struct SourceTreePhotoRequest {
+    image_base64: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreparedTreePhotoRequest {
     full_webp_base64: String,
     thumbnail_webp_base64: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AddTreePhotoRequest {
+    Source(SourceTreePhotoRequest),
+    Prepared(PreparedTreePhotoRequest),
+}
+
+enum DecodedTreePhotoRequest {
+    Source(Vec<u8>),
+    Prepared {
+        full_webp: Vec<u8>,
+        thumbnail_webp: Vec<u8>,
+    },
 }
 
 async fn add_tree_photo_handler<U>(
@@ -1892,17 +1917,43 @@ where
 {
     let credential = orchard_photography_credential(&headers)?;
     let Json(request) = request.map_err(|rejection| rejection.status())?;
-    let full_webp = STANDARD
-        .decode(request.full_webp_base64)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-    let thumbnail_webp = STANDARD
-        .decode(request.thumbnail_webp_base64)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let request = match request {
+        AddTreePhotoRequest::Source(request) => DecodedTreePhotoRequest::Source(
+            STANDARD
+                .decode(request.image_base64)
+                .map_err(|_| StatusCode::BAD_REQUEST)?,
+        ),
+        AddTreePhotoRequest::Prepared(request) => DecodedTreePhotoRequest::Prepared {
+            full_webp: STANDARD
+                .decode(request.full_webp_base64)
+                .map_err(|_| StatusCode::BAD_REQUEST)?,
+            thumbnail_webp: STANDARD
+                .decode(request.thumbnail_webp_base64)
+                .map_err(|_| StatusCode::BAD_REQUEST)?,
+        },
+    };
 
     tokio::task::spawn_blocking(move || {
-        let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
-        authorize_photography_access(&mut *storage, orchard_id, credential)?;
+        {
+            let mut storage = storage.lock().unwrap();
+            authorize_photography_access(&mut *storage, orchard_id, credential)?;
+        }
+        let (full_webp, thumbnail_webp) = match request {
+            DecodedTreePhotoRequest::Source(source) => {
+                let prepared = prepare_tree_photo(&source).map_err(|error| match error {
+                    TreePhotoPreparationError::ImageTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+                    TreePhotoPreparationError::InvalidImage
+                    | TreePhotoPreparationError::CouldNotEncode => StatusCode::BAD_REQUEST,
+                })?;
+                (prepared.full_webp, prepared.thumbnail_webp)
+            }
+            DecodedTreePhotoRequest::Prepared {
+                full_webp,
+                thumbnail_webp,
+            } => (full_webp, thumbnail_webp),
+        };
+        let mut storage = storage.lock().unwrap();
         add_tree_photo(
             TreePhotoAdded {
                 orchard_id,

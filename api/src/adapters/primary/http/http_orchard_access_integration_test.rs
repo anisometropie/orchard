@@ -1,4 +1,5 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
+use image::{DynamicImage, ImageFormat, RgbaImage};
 use orchard_api::adapters::primary::http::start_http_server;
 use orchard_api::adapters::secondary::InMemoryOrchardStorage;
 use orchard_api::hexagon::models::{
@@ -9,6 +10,7 @@ use orchard_api::hexagon::models::{
 };
 use orchard_api::hexagon::ports::OrchardStorage;
 use reqwest::{Client, StatusCode, header};
+use std::io::Cursor;
 
 const USERNAME: &str = "owner";
 const PASSWORD: &str = "correct horse battery staple";
@@ -387,6 +389,49 @@ async fn only_the_owner_adds_photos_and_shared_readers_see_the_latest_webp_varia
             .status(),
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn the_api_resizes_an_original_browser_image_and_converts_both_variants_to_webp() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let photo_url = format!("{}/orchards/7/trees/1/photos", server.url());
+    let source = png(1200, 600);
+
+    assert_eq!(
+        client
+            .post(&photo_url)
+            .header(header::COOKIE, &cookie)
+            .json(&source_photo_request(&source))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CREATED
+    );
+
+    let full = client
+        .get(format!("{photo_url}/latest"))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(full.headers()[header::CONTENT_TYPE], "image/webp");
+    let full = image::load_from_memory(&full.bytes().await.unwrap()).unwrap();
+    assert_eq!((full.width(), full.height()), (1200, 600));
+
+    let thumbnail = client
+        .get(format!("{photo_url}/latest/thumbnail"))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(thumbnail.headers()[header::CONTENT_TYPE], "image/webp");
+    let thumbnail = image::load_from_memory(&thumbnail.bytes().await.unwrap()).unwrap();
+    assert_eq!((thumbnail.width(), thumbnail.height()), (480, 240));
 }
 
 #[tokio::test]
@@ -1656,6 +1701,24 @@ fn photo_request(full: &[u8], thumbnail: &[u8]) -> serde_json::Value {
         "full_webp_base64": STANDARD.encode(full),
         "thumbnail_webp_base64": STANDARD.encode(thumbnail),
     })
+}
+
+fn source_photo_request(image: &[u8]) -> serde_json::Value {
+    serde_json::json!({ "image_base64": STANDARD.encode(image) })
+}
+
+fn png(width: u32, height: u32) -> Vec<u8> {
+    let image = DynamicImage::ImageRgba8(
+        RgbaImage::from_raw(
+            width,
+            height,
+            vec![127; usize::try_from(width * height * 4).unwrap()],
+        )
+        .unwrap(),
+    );
+    let mut bytes = Cursor::new(Vec::new());
+    image.write_to(&mut bytes, ImageFormat::Png).unwrap();
+    bytes.into_inner()
 }
 
 fn webp(payload: &[u8]) -> Vec<u8> {
