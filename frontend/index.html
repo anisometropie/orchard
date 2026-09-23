@@ -10,6 +10,12 @@
       rel="stylesheet"
     />
     <style>
+      html,
+      body {
+        height: 100%;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
       body {
         margin: 0;
       }
@@ -25,6 +31,7 @@
       #map {
         width: 100vw;
         height: 100vh;
+        height: 100dvh;
       }
       #map-status {
         position: absolute;
@@ -109,10 +116,25 @@
       }
       .maplibregl-marker.tree-move-marker {
         cursor: grab;
+        touch-action: none;
+        user-select: none;
         z-index: 62;
       }
       .maplibregl-marker.tree-move-marker:active {
         cursor: grabbing;
+      }
+      @media (pointer: coarse) {
+        .maplibregl-marker.tree-move-marker {
+          align-items: flex-end;
+          display: flex;
+          height: 80px;
+          justify-content: center;
+          width: 64px;
+        }
+        .maplibregl-marker.tree-move-marker svg {
+          height: 67px;
+          width: 44px;
+        }
       }
       .tree-editor {
         min-width: 190px;
@@ -3414,7 +3436,11 @@
           treeName: feature.properties.name || "tree",
           position: [Number(position[0]), Number(position[1])],
         });
-        treeMoveMarker = new maplibregl.Marker({ draggable: true })
+        treeMoveMarker = new maplibregl.Marker({
+          clickTolerance: Number.EPSILON,
+          draggable: true,
+          subpixelPositioning: true,
+        })
           .setLngLat(position)
           .addTo(map);
         treeMoveMarker.getElement().classList.add("tree-move-marker");

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -8,6 +9,27 @@ import {
   treeMoveRequest,
   treeMoveTransition,
 } from "./tree-move.mjs";
+
+const indexHtml = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+
+test("mobile tree moving responds immediately on a large non-scrolling touch target", () => {
+  assert.match(
+    indexHtml,
+    /html,\s*body\s*{[^}]*overflow:\s*hidden;[^}]*overscroll-behavior:\s*none;/s,
+  );
+  assert.match(
+    indexHtml,
+    /\.maplibregl-marker\.tree-move-marker\s*{[^}]*touch-action:\s*none;/s,
+  );
+  assert.match(
+    indexHtml,
+    /@media \(pointer: coarse\)[\s\S]*?\.maplibregl-marker\.tree-move-marker\s*{[^}]*height:\s*80px;[^}]*width:\s*64px;/,
+  );
+  assert.match(
+    indexHtml,
+    /new maplibregl\.Marker\(\{\s*clickTolerance:\s*Number\.EPSILON,\s*draggable:\s*true,\s*subpixelPositioning:\s*true,\s*\}\)/,
+  );
+});
 
 test("the move lock leaves the pin reachable without allowing background interaction", () => {
   const state = treeMoveTransition(idleTreeMoveState(), {
