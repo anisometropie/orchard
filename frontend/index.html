@@ -962,7 +962,7 @@
         position: fixed;
         right: 0;
         top: 0;
-        z-index: 300;
+        z-index: 320;
       }
       .tree-photo-viewer img {
         max-height: calc(100vh - 56px);
@@ -987,6 +987,119 @@
         right: 16px;
         top: 16px;
         width: 48px;
+      }
+      body.tree-photo-library-open {
+        overflow: hidden;
+      }
+      .tree-photo-library {
+        align-items: center;
+        background: rgba(0, 0, 0, 0.66);
+        bottom: 0;
+        display: flex;
+        justify-content: center;
+        left: 0;
+        padding: 20px;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 300;
+      }
+      .tree-photo-library-panel {
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100dvh - 40px);
+        max-width: 820px;
+        overflow: hidden;
+        width: 100%;
+      }
+      .tree-photo-library-header {
+        align-items: center;
+        border-bottom: 1px solid #ddd;
+        display: flex;
+        flex: 0 0 auto;
+        justify-content: space-between;
+        padding: 12px 14px;
+      }
+      .tree-photo-library-title {
+        font: 700 18px/1.3 sans-serif;
+        margin: 0;
+      }
+      .tree-photo-library-close {
+        align-items: center;
+        background: #edf3eb;
+        border: 0;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        font: 26px/1 sans-serif;
+        height: 44px;
+        justify-content: center;
+        width: 44px;
+      }
+      .tree-photo-library-content {
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 14px;
+      }
+      .tree-photo-library-status {
+        color: #555;
+        font: 600 14px/1.4 sans-serif;
+        padding: 24px 8px;
+        text-align: center;
+      }
+      .tree-photo-library-grid {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      }
+      .tree-photo-library-card {
+        background: #f7f8f6;
+        border: 1px solid #d9ded7;
+        border-radius: 9px;
+        overflow: hidden;
+      }
+      .tree-photo-library-image-button {
+        background: #e7ebe5;
+        border: 0;
+        cursor: zoom-in;
+        display: block;
+        padding: 0;
+        width: 100%;
+      }
+      .tree-photo-library-image-button img {
+        aspect-ratio: 4 / 3;
+        display: block;
+        object-fit: cover;
+        width: 100%;
+      }
+      .tree-photo-library-meta {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
+        padding: 9px 10px;
+      }
+      .tree-photo-library-date {
+        color: #444;
+        font: 13px/1.3 sans-serif;
+      }
+      .tree-photo-library-delete {
+        background: #fff;
+        border: 1px solid #ba3027;
+        border-radius: 6px;
+        color: #9f221a;
+        cursor: pointer;
+        font: 700 13px/1 sans-serif;
+        min-height: 36px;
+        padding: 0 10px;
+      }
+      .tree-photo-library-delete:disabled {
+        cursor: wait;
+        opacity: 0.55;
       }
       .harvest-editor-error {
         color: #b42318;
@@ -1440,6 +1553,25 @@
         .tree-photo-viewer img {
           max-height: calc(100dvh - 20px);
           max-width: calc(100vw - 20px);
+        }
+        .tree-photo-library {
+          align-items: stretch;
+          padding: 0;
+        }
+        .tree-photo-library-panel {
+          border-radius: 0;
+          max-height: 100dvh;
+          max-width: none;
+        }
+        .tree-photo-library-header {
+          padding: max(8px, env(safe-area-inset-top)) 10px 8px;
+        }
+        .tree-photo-library-content {
+          padding: 10px 10px max(10px, env(safe-area-inset-bottom));
+        }
+        .tree-photo-library-grid {
+          gap: 10px;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
         .inventory-species-actions {
           flex-basis: 88px;
@@ -2248,6 +2380,8 @@
       let treeTooltipHideTimer;
       let treeEditor;
       let treePhotoViewer;
+      let treePhotoLibrary;
+      let treePhotoLibraryObjectUrls = new Set();
       let treeMoveState = idleTreeMoveState();
       let treeMoveMarker;
       let treeMovePreviousFocus;
@@ -2945,6 +3079,50 @@
         return response.blob();
       }
 
+      async function fetchTreePhotos(treeId) {
+        const response = await fetch(
+          orchardResourceUrl(
+            currentAccess,
+            `trees/${encodeURIComponent(treeId)}/photos`,
+          ),
+          { headers: accessHeaders(currentAccess), cache: "no-store" },
+        );
+        if (response.status === 404) throw new Error("This tree no longer exists.");
+        if (!response.ok) throw new Error("Could not load this tree's photos.");
+        const payload = await response.json();
+        return Array.isArray(payload.photos) ? payload.photos : [];
+      }
+
+      async function fetchTreePhoto(treeId, photoId, thumbnail = false) {
+        const suffix = thumbnail ? "/thumbnail" : "";
+        const response = await fetch(
+          orchardResourceUrl(
+            currentAccess,
+            `trees/${encodeURIComponent(treeId)}/photos/${encodeURIComponent(photoId)}${suffix}`,
+          ),
+          { headers: accessHeaders(currentAccess), cache: "no-store" },
+        );
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error("Could not load this tree photo.");
+        return response.blob();
+      }
+
+      async function deleteTreePhoto(treeId, photoId) {
+        if (!isEditable()) throw new Error("Only the orchard owner can delete photos.");
+        const response = await fetch(
+          orchardResourceUrl(
+            currentAccess,
+            `trees/${encodeURIComponent(treeId)}/photos/${encodeURIComponent(photoId)}`,
+          ),
+          { method: "DELETE", headers: accessHeaders(currentAccess) },
+        );
+        if (response.status === 404) throw new Error("This photo no longer exists.");
+        if (response.status === 401 || response.status === 403) {
+          throw new Error("Only the orchard owner can delete photos.");
+        }
+        if (!response.ok) throw new Error("Could not delete this photo.");
+      }
+
       function appendLatestTreePhoto(tooltip, feature) {
         const photoButton = document.createElement("button");
         photoButton.type = "button";
@@ -2988,13 +3166,13 @@
         treePhotoViewer = undefined;
       }
 
-      async function openTreePhotoViewer(treeId, treeName) {
+      async function openTreePhotoViewer(treeId, treeName, photoId = null) {
         closeTreePhotoViewer();
         const viewer = document.createElement("div");
         viewer.className = "tree-photo-viewer";
         viewer.setAttribute("role", "dialog");
         viewer.setAttribute("aria-modal", "true");
-        viewer.setAttribute("aria-label", `Latest photo of ${treeName}`);
+        viewer.setAttribute("aria-label", `Photo of ${treeName}`);
         const status = document.createElement("div");
         status.className = "tree-photo-viewer-status";
         status.textContent = "Loading photo…";
@@ -3013,13 +3191,16 @@
         closeButton.focus();
 
         try {
-          const blob = await fetchLatestTreePhoto(treeId);
+          const blob =
+            photoId == null
+              ? await fetchLatestTreePhoto(treeId)
+              : await fetchTreePhoto(treeId, photoId);
           if (treePhotoViewer !== viewer) return;
           if (!blob) throw new Error("This tree has no photo.");
           const objectUrl = URL.createObjectURL(blob);
           viewer.dataset.objectUrl = objectUrl;
           const image = document.createElement("img");
-          image.alt = `Latest photo of ${treeName}`;
+          image.alt = `Photo of ${treeName}`;
           image.src = objectUrl;
           status.replaceWith(image);
         } catch (error) {
@@ -3027,8 +3208,172 @@
         }
       }
 
+      function closeTreePhotoLibrary() {
+        if (!treePhotoLibrary) return;
+        treePhotoLibraryObjectUrls.forEach((objectUrl) =>
+          URL.revokeObjectURL(objectUrl),
+        );
+        treePhotoLibraryObjectUrls.clear();
+        treePhotoLibrary.remove();
+        treePhotoLibrary = undefined;
+        document.body.classList.remove("tree-photo-library-open");
+      }
+
+      function formatTreePhotoDate(unixSeconds) {
+        const date = new Date(Number(unixSeconds) * 1000);
+        if (Number.isNaN(date.getTime())) return "Date unavailable";
+        return new Intl.DateTimeFormat(undefined, {
+          dateStyle: "medium",
+        }).format(date);
+      }
+
+      async function openTreePhotoLibrary(feature) {
+        closeTreePhotoViewer();
+        closeTreePhotoLibrary();
+        closeTreeTooltip();
+
+        const treeName = feature.properties.name || "Tree";
+        const library = document.createElement("div");
+        library.className = "tree-photo-library";
+        library.setAttribute("role", "dialog");
+        library.setAttribute("aria-modal", "true");
+        library.setAttribute("aria-label", `Photo library of ${treeName}`);
+        library.addEventListener("click", (event) => {
+          if (event.target === library) closeTreePhotoLibrary();
+        });
+
+        const panel = document.createElement("section");
+        panel.className = "tree-photo-library-panel";
+        const headerElement = document.createElement("header");
+        headerElement.className = "tree-photo-library-header";
+        const title = document.createElement("h2");
+        title.className = "tree-photo-library-title";
+        title.textContent = `${treeName} photos`;
+        const closeButton = document.createElement("button");
+        closeButton.type = "button";
+        closeButton.className = "tree-photo-library-close";
+        closeButton.setAttribute("aria-label", "Close photo library");
+        closeButton.textContent = "×";
+        closeButton.addEventListener("click", closeTreePhotoLibrary);
+        headerElement.append(title, closeButton);
+
+        const content = document.createElement("div");
+        content.className = "tree-photo-library-content";
+        const status = document.createElement("div");
+        status.className = "tree-photo-library-status";
+        status.setAttribute("aria-live", "polite");
+        status.textContent = "Loading photos…";
+        content.append(status);
+        panel.append(headerElement, content);
+        library.append(panel);
+        document.body.append(library);
+        document.body.classList.add("tree-photo-library-open");
+        treePhotoLibrary = library;
+        closeButton.focus({ preventScroll: true });
+
+        try {
+          let photos = await fetchTreePhotos(feature.id);
+          if (treePhotoLibrary !== library) return;
+          if (photos.length === 0) {
+            status.textContent = "No photos yet.";
+            return;
+          }
+
+          status.hidden = true;
+          const grid = document.createElement("div");
+          grid.className = "tree-photo-library-grid";
+          content.append(grid);
+
+          photos.forEach((photo) => {
+            const card = document.createElement("article");
+            card.className = "tree-photo-library-card";
+            const imageButton = document.createElement("button");
+            imageButton.type = "button";
+            imageButton.className = "tree-photo-library-image-button";
+            imageButton.setAttribute(
+              "aria-label",
+              `Open photo from ${formatTreePhotoDate(photo.created_at_unix_seconds)}`,
+            );
+            const image = document.createElement("img");
+            image.alt = `Photo of ${treeName}`;
+            imageButton.append(image);
+            imageButton.addEventListener("click", () =>
+              openTreePhotoViewer(feature.id, treeName, photo.id),
+            );
+
+            const meta = document.createElement("div");
+            meta.className = "tree-photo-library-meta";
+            const date = document.createElement("time");
+            date.className = "tree-photo-library-date";
+            date.textContent = formatTreePhotoDate(photo.created_at_unix_seconds);
+            date.dateTime = new Date(
+              Number(photo.created_at_unix_seconds) * 1000,
+            ).toISOString();
+            meta.append(date);
+
+            if (isEditable()) {
+              const deleteButton = document.createElement("button");
+              deleteButton.type = "button";
+              deleteButton.className = "tree-photo-library-delete";
+              deleteButton.textContent = "Delete";
+              deleteButton.setAttribute(
+                "aria-label",
+                `Delete photo from ${date.textContent}`,
+              );
+              deleteButton.addEventListener("click", async () => {
+                if (!window.confirm("Delete this photo? This cannot be undone.")) {
+                  return;
+                }
+                deleteButton.disabled = true;
+                deleteButton.textContent = "Deleting…";
+                try {
+                  await deleteTreePhoto(feature.id, photo.id);
+                  photos = photos.filter((candidate) => candidate.id !== photo.id);
+                  const objectUrl = card.dataset.objectUrl;
+                  if (objectUrl) {
+                    URL.revokeObjectURL(objectUrl);
+                    treePhotoLibraryObjectUrls.delete(objectUrl);
+                  }
+                  card.remove();
+                  setTreeHasPhoto(feature, photos.length > 0);
+                  if (photos.length === 0) {
+                    grid.remove();
+                    status.textContent = "No photos yet.";
+                    status.hidden = false;
+                  }
+                } catch (error) {
+                  deleteButton.disabled = false;
+                  deleteButton.textContent = "Delete";
+                  status.textContent = error.message;
+                  status.hidden = false;
+                }
+              });
+              meta.append(deleteButton);
+            }
+
+            card.append(imageButton, meta);
+            grid.append(card);
+            fetchTreePhoto(feature.id, photo.id, true)
+              .then((blob) => {
+                if (!blob || treePhotoLibrary !== library || !card.isConnected) return;
+                const objectUrl = URL.createObjectURL(blob);
+                treePhotoLibraryObjectUrls.add(objectUrl);
+                card.dataset.objectUrl = objectUrl;
+                image.src = objectUrl;
+              })
+              .catch(() => {
+                image.alt = "Photo preview unavailable";
+              });
+          });
+        } catch (error) {
+          if (treePhotoLibrary === library) status.textContent = error.message;
+        }
+      }
+
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") closeTreePhotoViewer();
+        if (event.key !== "Escape") return;
+        if (treePhotoViewer) closeTreePhotoViewer();
+        else closeTreePhotoLibrary();
       });
 
       treeMovePanel.addEventListener("keydown", (event) => {
@@ -3148,6 +3493,51 @@
         return button;
       }
 
+      function createTreePhotoLibraryButton(feature) {
+        const treeName = feature.properties.name || "tree";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className =
+          "inventory-row-action tree-photo-action-button tree-photo-library-button";
+        button.title = `View photo library of ${treeName}`;
+        button.setAttribute(
+          "aria-label",
+          `View photo library of ${treeName}`,
+        );
+        const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        icon.setAttribute("viewBox", "0 0 24 24");
+        icon.setAttribute("aria-hidden", "true");
+        const back = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        back.setAttribute("d", "M7 4h12a2 2 0 0 1 2 2v10");
+        back.setAttribute("fill", "none");
+        back.setAttribute("stroke", "currentColor");
+        back.setAttribute("stroke-linecap", "round");
+        back.setAttribute("stroke-width", "2");
+        const front = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        front.setAttribute("x", "3");
+        front.setAttribute("y", "8");
+        front.setAttribute("width", "16");
+        front.setAttribute("height", "12");
+        front.setAttribute("rx", "2");
+        front.setAttribute("fill", "none");
+        front.setAttribute("stroke", "currentColor");
+        front.setAttribute("stroke-width", "2");
+        const landscape = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        landscape.setAttribute("d", "m5.5 17 3.5-3.5 2.5 2.5 2-2 3.5 3.5");
+        landscape.setAttribute("fill", "none");
+        landscape.setAttribute("stroke", "currentColor");
+        landscape.setAttribute("stroke-linecap", "round");
+        landscape.setAttribute("stroke-linejoin", "round");
+        landscape.setAttribute("stroke-width", "1.6");
+        icon.append(back, front, landscape);
+        button.append(icon);
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openTreePhotoLibrary(feature);
+        });
+        return button;
+      }
+
       function createTreeTooltip(feature, interaction) {
         const tooltip = document.createElement("div");
         const properties = feature.properties;
@@ -3197,6 +3587,8 @@
               );
             } else if (action === "photo") {
               actions.append(createTreePhotoButton(feature, tooltip, actions));
+            } else if (action === "library") {
+              actions.append(createTreePhotoLibraryButton(feature));
             }
           });
           tooltip.append(actions);
@@ -3591,12 +3983,19 @@
       }
 
       function markTreeHasPhoto(feature) {
-        feature.properties.has_photo = true;
+        setTreeHasPhoto(feature, true);
+      }
+
+      function setTreeHasPhoto(feature, hasPhoto) {
+        feature.properties.has_photo = hasPhoto;
         orchardFeatures
-          .filter((orchardFeature) => orchardFeature.id === feature.id)
+          .filter(
+            (orchardFeature) => Number(orchardFeature.id) === Number(feature.id),
+          )
           .forEach((orchardFeature) => {
-            orchardFeature.properties.has_photo = true;
+            orchardFeature.properties.has_photo = hasPhoto;
           });
+        applyHarvestWindow();
       }
 
       function createTreeEditor(feature) {
@@ -5907,6 +6306,7 @@
         resetTreeMove();
         closeMobileMenus();
         closeTreePhotoViewer();
+        closeTreePhotoLibrary();
         closeTreeEditor();
         closeTreeTooltip();
         cancelManualRowOrder();

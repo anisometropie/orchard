@@ -948,20 +948,55 @@ fn persist_and_load_the_latest_tree_photo_variants_inside_the_tree_orchard() {
         storage
             .latest_tree_photo(OrchardId(1), TreeId(1), TreePhotoVariant::Full)
             .unwrap(),
-        Some(latest.full_webp)
+        Some(latest.full_webp.clone())
     );
     assert_eq!(
         storage
             .latest_tree_photo(OrchardId(1), TreeId(1), TreePhotoVariant::Thumbnail,)
             .unwrap(),
-        Some(latest.thumbnail_webp)
+        Some(latest.thumbnail_webp.clone())
     );
+    let photos = storage
+        .tree_photos(OrchardId(1), TreeId(1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(photos.len(), 2);
+    assert!(photos[0].id.0 > photos[1].id.0);
+    assert!(photos[0].created_at_unix_seconds > 0);
+    assert_eq!(
+        storage
+            .tree_photo(
+                OrchardId(1),
+                TreeId(1),
+                photos[0].id,
+                TreePhotoVariant::Full,
+            )
+            .unwrap(),
+        Some(latest.full_webp)
+    );
+    assert!(
+        !storage
+            .delete_tree_photo(OrchardId(2), TreeId(1), photos[0].id)
+            .unwrap()
+    );
+    assert!(
+        storage
+            .delete_tree_photo(OrchardId(1), TreeId(1), photos[0].id)
+            .unwrap()
+    );
+    assert!(storage.trees_in_orchard(OrchardId(1)).unwrap()[0].has_photo);
+    assert!(
+        storage
+            .delete_tree_photo(OrchardId(1), TreeId(1), photos[1].id)
+            .unwrap()
+    );
+    assert!(!storage.trees_in_orchard(OrchardId(1)).unwrap()[0].has_photo);
     assert_eq!(
         verification_connection
             .query_one("SELECT count(*) FROM tree_photos", &[])
             .unwrap()
             .get::<_, i64>(0),
-        2
+        0
     );
 }
 

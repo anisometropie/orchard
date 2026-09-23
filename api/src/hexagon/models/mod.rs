@@ -32,7 +32,7 @@ pub use plant_identity::{
     PlantIdentityReference,
 };
 pub use tree::{ReproductiveRole, Tree, TreeId};
-pub use tree_photo::{TreePhoto, TreePhotoVariant};
+pub use tree_photo::{TreePhoto, TreePhotoId, TreePhotoSummary, TreePhotoVariant};
 pub use watering::{
     CompletedWateringRun, CompletedWateringRunTree, WateringRun, WateringRunId, WateringRunTarget,
 };

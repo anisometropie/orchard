@@ -44,6 +44,7 @@ export function treePopupPresentation(
       canEdit && "edit",
       canFilter && "filter",
       canAddPhotos && "photo",
+      "library",
     ].filter(Boolean),
   };
 }

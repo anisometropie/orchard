@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use crate::hexagon::models::{
     AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, CompletedHarvestRun,
@@ -8,8 +11,8 @@ use crate::hexagon::models::{
     HarvestedPart, IssuedOrchardShareToken, MapConfiguration, Orchard, OrchardId,
     OrchardShareAccess, OrchardSharePermissions, OrchardShareTokenId, OrchardTree, PlantCultivar,
     PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
-    Tree, TreeId, TreePhoto, TreePhotoVariant, User, UserId, WateringRun, WateringRunId,
-    WateringRunTarget,
+    Tree, TreeId, TreePhoto, TreePhotoId, TreePhotoSummary, TreePhotoVariant, User, UserId,
+    WateringRun, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -46,7 +49,7 @@ struct InMemoryOrchard {
     trees: Vec<Tree>,
     tree_orchard_ids: Vec<Option<OrchardId>>,
     tree_row_ranks: Vec<Option<u32>>,
-    tree_photos: Vec<(OrchardId, TreeId, TreePhoto)>,
+    tree_photos: Vec<StoredTreePhoto>,
     watering_runs: Vec<WateringRun>,
     harvest_runs: Vec<HarvestRun>,
     harvest_tree_action_undos: Vec<(HarvestRunId, HarvestTreeActionUndo)>,
@@ -62,6 +65,14 @@ struct InMemoryShareToken {
     id: OrchardShareTokenId,
     access: OrchardShareAccess,
     token: String,
+    created_at_unix_seconds: i64,
+}
+
+struct StoredTreePhoto {
+    id: TreePhotoId,
+    orchard_id: OrchardId,
+    tree_id: TreeId,
+    photo: TreePhoto,
     created_at_unix_seconds: i64,
 }
 
@@ -614,7 +625,25 @@ impl TreePhotoStorage for InMemoryOrchardStorage {
         if !belongs_to_orchard {
             return Ok(false);
         }
-        orchard.tree_photos.push((orchard_id, tree_id, photo));
+        let id = TreePhotoId(
+            orchard
+                .tree_photos
+                .last()
+                .map_or(1, |stored| stored.id.0.saturating_add(1)),
+        );
+        let created_at_unix_seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .try_into()
+            .unwrap_or(i64::MAX);
+        orchard.tree_photos.push(StoredTreePhoto {
+            id,
+            orchard_id,
+            tree_id,
+            photo,
+            created_at_unix_seconds,
+        });
         Ok(true)
     }
 
@@ -631,13 +660,75 @@ impl TreePhotoStorage for InMemoryOrchardStorage {
             .tree_photos
             .iter()
             .rev()
-            .find(|(stored_orchard_id, stored_tree_id, _)| {
-                *stored_orchard_id == orchard_id && *stored_tree_id == tree_id
-            })
-            .map(|(_, _, photo)| match variant {
-                TreePhotoVariant::Full => photo.full_webp.clone(),
-                TreePhotoVariant::Thumbnail => photo.thumbnail_webp.clone(),
+            .find(|stored| stored.orchard_id == orchard_id && stored.tree_id == tree_id)
+            .map(|stored| match variant {
+                TreePhotoVariant::Full => stored.photo.full_webp.clone(),
+                TreePhotoVariant::Thumbnail => stored.photo.thumbnail_webp.clone(),
             }))
+    }
+
+    fn tree_photos(
+        &mut self,
+        orchard_id: OrchardId,
+        tree_id: TreeId,
+    ) -> Result<Option<Vec<TreePhotoSummary>>, TreePhotoStorageError> {
+        let orchard = self.orchard.lock().unwrap();
+        let belongs_to_orchard = tree_index(tree_id)
+            .and_then(|index| orchard.tree_orchard_ids.get(index))
+            .is_some_and(|stored_orchard_id| *stored_orchard_id == Some(orchard_id));
+        if !belongs_to_orchard {
+            return Ok(None);
+        }
+        Ok(Some(
+            orchard
+                .tree_photos
+                .iter()
+                .rev()
+                .filter(|stored| stored.orchard_id == orchard_id && stored.tree_id == tree_id)
+                .map(|stored| TreePhotoSummary {
+                    id: stored.id,
+                    created_at_unix_seconds: stored.created_at_unix_seconds,
+                })
+                .collect(),
+        ))
+    }
+
+    fn tree_photo(
+        &mut self,
+        orchard_id: OrchardId,
+        tree_id: TreeId,
+        photo_id: TreePhotoId,
+        variant: TreePhotoVariant,
+    ) -> Result<Option<Vec<u8>>, TreePhotoStorageError> {
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .tree_photos
+            .iter()
+            .find(|stored| {
+                stored.id == photo_id
+                    && stored.orchard_id == orchard_id
+                    && stored.tree_id == tree_id
+            })
+            .map(|stored| match variant {
+                TreePhotoVariant::Full => stored.photo.full_webp.clone(),
+                TreePhotoVariant::Thumbnail => stored.photo.thumbnail_webp.clone(),
+            }))
+    }
+
+    fn delete_tree_photo(
+        &mut self,
+        orchard_id: OrchardId,
+        tree_id: TreeId,
+        photo_id: TreePhotoId,
+    ) -> Result<bool, TreePhotoStorageError> {
+        let mut orchard = self.orchard.lock().unwrap();
+        let original_len = orchard.tree_photos.len();
+        orchard.tree_photos.retain(|stored| {
+            stored.id != photo_id || stored.orchard_id != orchard_id || stored.tree_id != tree_id
+        });
+        Ok(orchard.tree_photos.len() != original_len)
     }
 }
 
@@ -1199,12 +1290,10 @@ impl OrchardStorage for InMemoryOrchardStorage {
                 Ok(OrchardTree {
                     id: TreeId((index + 1) as u64),
                     row_rank: orchard.tree_row_ranks.get(index).copied().flatten(),
-                    has_photo: orchard.tree_photos.iter().any(
-                        |(stored_orchard_id, stored_tree_id, _)| {
-                            orchard.tree_orchard_ids.get(index) == Some(&Some(*stored_orchard_id))
-                                && stored_tree_id.0 == (index + 1) as u64
-                        },
-                    ),
+                    has_photo: orchard.tree_photos.iter().any(|stored| {
+                        orchard.tree_orchard_ids.get(index) == Some(&Some(stored.orchard_id))
+                            && stored.tree_id.0 == (index + 1) as u64
+                    }),
                     tree: tree.clone(),
                     plant_identity,
                     plant_cultivar,

@@ -435,6 +435,100 @@ async fn the_api_resizes_an_original_browser_image_and_converts_both_variants_to
 }
 
 #[tokio::test]
+async fn photo_links_can_list_and_add_but_only_the_owner_deletes_library_photos() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let created_link = client
+        .post(format!("{}/orchards/7/share-tokens", server.url()))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "permissions": { "harvest": false, "water": false, "add_photos": true }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    let photo_token = created_link["share_token"].as_str().unwrap();
+    let photo_url = format!("{}/orchards/7/trees/1/photos", server.url());
+    let first_full = webp(&[1, 2]);
+    let second_full = webp(&[3, 4]);
+
+    for full in [&first_full, &second_full] {
+        assert_eq!(
+            client
+                .post(&photo_url)
+                .header("x-orchard-share-token", photo_token)
+                .json(&photo_request(full, &webp(&[9])))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+    }
+
+    let library = client
+        .get(&photo_url)
+        .header("x-orchard-share-token", photo_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(library.status(), StatusCode::OK);
+    let library = library.json::<serde_json::Value>().await.unwrap();
+    let photos = library["photos"].as_array().unwrap();
+    assert_eq!(photos.len(), 2);
+    assert!(photos[0]["id"].as_u64().unwrap() > photos[1]["id"].as_u64().unwrap());
+    assert!(photos[0]["created_at_unix_seconds"].as_i64().unwrap() > 0);
+    let newest_id = photos[0]["id"].as_u64().unwrap();
+
+    let newest = client
+        .get(format!("{photo_url}/{newest_id}"))
+        .header("x-orchard-share-token", photo_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(newest.status(), StatusCode::OK);
+    assert_eq!(newest.bytes().await.unwrap().as_ref(), second_full);
+
+    assert_eq!(
+        client
+            .delete(format!("{photo_url}/{newest_id}"))
+            .header("x-orchard-share-token", photo_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .delete(format!("{photo_url}/{newest_id}"))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let remaining = client
+        .get(&photo_url)
+        .header("x-orchard-share-token", photo_token)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(remaining["photos"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn an_owner_lists_changes_and_revokes_hashed_share_tokens_with_independent_permissions() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await

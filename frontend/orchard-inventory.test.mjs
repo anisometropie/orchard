@@ -21,7 +21,7 @@ test("the tree editor leaves photo capture to the separate camera action", () =>
   });
 });
 
-test("clicking a tree presents one compact card with all four owner actions", () => {
+test("clicking a tree presents one compact card with the photo library after the camera", () => {
   const tree = {
     name: "Test tree",
     latin_name: "Testus arbor",
@@ -45,9 +45,17 @@ test("clicking a tree presents one compact card with all four owner actions", ()
       ["Harvest", "Not set"],
     ],
     showPhoto: true,
-    actions: ["move", "edit", "filter", "photo"],
+    actions: ["move", "edit", "filter", "photo", "library"],
   };
   assert.deepEqual(selectedCard, expectedCard);
+});
+
+test("a read-only tree still exposes its photo library without an upload action", () => {
+  assert.deepEqual(
+    treePopupPresentation({ name: "Test tree" }, { interaction: "selected" })
+      .actions,
+    ["library"],
+  );
 });
 
 test("hovering a tree on desktop presents only its name and existing photo", () => {

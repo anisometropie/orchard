@@ -17,7 +17,8 @@ use crate::hexagon::models::{
     MapConfiguration, Orchard, OrchardId, OrchardShareAccess, OrchardSharePermissions,
     OrchardShareTokenId, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
     PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId,
-    TreePhoto, TreePhotoVariant, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
+    TreePhoto, TreePhotoId, TreePhotoSummary, TreePhotoVariant, User, UserId, WateringRun,
+    WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -435,6 +436,96 @@ impl TreePhotoStorage for PostgresOrchardStorage {
             )
             .map(|row| row.map(|row| row.get(0)))
             .map_err(|_| TreePhotoStorageError::PhotoCouldNotBeRead)
+    }
+
+    fn tree_photos(
+        &mut self,
+        orchard_id: OrchardId,
+        tree_id: TreeId,
+    ) -> Result<Option<Vec<TreePhotoSummary>>, TreePhotoStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| TreePhotoStorageError::PhotosCouldNotBeListed)?;
+        let tree_id =
+            i64::try_from(tree_id.0).map_err(|_| TreePhotoStorageError::PhotosCouldNotBeListed)?;
+        let rows = self
+            .client
+            .query(
+                "SELECT photo.id, EXTRACT(EPOCH FROM photo.created_at)::BIGINT
+                 FROM trees tree
+                 LEFT JOIN tree_photos photo
+                   ON photo.tree_id = tree.id AND photo.orchard_id = tree.orchard_id
+                 WHERE tree.id = $2 AND tree.orchard_id = $1
+                 ORDER BY photo.id DESC",
+                &[&orchard_id, &tree_id],
+            )
+            .map_err(|_| TreePhotoStorageError::PhotosCouldNotBeListed)?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(
+            rows.into_iter()
+                .filter_map(|row| {
+                    let id = row.get::<_, Option<i64>>(0)?;
+                    let created_at_unix_seconds = row.get::<_, Option<i64>>(1)?;
+                    Some(TreePhotoSummary {
+                        id: TreePhotoId(u64::try_from(id).ok()?),
+                        created_at_unix_seconds,
+                    })
+                })
+                .collect(),
+        ))
+    }
+
+    fn tree_photo(
+        &mut self,
+        orchard_id: OrchardId,
+        tree_id: TreeId,
+        photo_id: TreePhotoId,
+        variant: TreePhotoVariant,
+    ) -> Result<Option<Vec<u8>>, TreePhotoStorageError> {
+        let orchard_id =
+            i64::try_from(orchard_id.0).map_err(|_| TreePhotoStorageError::PhotoCouldNotBeRead)?;
+        let tree_id =
+            i64::try_from(tree_id.0).map_err(|_| TreePhotoStorageError::PhotoCouldNotBeRead)?;
+        let photo_id =
+            i64::try_from(photo_id.0).map_err(|_| TreePhotoStorageError::PhotoCouldNotBeRead)?;
+        let column = match variant {
+            TreePhotoVariant::Full => "image_webp",
+            TreePhotoVariant::Thumbnail => "thumbnail_webp",
+        };
+        self.client
+            .query_opt(
+                &format!(
+                    "SELECT {column}
+                     FROM tree_photos
+                     WHERE orchard_id = $1 AND tree_id = $2 AND id = $3"
+                ),
+                &[&orchard_id, &tree_id, &photo_id],
+            )
+            .map(|row| row.map(|row| row.get(0)))
+            .map_err(|_| TreePhotoStorageError::PhotoCouldNotBeRead)
+    }
+
+    fn delete_tree_photo(
+        &mut self,
+        orchard_id: OrchardId,
+        tree_id: TreeId,
+        photo_id: TreePhotoId,
+    ) -> Result<bool, TreePhotoStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| TreePhotoStorageError::PhotoCouldNotBeDeleted)?;
+        let tree_id =
+            i64::try_from(tree_id.0).map_err(|_| TreePhotoStorageError::PhotoCouldNotBeDeleted)?;
+        let photo_id =
+            i64::try_from(photo_id.0).map_err(|_| TreePhotoStorageError::PhotoCouldNotBeDeleted)?;
+        self.client
+            .execute(
+                "DELETE FROM tree_photos
+                 WHERE orchard_id = $1 AND tree_id = $2 AND id = $3",
+                &[&orchard_id, &tree_id, &photo_id],
+            )
+            .map(|deleted| deleted == 1)
+            .map_err(|_| TreePhotoStorageError::PhotoCouldNotBeDeleted)
     }
 }
 

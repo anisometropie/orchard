@@ -21,7 +21,7 @@ use crate::hexagon::models::{
     HarvestRunTarget, HarvestScheduleOwner, HarvestTreeOutcome, HarvestedPart, InfraspecificRank,
     MapConfiguration, NamedTaxon, OrchardId, OrchardSharePermission, OrchardSharePermissions,
     OrchardShareTokenId, OrchardTree, PlantCultivarId, PlantIdentity, PlantIdentityId, Tree,
-    TreeId, TreePhotoVariant, WateringRunId, WateringRunTarget,
+    TreeId, TreePhotoId, TreePhotoVariant, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, MapConfigurationStorage, OrchardStorage, TreePhotoStorage,
@@ -64,6 +64,9 @@ use crate::hexagon::use_cases::change_tree_condition::{
 use crate::hexagon::use_cases::defer_harvest_tree::{
     HarvestTreeDeferralError, HarvestTreeDeferred, defer_harvest_tree,
 };
+use crate::hexagon::use_cases::delete_tree_photo::{
+    TreePhotoDeleteError, TreePhotoDeletionRequested, delete_tree_photo,
+};
 use crate::hexagon::use_cases::list_harvest_candidates::{
     HarvestCandidatesError, HarvestCandidatesRequested, list_harvest_candidates,
 };
@@ -75,6 +78,9 @@ use crate::hexagon::use_cases::list_orchard_shares::{
     OrchardSharesListError, OrchardSharesRequested, list_orchard_shares,
 };
 use crate::hexagon::use_cases::list_orchard_trees::list_trees_for_orchard;
+use crate::hexagon::use_cases::list_tree_photos::{
+    TreePhotosListError, TreePhotosRequested, list_tree_photos,
+};
 use crate::hexagon::use_cases::load_active_harvest_run::{
     ActiveHarvestRunError, load_active_harvest_run,
 };
@@ -89,6 +95,9 @@ use crate::hexagon::use_cases::load_latest_tree_photo::{
 };
 use crate::hexagon::use_cases::load_map_configuration::{
     MapConfigurationLoadError, load_orchard_map_configuration,
+};
+use crate::hexagon::use_cases::load_tree_photo::{
+    TreePhotoLoadError, TreePhotoRequested, load_tree_photo,
 };
 use crate::hexagon::use_cases::log_in_user::{UserLoginError, UserLoginRequested, log_in_user};
 use crate::hexagon::use_cases::log_out_user::log_out_user;
@@ -180,7 +189,9 @@ where
         )
         .route(
             "/orchards/{orchard_id}/trees/{tree_id}/photos",
-            post(add_tree_photo_handler::<U>).layer(DefaultBodyLimit::max(55 * 1024 * 1024)),
+            get(list_tree_photos_handler::<U>)
+                .post(add_tree_photo_handler::<U>)
+                .layer(DefaultBodyLimit::max(55 * 1024 * 1024)),
         )
         .route(
             "/orchards/{orchard_id}/trees/{tree_id}/photos/latest",
@@ -189,6 +200,14 @@ where
         .route(
             "/orchards/{orchard_id}/trees/{tree_id}/photos/latest/thumbnail",
             get(latest_tree_photo_thumbnail_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/trees/{tree_id}/photos/{photo_id}",
+            get(tree_photo_handler::<U>).delete(delete_tree_photo_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/trees/{tree_id}/photos/{photo_id}/thumbnail",
+            get(tree_photo_thumbnail_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/map-config",
@@ -1906,6 +1925,53 @@ enum DecodedTreePhotoRequest {
     },
 }
 
+async fn list_tree_photos_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, tree_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + TreePhotoStorage + Send + 'static,
+{
+    let credential = orchard_read_credential(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_orchard_reader(
+            OrchardReadAccessRequested {
+                orchard_id,
+                credential,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+            OrchardReadAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        list_tree_photos(
+            TreePhotosRequested {
+                orchard_id,
+                tree_id: TreeId(tree_id),
+            },
+            &mut *storage,
+        )
+        .map(|photos| {
+            Json(json!({
+                "photos": photos.into_iter().map(|photo| json!({
+                    "id": photo.id.0,
+                    "created_at_unix_seconds": photo.created_at_unix_seconds,
+                })).collect::<Vec<_>>()
+            }))
+        })
+        .map_err(|error| match error {
+            TreePhotosListError::TreeNotFound => StatusCode::NOT_FOUND,
+            TreePhotosListError::PhotosCouldNotBeListed => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
 async fn add_tree_photo_handler<U>(
     State(storage): State<Arc<Mutex<U>>>,
     Path((orchard_id, tree_id)): Path<(u64, u64)>,
@@ -2011,6 +2077,75 @@ where
     .await
 }
 
+async fn tree_photo_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, tree_id, photo_id)): Path<(u64, u64, u64)>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + TreePhotoStorage + Send + 'static,
+{
+    specific_tree_photo_response(
+        storage,
+        OrchardId(orchard_id),
+        TreeId(tree_id),
+        TreePhotoId(photo_id),
+        headers,
+        TreePhotoVariant::Full,
+    )
+    .await
+}
+
+async fn tree_photo_thumbnail_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, tree_id, photo_id)): Path<(u64, u64, u64)>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + TreePhotoStorage + Send + 'static,
+{
+    specific_tree_photo_response(
+        storage,
+        OrchardId(orchard_id),
+        TreeId(tree_id),
+        TreePhotoId(photo_id),
+        headers,
+        TreePhotoVariant::Thumbnail,
+    )
+    .await
+}
+
+async fn delete_tree_photo_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, tree_id, photo_id)): Path<(u64, u64, u64)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, StatusCode>
+where
+    U: AccessControl + TreePhotoStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        delete_tree_photo(
+            TreePhotoDeletionRequested {
+                orchard_id,
+                tree_id: TreeId(tree_id),
+                photo_id: TreePhotoId(photo_id),
+            },
+            &mut *storage,
+        )
+        .map(|()| StatusCode::NO_CONTENT)
+        .map_err(|error| match error {
+            TreePhotoDeleteError::PhotoNotFound => StatusCode::NOT_FOUND,
+            TreePhotoDeleteError::PhotoCouldNotBeDeleted => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
 async fn tree_photo_response<U>(
     storage: Arc<Mutex<U>>,
     orchard_id: OrchardId,
@@ -2046,6 +2181,57 @@ where
         .map_err(|error| match error {
             LatestTreePhotoLoadError::PhotoNotFound => StatusCode::NOT_FOUND,
             LatestTreePhotoLoadError::PhotoCouldNotBeRead => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, "image/webp")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("Referrer-Policy", "no-referrer")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(Body::from(bytes))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn specific_tree_photo_response<U>(
+    storage: Arc<Mutex<U>>,
+    orchard_id: OrchardId,
+    tree_id: TreeId,
+    photo_id: TreePhotoId,
+    headers: HeaderMap,
+    variant: TreePhotoVariant,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + TreePhotoStorage + Send + 'static,
+{
+    let credential = orchard_read_credential(&headers)?;
+    let bytes = tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        authorize_orchard_reader(
+            OrchardReadAccessRequested {
+                orchard_id,
+                credential,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+            OrchardReadAccessError::AccessCouldNotBeChecked => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        load_tree_photo(
+            TreePhotoRequested {
+                orchard_id,
+                tree_id,
+                photo_id,
+                variant,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            TreePhotoLoadError::PhotoNotFound => StatusCode::NOT_FOUND,
+            TreePhotoLoadError::PhotoCouldNotBeRead => StatusCode::INTERNAL_SERVER_ERROR,
         })
     })
     .await
