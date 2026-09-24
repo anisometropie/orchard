@@ -2360,13 +2360,14 @@
         wateringRouteWithoutSkippedTrees,
         wateringRowIsOrdered,
         wateringRunSelectionKey,
+        wateringRunForRow,
         wateringRows,
         wateringStartRequest,
         wateringStartConflictMessage,
         wateringTargetGeoJson,
         wateringWideCenter,
         waterSourceGeoJson,
-      } from "./watering.mjs?v=19";
+      } from "./watering.mjs?v=20";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -4486,17 +4487,13 @@
         wateringTargetScope.querySelector('option[value="danger"]').textContent =
           `Danger trees · ${currentDangerTreeCount}`;
         const watersDangerTrees = wateringTargetScope.value === "danger";
-        const selectedRowIsOrdered = wateringRowIsOrdered(
-          eligibleRows,
-          wateringRow.value,
-        );
         const carryCapacity = wateringCarryCapacity(
           wateringCarryCapacityInput.value,
         );
         wateringRowField.hidden = watersDangerTrees;
         wateringSourceControls.hidden = !watersDangerTrees;
-        wateringTargetScope.disabled = wateringProgress != null;
-        wateringRow.disabled = wateringProgress != null;
+        wateringTargetScope.disabled = wateringProgress != null || wateringMutationPending;
+        wateringRow.disabled = wateringProgress != null || wateringMutationPending;
         wateringPlaceSource.disabled = wateringProgress != null;
         wateringCarryCapacityInput.disabled = wateringProgress != null;
         wateringCarryCapacityInput.setCustomValidity(
@@ -4516,22 +4513,7 @@
           map.getCanvas().style.cursor = manualOrder ? "crosshair" : "";
         }
         updateWaterSourcePin();
-        wateringHelp.textContent = watersDangerTrees
-          ? carryCapacity == null
-            ? "Enter a positive whole number of watering cans."
-            : carryCapacity === 1
-              ? "The route starts at the tree closest to the source, then follows one optimized path through every danger tree. Returns to the source are not shown."
-              : `Blue and purple loops show every source → ${carryCapacity} trees → source trip. Done always advances to the next tree.`
-          : !selectedRowIsOrdered
-            ? "Order every tree included in watering in this row before starting."
-            : "Trees are visited in their saved order. Dead and excluded trees are skipped in new runs.";
-        wateringStart.disabled =
-          wateringMutationPending ||
-          wateringProgress != null ||
-          harvestProgress != null ||
-          (watersDangerTrees
-            ? currentDangerTreeCount === 0 || !wateringSource || carryCapacity == null
-            : !wateringRow.value || !selectedRowIsOrdered);
+        refreshWateringStartControls();
         wateringStart.hidden = wateringProgress != null;
         wateringPause.hidden = wateringProgress == null;
         wateringPause.disabled = wateringMutationPending;
@@ -4545,6 +4527,33 @@
         rowOrderAutomatic.disabled = rows.length === 0;
         rowOrderManual.disabled = rows.length === 0;
         refreshTourPresentation();
+      }
+
+      function refreshWateringStartControls() {
+        const watersDangerTrees = wateringTargetScope.value === "danger";
+        const carryCapacity = wateringCarryCapacity(wateringCarryCapacityInput.value);
+        const selectedRowIsOrdered = wateringRowIsOrdered(wateringRows(orchardFeatures), wateringRow.value);
+        const existingRun = watersDangerTrees ? null : wateringRunForRow(savedWateringRuns, wateringRow.value);
+        wateringHelp.textContent = watersDangerTrees
+          ? carryCapacity == null
+            ? "Enter a positive whole number of watering cans."
+            : carryCapacity === 1
+              ? "The route starts at the tree closest to the source, then follows one optimized path through every danger tree. Returns to the source are not shown."
+              : `Blue and purple loops show every source → ${carryCapacity} trees → source trip. Done always advances to the next tree.`
+          : existingRun && !wateringProgress
+            ? existingRun.paused
+              ? "This row has a paused watering run. Use Resume run below."
+              : "A watering run is already in progress for this row. Use Join run below."
+          : !selectedRowIsOrdered
+            ? "Order every tree included in watering in this row before starting."
+            : "Trees are visited in their saved order. Dead and excluded trees are skipped in new runs.";
+        wateringStart.disabled =
+          wateringMutationPending ||
+          wateringProgress != null ||
+          harvestProgress != null ||
+          (watersDangerTrees
+            ? dangerTreeCount(orchardFeatures) === 0 || !wateringSource || carryCapacity == null
+            : !wateringRow.value || !selectedRowIsOrdered || existingRun != null);
       }
 
       async function saveRowOrder(rowName, order) {
@@ -4947,6 +4956,7 @@
         if (JSON.stringify(runs) === JSON.stringify(savedWateringRuns)) return;
         savedWateringRuns = runs;
         renderSavedWateringRuns();
+        refreshWateringStartControls();
       }
 
       function rememberWateringRun(progress) {
@@ -5142,11 +5152,12 @@
 
       async function startWatering() {
         const target = wateringTargetScope.value;
+        const rowName = wateringRow.value;
         const carryCapacity = wateringCarryCapacity(
           wateringCarryCapacityInput.value,
         );
         if (
-          (target === "row" && !wateringRow.value) ||
+          (target === "row" && (!rowName || wateringRunForRow(savedWateringRuns, rowName))) ||
           (target === "danger" && (!wateringSource || carryCapacity == null)) ||
           wateringProgress ||
           harvestProgress ||
@@ -5161,6 +5172,10 @@
         wateringWideZoomLevel = null;
         renderWateringCameraMode();
         try {
+          if (target === "row") {
+            await refreshSavedWateringRuns();
+            if (stateVersion !== wateringStateVersion || wateringRunForRow(savedWateringRuns, rowName)) return;
+          }
           const response = await fetch(
             orchardResourceUrl(currentAccess, "watering-runs"),
             {
@@ -5172,7 +5187,7 @@
               body: JSON.stringify(
                 wateringStartRequest(
                   target,
-                  wateringRow.value,
+                  rowName,
                   wateringSource,
                   carryCapacity,
                 ),
@@ -7737,6 +7752,7 @@
       });
       harvestTourClose.addEventListener("click", () => setWorkflowPanel(null));
       wateringTargetScope.addEventListener("change", refreshWorkflowRows);
+      wateringRow.addEventListener("change", refreshWateringStartControls);
       wateringPlaceSource.addEventListener("click", beginWaterSourcePlacement);
       wateringCarryCapacityInput.addEventListener("input", refreshWorkflowRows);
       wateringStart.addEventListener("click", startWatering);

@@ -21,6 +21,7 @@ import {
   wateringRouteWindow,
   wateringRowIsOrdered,
   wateringRunSelectionKey,
+  wateringRunForRow,
   wateringStartConflictMessage,
   wateringCancellationNeedsConfirmation,
   wateringProgressSummary,
@@ -280,6 +281,19 @@ test("scope the tab's saved run to the orchard and access identity", () => {
   assert.notEqual(wateringRunSelectionKey(first), wateringRunSelectionKey({ mode: "editable", orchardId: 1 }, 10));
   assert.notEqual(wateringRunSelectionKey({ mode: "editable", orchardId: 1 }, 10), wateringRunSelectionKey({ mode: "editable", orchardId: 1 }, 11));
   assert.equal(wateringRunSelectionKey({ mode: "empty", orchardId: null }), null);
+});
+
+test("an unfinished run blocks starting its row, but not another row or a completed run", () => {
+  const active = { run_id: 1, target: "row", row_name: "North", paused: false, next_tree: { id: 11 } };
+  const paused = { ...active, run_id: 2, paused: true };
+  const completed = { ...active, next_tree: null };
+  const danger = { ...active, target: "danger" };
+  assert.equal(wateringRunForRow([active], "North"), active);
+  assert.equal(wateringRunForRow([active], "South"), null);
+  assert.equal(wateringRunForRow([paused], "North"), paused);
+  assert.equal(wateringRunForRow([paused, active], "North"), active);
+  assert.equal(wateringRunForRow([completed, danger], "North"), null);
+  assert.equal(wateringRunForRow([], "North"), null);
 });
 
 test("default the water source a few metres north of Ronde de Bordeaux", () => {

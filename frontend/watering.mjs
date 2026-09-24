@@ -182,6 +182,13 @@ export function availableWateringRuns(runs, selectedRunId = null) {
   );
 }
 
+export function wateringRunForRow(runs, rowName) {
+  const matching = runs.filter((run) =>
+    run.target === "row" && run.row_name === rowName && run.next_tree != null,
+  );
+  return matching.find((run) => !run.paused) || matching[0] || null;
+}
+
 export function selectedWateringRun(runs, selectedRunId) {
   if (selectedRunId == null) return null;
   return runs.find((run) =>
