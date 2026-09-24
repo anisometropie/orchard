@@ -81,6 +81,7 @@ use crate::hexagon::use_cases::list_orchard_trees::list_trees_for_orchard;
 use crate::hexagon::use_cases::list_tree_photos::{
     TreePhotosListError, TreePhotosRequested, list_tree_photos,
 };
+use crate::hexagon::use_cases::list_watering_runs::list_watering_runs;
 use crate::hexagon::use_cases::load_active_harvest_run::{
     ActiveHarvestRunError, load_active_harvest_run,
 };
@@ -99,6 +100,7 @@ use crate::hexagon::use_cases::load_map_configuration::{
 use crate::hexagon::use_cases::load_tree_photo::{
     TreePhotoLoadError, TreePhotoRequested, load_tree_photo,
 };
+use crate::hexagon::use_cases::load_watering_run::{WateringRunLoadError, load_watering_run};
 use crate::hexagon::use_cases::log_in_user::{UserLoginError, UserLoginRequested, log_in_user};
 use crate::hexagon::use_cases::log_out_user::log_out_user;
 use crate::hexagon::use_cases::move_tree::{
@@ -106,6 +108,9 @@ use crate::hexagon::use_cases::move_tree::{
 };
 use crate::hexagon::use_cases::order_orchard_row::{
     OrchardRowOrderError, OrchardRowOrderRequested, RowOrder, order_orchard_row,
+};
+use crate::hexagon::use_cases::pause_watering_run::{
+    WateringRunPauseError, WateringRunPauseRequested, pause_watering_run,
 };
 use crate::hexagon::use_cases::record_tree_harvested::{
     TreeHarvestedEverything, TreeHarvestedEverythingError, record_tree_harvested,
@@ -119,6 +124,9 @@ use crate::hexagon::use_cases::replace_plant_harvest_windows::{
 };
 use crate::hexagon::use_cases::restore_user_session::{
     UserSessionRestorationError, restore_user_session,
+};
+use crate::hexagon::use_cases::resume_watering_run::{
+    WateringRunResumeError, WateringRunResumeRequested, resume_watering_run,
 };
 use crate::hexagon::use_cases::revoke_orchard_share::{
     OrchardShareRevokeError, OrchardShareRevoked, revoke_orchard_share,
@@ -256,11 +264,19 @@ where
         )
         .route(
             "/orchards/{orchard_id}/watering-runs",
-            post(start_watering_run_handler::<U>),
+            get(list_watering_runs_handler::<U>).post(start_watering_run_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/watering-runs/{watering_run_id}",
-            delete(cancel_watering_run_handler::<U>),
+            get(watering_run_handler::<U>).delete(cancel_watering_run_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/watering-runs/{watering_run_id}/pause",
+            post(pause_watering_run_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/watering-runs/{watering_run_id}/resume",
+            post(resume_watering_run_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/watering-runs/{watering_run_id}/watered",
@@ -963,6 +979,117 @@ fn watering_conflict_response(code: &str, message: &str) -> Response {
         .into_response()
 }
 
+async fn list_watering_runs_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_watering_credential(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_watering_access(&mut *storage, orchard_id, credential)?;
+        list_watering_runs(orchard_id, &mut *storage)
+            .map(|runs| Json(json!({"runs": runs.into_iter().map(watering_progress_json).collect::<Vec<_>>()})))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn watering_run_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_watering_credential(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_watering_access(&mut *storage, orchard_id, credential)?;
+        load_watering_run(orchard_id, WateringRunId(run_id), &mut *storage)
+            .map(|progress| Json(watering_progress_json(progress)))
+            .map_err(|error| match error {
+                WateringRunLoadError::WateringRunNotFound => StatusCode::NOT_FOUND,
+                WateringRunLoadError::WateringRunCouldNotBeLoaded => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn pause_watering_run_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_watering_credential(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_watering_access(&mut *storage, orchard_id, credential)?;
+        pause_watering_run(
+            WateringRunPauseRequested {
+                orchard_id,
+                watering_run_id: WateringRunId(run_id),
+            },
+            &mut *storage,
+        )
+        .map(|progress| Json(watering_progress_json(progress)))
+        .map_err(|error| match error {
+            WateringRunPauseError::WateringRunNotFound => StatusCode::NOT_FOUND,
+            WateringRunPauseError::WateringRunAlreadyCompleted => StatusCode::CONFLICT,
+            WateringRunPauseError::WateringRunCouldNotBePaused => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn resume_watering_run_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_watering_credential(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_watering_access(&mut *storage, orchard_id, credential)?;
+        resume_watering_run(
+            WateringRunResumeRequested {
+                orchard_id,
+                watering_run_id: WateringRunId(run_id),
+            },
+            &mut *storage,
+        )
+        .map(|progress| Json(watering_progress_json(progress)))
+        .map_err(|error| match error {
+            WateringRunResumeError::WateringRunNotFound => StatusCode::NOT_FOUND,
+            WateringRunResumeError::WateringRunAlreadyCompleted
+            | WateringRunResumeError::AnotherWateringRunIsActive
+            | WateringRunResumeError::HarvestRunIsActive => StatusCode::CONFLICT,
+            WateringRunResumeError::WateringRunCouldNotBeResumed => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
 async fn active_watering_run_handler<U>(
     State(storage): State<Arc<Mutex<U>>>,
     Path(orchard_id): Path<u64>,
@@ -1023,9 +1150,9 @@ where
         .map(|progress| Json(watering_progress_json(progress)))
         .map_err(|error| match error {
             TreeWateredError::WateringRunNotFound => StatusCode::NOT_FOUND,
-            TreeWateredError::WateringRunAlreadyCompleted | TreeWateredError::TreeIsNotNext => {
-                StatusCode::CONFLICT
-            }
+            TreeWateredError::WateringRunAlreadyCompleted
+            | TreeWateredError::WateringRunIsPaused
+            | TreeWateredError::TreeIsNotNext => StatusCode::CONFLICT,
             TreeWateredError::TreeCouldNotBeRecorded => StatusCode::INTERNAL_SERVER_ERROR,
         })
     })
@@ -1073,6 +1200,7 @@ fn watering_progress_json(progress: WateringProgress) -> Value {
     };
     json!({
         "run_id": progress.run_id.0,
+        "paused": progress.paused,
         "target": target,
         "target_label": progress.target.label(),
         "row_name": row_name,

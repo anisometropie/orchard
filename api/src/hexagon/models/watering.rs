@@ -28,6 +28,7 @@ pub struct WateringRun {
     pub ordered_tree_ids: Vec<TreeId>,
     pub watered_tree_ids: Vec<TreeId>,
     pub completed: bool,
+    pub paused: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

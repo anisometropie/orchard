@@ -8,6 +8,24 @@ use orchard_api::hexagon::models::{
 use orchard_api::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
 #[test]
+fn paused_watering_progress_honors_the_storage_contract() {
+    #[path = "../../../../tests/support/watering_run_fixture.rs"]
+    mod watering_run_fixture;
+    #[path = "../../../../tests/support/watering_pause_contract.rs"]
+    mod watering_pause_contract;
+    let (mut storage, _) = watering_run_fixture::storage();
+    let run_id = orchard_api::hexagon::models::WateringRunId(1);
+    storage
+        .transaction(|orchard| orchard.mark_watering_tree_watered(run_id, TreeId(1)))
+        .unwrap();
+    watering_pause_contract::assert_pause_preserves_progress_and_rolls_back(
+        &mut storage,
+        OrchardId(7),
+        run_id,
+    );
+}
+
+#[test]
 fn reject_missing_identity() {
     let (mut orchard_storage, observed_orchard) = InMemoryOrchardStorage::new();
     let save_result = orchard_storage.transaction(|orchard| {

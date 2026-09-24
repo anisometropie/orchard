@@ -20,6 +20,7 @@ pub struct WateringTree {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WateringProgress {
     pub run_id: WateringRunId,
+    pub paused: bool,
     pub target: WateringRunTarget,
     pub water_source: Option<crate::hexagon::models::GeoPoint>,
     pub carry_capacity: Option<u32>,
@@ -91,6 +92,7 @@ pub fn start_watering_run(
             ordered_tree_ids,
             watered_tree_ids: vec![],
             completed: false,
+            paused: false,
         };
         watering_progress(&run, &orchard_trees)
             .ok_or(WateringRunStartError::WateringRunCouldNotBeStarted)
@@ -128,6 +130,7 @@ pub(crate) fn watering_progress(
         .cloned();
     Some(WateringProgress {
         run_id: run.id,
+        paused: run.paused,
         target: run.target.clone(),
         water_source: run.water_source,
         carry_capacity: run.carry_capacity,

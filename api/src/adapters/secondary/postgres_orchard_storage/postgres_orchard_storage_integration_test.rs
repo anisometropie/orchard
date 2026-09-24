@@ -255,6 +255,22 @@ fn persist_row_ranks_and_resumable_watering_progress() {
             .watered_tree_ids,
         vec![TreeId(2)]
     );
+    #[path = "../../../../tests/support/watering_pause_contract.rs"]
+    mod watering_pause_contract;
+    let before_timestamps: String = verification_connection.query_one(
+        "SELECT json_agg(t ORDER BY row_rank)::text FROM watering_run_trees t WHERE watering_run_id = $1",
+        &[&(run_id.0 as i64)],
+    ).unwrap().get(0);
+    watering_pause_contract::assert_pause_preserves_progress_and_rolls_back(
+        &mut storage,
+        OrchardId(1),
+        run_id,
+    );
+    let after_timestamps: String = verification_connection.query_one(
+        "SELECT json_agg(t ORDER BY row_rank)::text FROM watering_run_trees t WHERE watering_run_id = $1",
+        &[&(run_id.0 as i64)],
+    ).unwrap().get(0);
+    assert_eq!(before_timestamps, after_timestamps);
     storage
         .transaction(|orchard| orchard.complete_watering_run(run_id))
         .unwrap();
@@ -2379,6 +2395,22 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/024_add_share_capabilities_and_management.sql"
+            ))
+            .unwrap();
+    }
+    let watering_pause_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+         WHERE table_schema = current_schema() AND table_name = 'watering_runs'
+         AND column_name = 'paused')",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !watering_pause_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/025_add_paused_watering_runs.sql"
             ))
             .unwrap();
     }

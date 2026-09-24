@@ -159,6 +159,14 @@ or toolchain change, a dependency lockfile change, or a cache prune. A one-line
 Rust source change should otherwise reuse compiled dependencies even though
 Cargo still prints a short compilation/checking phase.
 
+## Watering runs
+
+Use **Pause run** to stop watering and save the route and every recorded tree.
+Paused runs appear in the watering menu with a **Resume run** button, which
+continues at the next unwatered tree. Pausing affects everyone working on that
+run. **Cancel run** remains a separate action that deletes the run and its
+recorded progress.
+
 ## Shared links
 
 View and watering share links are permanent database records. Creating a new

@@ -938,6 +938,162 @@ async fn only_a_watering_link_can_water_and_only_the_owner_can_order_a_row() {
 }
 
 #[tokio::test]
+async fn watering_links_pause_resume_and_load_only_their_orchards_saved_progress() {
+    let mut storage = owned_storage();
+    for orchard_id in [OrchardId(7), OrchardId(8)] {
+        storage
+            .transaction(|orchard| {
+                orchard.create_watering_run(
+                    orchard_id,
+                    &WateringRunTarget::Row("North".into()),
+                    None,
+                    None,
+                    &[TreeId(1)],
+                )
+            })
+            .unwrap();
+    }
+    let server = start_http_server(storage, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let token = create_watering_share_token(&client, server.url(), &cookie).await;
+    let viewer = create_share_token(&client, server.url(), &cookie).await;
+    for (method, path) in [
+        (reqwest::Method::GET, "watering-runs"),
+        (reqwest::Method::GET, "watering-runs/1"),
+        (reqwest::Method::POST, "watering-runs/1/pause"),
+        (reqwest::Method::POST, "watering-runs/1/resume"),
+    ] {
+        assert_eq!(
+            client
+                .request(
+                    method.clone(),
+                    format!("{}/orchards/7/{path}", server.url())
+                )
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .request(
+                    method.clone(),
+                    format!("{}/orchards/7/{path}", server.url())
+                )
+                .header("x-orchard-share-token", &viewer)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            client
+                .request(method, format!("{}/orchards/8/{path}", server.url()))
+                .header("x-orchard-share-token", &token)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    for suffix in ["", "/pause", "/resume"] {
+        let method = if suffix.is_empty() {
+            reqwest::Method::GET
+        } else {
+            reqwest::Method::POST
+        };
+        assert_eq!(
+            client
+                .request(
+                    method,
+                    format!("{}/orchards/7/watering-runs/2{suffix}", server.url())
+                )
+                .header("x-orchard-share-token", &token)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    let paused = client
+        .post(format!("{}/orchards/7/watering-runs/1/pause", server.url()))
+        .header("x-orchard-share-token", &token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(paused.status(), StatusCode::OK);
+    let paused = paused.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(paused["paused"], true);
+    assert_eq!(
+        client
+            .get(format!("{}/orchards/7/watering-run", server.url()))
+            .header("x-orchard-share-token", &token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let runs = client
+        .get(format!("{}/orchards/7/watering-runs", server.url()))
+        .header("x-orchard-share-token", &token)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(runs["runs"], serde_json::json!([paused]));
+    assert_eq!(
+        client
+            .post(format!(
+                "{}/orchards/7/watering-runs/1/watered",
+                server.url()
+            ))
+            .header("x-orchard-share-token", &token)
+            .json(&serde_json::json!({"tree_id": 1}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let resumed = client
+        .post(format!(
+            "{}/orchards/7/watering-runs/1/resume",
+            server.url()
+        ))
+        .header("x-orchard-share-token", &token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resumed.status(), StatusCode::OK);
+    let resumed = resumed.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(resumed["paused"], false);
+    assert_eq!(resumed["run_id"], paused["run_id"]);
+    assert_eq!(resumed["next_tree"], paused["next_tree"]);
+    assert_eq!(
+        client
+            .get(format!("{}/orchards/7/watering-runs/1", server.url()))
+            .header("x-orchard-share-token", &token)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap(),
+        resumed
+    );
+}
+
+#[tokio::test]
 async fn a_combined_link_can_water_and_run_the_complete_harvest_workflow_but_cannot_edit() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await

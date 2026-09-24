@@ -98,6 +98,7 @@ struct InMemoryOrchardTransaction {
     staged_watering_runs: Vec<WateringRun>,
     staged_watered_trees: Vec<(WateringRunId, TreeId)>,
     staged_completed_watering_runs: Vec<WateringRunId>,
+    staged_watering_pause_changes: Vec<(WateringRunId, bool)>,
     staged_deleted_watering_runs: Vec<WateringRunId>,
     staged_harvest_runs: Vec<HarvestRun>,
     staged_harvest_tree_outcomes: Vec<(HarvestRunId, TreeId, HarvestTreeOutcome)>,
@@ -854,6 +855,15 @@ impl OrchardStorage for InMemoryOrchardStorage {
                         run.completed = true;
                     }
                 }
+                for (run_id, paused) in transaction.staged_watering_pause_changes {
+                    if let Some(run) = committed_orchard
+                        .watering_runs
+                        .iter_mut()
+                        .find(|run| run.id == run_id)
+                    {
+                        run.paused = paused;
+                    }
+                }
                 committed_orchard
                     .watering_runs
                     .retain(|run| !transaction.staged_deleted_watering_runs.contains(&run.id));
@@ -1378,7 +1388,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
             .unwrap()
             .watering_runs
             .iter()
-            .find(|run| run.orchard_id == orchard_id && !run.completed)
+            .find(|run| run.orchard_id == orchard_id && !run.completed && !run.paused)
             .cloned())
     }
 
@@ -1394,6 +1404,46 @@ impl OrchardStorage for InMemoryOrchardStorage {
             .iter()
             .find(|run| run.id == watering_run_id)
             .cloned())
+    }
+
+    fn unfinished_watering_runs(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<WateringRun>, OrchardStorageError> {
+        let mut runs = self
+            .orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .filter(|run| run.orchard_id == orchard_id && !run.completed)
+            .cloned()
+            .collect::<Vec<_>>();
+        runs.sort_by_key(|run| run.id.0);
+        Ok(runs)
+    }
+
+    fn set_watering_run_paused(
+        &mut self,
+        watering_run_id: WateringRunId,
+        paused: bool,
+    ) -> Result<(), OrchardStorageError> {
+        if !self
+            .orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .any(|run| run.id == watering_run_id && !run.completed)
+        {
+            return Err(OrchardStorageError::WateringRunCouldNotBeChanged);
+        }
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_watering_pause_changes
+            .push((watering_run_id, paused));
+        Ok(())
     }
 
     fn completed_watering_runs(
@@ -1468,6 +1518,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
             ordered_tree_ids: ordered_tree_ids.to_vec(),
             watered_tree_ids: vec![],
             completed: false,
+            paused: false,
         });
         Ok(run_id)
     }
@@ -2123,7 +2174,7 @@ impl InMemoryOrchardObserver {
             .unwrap()
             .watering_runs
             .iter()
-            .find(|run| run.orchard_id == orchard_id && !run.completed)
+            .find(|run| run.orchard_id == orchard_id && !run.completed && !run.paused)
             .map(|run| run.ordered_tree_ids.clone())
             .unwrap_or_default()
     }
@@ -2135,6 +2186,16 @@ impl InMemoryOrchardObserver {
             .watering_runs
             .iter()
             .any(|run| run.id == watering_run_id)
+    }
+
+    pub fn watering_run(&self, watering_run_id: WateringRunId) -> Option<WateringRun> {
+        self.orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .find(|run| run.id == watering_run_id)
+            .cloned()
     }
 
     pub fn harvest_windows(&self, owner: HarvestScheduleOwner) -> Vec<AnnualHarvestWindow> {

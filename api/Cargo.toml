@@ -115,6 +115,22 @@ name = "cancel_watering_run_unit"
 path = "src/hexagon/use_cases/cancel_watering_run/cancel_watering_run_unit_test.rs"
 
 [[test]]
+name = "pause_watering_run_unit"
+path = "src/hexagon/use_cases/pause_watering_run/pause_watering_run_unit_test.rs"
+
+[[test]]
+name = "resume_watering_run_unit"
+path = "src/hexagon/use_cases/resume_watering_run/resume_watering_run_unit_test.rs"
+
+[[test]]
+name = "list_watering_runs_unit"
+path = "src/hexagon/use_cases/list_watering_runs/list_watering_runs_unit_test.rs"
+
+[[test]]
+name = "load_watering_run_unit"
+path = "src/hexagon/use_cases/load_watering_run/load_watering_run_unit_test.rs"
+
+[[test]]
 name = "start_harvest_run_unit"
 path = "src/hexagon/use_cases/start_harvest_run/start_harvest_run_unit_test.rs"
 

@@ -10,6 +10,7 @@ import {
   dangerWateringPathGeoJson,
   dangerTreeCount,
   orchardRows,
+  pausedWateringRuns,
   rowOrderPreview,
   treeIdsInRow,
   wateringCarryCapacity,
@@ -172,6 +173,23 @@ test("only warn before cancelling a run that contains recorded progress", () => 
     wateringCancellationNeedsConfirmation({ watered_tree_count: 1 }),
     true,
   );
+});
+
+test("offer paused unfinished watering runs without losing their saved progress", () => {
+  const saved = {
+    run_id: 4,
+    paused: true,
+    next_tree: { id: 12 },
+    watered_tree_count: 3,
+    route: [{ id: 11 }, { id: 12 }],
+    water_source: { longitude: 1, latitude: 2 },
+    carry_capacity: 3,
+  };
+  assert.deepEqual(pausedWateringRuns([
+    { ...saved, run_id: 1, paused: false },
+    saved,
+    { ...saved, run_id: 5, next_tree: null },
+  ]), [saved]);
 });
 
 test("default the water source a few metres north of Ronde de Bordeaux", () => {

@@ -13,6 +13,7 @@ pub struct TreeWatered {
 pub enum TreeWateredError {
     WateringRunNotFound,
     WateringRunAlreadyCompleted,
+    WateringRunIsPaused,
     TreeIsNotNext,
     TreeCouldNotBeRecorded,
 }
@@ -29,6 +30,9 @@ pub fn record_tree_watered(
             .ok_or(TreeWateredError::WateringRunNotFound)?;
         if run.completed {
             return Err(TreeWateredError::WateringRunAlreadyCompleted);
+        }
+        if run.paused {
+            return Err(TreeWateredError::WateringRunIsPaused);
         }
         let next_tree_id = run
             .ordered_tree_ids

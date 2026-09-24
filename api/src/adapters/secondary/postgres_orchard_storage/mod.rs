@@ -947,9 +947,9 @@ impl OrchardStorage for PostgresOrchardStorage {
             .client
             .query_opt(
                 "SELECT id, orchard_id, target_kind, row_name, completed_at IS NOT NULL,
-                        ST_X(water_source), ST_Y(water_source), carry_capacity
+                        ST_X(water_source), ST_Y(water_source), carry_capacity, paused
                  FROM watering_runs
-                 WHERE orchard_id = $1 AND completed_at IS NULL",
+                 WHERE orchard_id = $1 AND completed_at IS NULL AND NOT paused",
                 &[&orchard_id],
             )
             .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?;
@@ -967,14 +967,50 @@ impl OrchardStorage for PostgresOrchardStorage {
             .client
             .query_opt(
                 "SELECT id, orchard_id, target_kind, row_name, completed_at IS NOT NULL,
-                        ST_X(water_source), ST_Y(water_source), carry_capacity
+                        ST_X(water_source), ST_Y(water_source), carry_capacity, paused
                  FROM watering_runs
-                 WHERE id = $1",
+                 WHERE id = $1 FOR UPDATE",
                 &[&watering_run_id],
             )
             .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?;
         run.map(|row| watering_run_from_row(&mut self.client, &row))
             .transpose()
+    }
+
+    fn unfinished_watering_runs(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<WateringRun>, OrchardStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?;
+        let rows = self
+            .client
+            .query(
+                "SELECT id, orchard_id, target_kind, row_name, completed_at IS NOT NULL,
+                    ST_X(water_source), ST_Y(water_source), carry_capacity, paused
+             FROM watering_runs WHERE orchard_id = $1 AND completed_at IS NULL ORDER BY id",
+                &[&orchard_id],
+            )
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?;
+        rows.iter()
+            .map(|row| watering_run_from_row(&mut self.client, row))
+            .collect()
+    }
+
+    fn set_watering_run_paused(
+        &mut self,
+        watering_run_id: WateringRunId,
+        paused: bool,
+    ) -> Result<(), OrchardStorageError> {
+        let run_id = i64::try_from(watering_run_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeChanged)?;
+        match self.client.execute(
+            "UPDATE watering_runs SET paused = $2 WHERE id = $1 AND completed_at IS NULL",
+            &[&run_id, &paused],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::WateringRunCouldNotBeChanged),
+        }
     }
 
     fn completed_watering_runs(
@@ -989,7 +1025,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                 "SELECT id, orchard_id, target_kind, row_name, completed_at IS NOT NULL,
                         ST_X(water_source), ST_Y(water_source), carry_capacity,
                         floor(extract(epoch FROM started_at))::BIGINT,
-                        floor(extract(epoch FROM completed_at))::BIGINT
+                        floor(extract(epoch FROM completed_at))::BIGINT, paused
                  FROM watering_runs
                  WHERE orchard_id = $1 AND completed_at IS NOT NULL
                  ORDER BY completed_at DESC, id DESC",
@@ -2061,6 +2097,7 @@ fn watering_run_from_row(
         ordered_tree_ids,
         watered_tree_ids,
         completed: row.get(4),
+        paused: row.get("paused"),
     })
 }
 

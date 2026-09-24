@@ -141,6 +141,10 @@ export function wateringCancellationNeedsConfirmation(progress) {
   return Number(progress?.watered_tree_count) > 0;
 }
 
+export function pausedWateringRuns(runs) {
+  return runs.filter((run) => run.paused === true && run.next_tree != null);
+}
+
 export function waterSourceGeoJson(source) {
   return {
     type: "FeatureCollection",

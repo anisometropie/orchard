@@ -101,6 +101,17 @@ pub trait OrchardStorage {
         &mut self,
         watering_run_id: WateringRunId,
     ) -> Result<Option<WateringRun>, OrchardStorageError>;
+    /// Unfinished runs, including paused runs, in ascending ID order.
+    fn unfinished_watering_runs(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<WateringRun>, OrchardStorageError>;
+    /// Stage the pause state in the current transaction; rollback preserves the prior state.
+    fn set_watering_run_paused(
+        &mut self,
+        watering_run_id: WateringRunId,
+        paused: bool,
+    ) -> Result<(), OrchardStorageError>;
     fn completed_watering_runs(
         &mut self,
         orchard_id: OrchardId,

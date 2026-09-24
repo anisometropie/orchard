@@ -96,6 +96,7 @@ pub fn start_danger_watering_run(
             ordered_tree_ids,
             watered_tree_ids: vec![],
             completed: false,
+            paused: false,
         };
         watering_progress(&run, &orchard_trees)
             .ok_or(DangerWateringRunStartError::WateringRunCouldNotBeStarted)
