@@ -98,6 +98,7 @@ struct InMemoryOrchardTransaction {
     staged_row_orders: Vec<(OrchardId, String, Vec<TreeId>)>,
     staged_watering_runs: Vec<WateringRun>,
     staged_watered_trees: Vec<(WateringRunId, TreeId)>,
+    staged_skipped_trees: Vec<(WateringRunId, TreeId)>,
     staged_completed_watering_runs: Vec<WateringRunId>,
     staged_watering_pause_changes: Vec<(WateringRunId, bool)>,
     staged_deleted_watering_runs: Vec<WateringRunId>,
@@ -187,6 +188,11 @@ impl InMemoryOrchardStorage {
             fail_on_commit: true,
             ..Default::default()
         })
+    }
+
+    pub fn with_commit_failure(mut self) -> Self {
+        self.fail_on_commit = true;
+        self
     }
 
     pub fn failing_to_begin() -> (Self, InMemoryOrchardObserver) {
@@ -856,6 +862,15 @@ impl OrchardStorage for InMemoryOrchardStorage {
                         run.watered_tree_ids.push(tree_id);
                     }
                 }
+                for (run_id, tree_id) in transaction.staged_skipped_trees {
+                    if let Some(run) = committed_orchard
+                        .watering_runs
+                        .iter_mut()
+                        .find(|run| run.id == run_id)
+                    {
+                        run.skipped_tree_ids.push(tree_id);
+                    }
+                }
                 for run_id in transaction.staged_completed_watering_runs {
                     if let Some(run) = committed_orchard
                         .watering_runs
@@ -863,6 +878,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
                         .find(|run| run.id == run_id)
                     {
                         run.completed = true;
+                        run.paused = false;
                     }
                 }
                 for (run_id, paused) in transaction.staged_watering_pause_changes {
@@ -1505,6 +1521,12 @@ impl OrchardStorage for InMemoryOrchardStorage {
                                     + i64::try_from(index + 1).unwrap_or(i64::MAX)
                             },
                         ),
+                        skipped_at_unix_seconds: run.skipped_tree_ids.contains(tree_id).then(
+                            || {
+                                started_at_unix_seconds
+                                    + i64::try_from(index + 1).unwrap_or(i64::MAX)
+                            },
+                        ),
                     })
                     .collect::<Vec<_>>();
                 let completed_at_unix_seconds = i64::try_from(trees.len() + 1)
@@ -1579,6 +1601,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
             carry_capacity,
             ordered_tree_ids: ordered_tree_ids.to_vec(),
             watered_tree_ids: vec![],
+            skipped_tree_ids: vec![],
             completed: false,
             paused: false,
         });
@@ -1590,10 +1613,65 @@ impl OrchardStorage for InMemoryOrchardStorage {
         watering_run_id: WateringRunId,
         tree_id: TreeId,
     ) -> Result<(), OrchardStorageError> {
-        self.transaction
+        if !self
+            .orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .any(|run| run.id == watering_run_id && run.tree_is_pending(tree_id))
+        {
+            return Err(OrchardStorageError::WateringRunCouldNotBeChanged);
+        }
+        let transaction = self
+            .transaction
             .as_mut()
-            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        if transaction
             .staged_watered_trees
+            .contains(&(watering_run_id, tree_id))
+            || transaction
+                .staged_skipped_trees
+                .contains(&(watering_run_id, tree_id))
+        {
+            return Err(OrchardStorageError::WateringRunCouldNotBeChanged);
+        }
+        transaction
+            .staged_watered_trees
+            .push((watering_run_id, tree_id));
+        Ok(())
+    }
+
+    fn mark_watering_tree_skipped(
+        &mut self,
+        watering_run_id: WateringRunId,
+        tree_id: TreeId,
+    ) -> Result<(), OrchardStorageError> {
+        if !self
+            .orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .any(|run| run.id == watering_run_id && run.tree_is_pending(tree_id))
+        {
+            return Err(OrchardStorageError::WateringRunCouldNotBeChanged);
+        }
+        let transaction = self
+            .transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        if transaction
+            .staged_watered_trees
+            .contains(&(watering_run_id, tree_id))
+            || transaction
+                .staged_skipped_trees
+                .contains(&(watering_run_id, tree_id))
+        {
+            return Err(OrchardStorageError::WateringRunCouldNotBeChanged);
+        }
+        transaction
+            .staged_skipped_trees
             .push((watering_run_id, tree_id));
         Ok(())
     }

@@ -146,7 +146,30 @@ export function wateringStartRequest(
 }
 
 export function wateringCancellationNeedsConfirmation(progress) {
-  return Number(progress?.watered_tree_count) > 0;
+  return Number(progress?.watered_tree_count) + Number(progress?.skipped_tree_count || 0) > 0;
+}
+
+export function wateringProgressSummary(progress) {
+  return `${progress.watered_tree_count} watered · ${progress.skipped_tree_count || 0} skipped`;
+}
+
+export function wateringRouteWithoutSkippedTrees(route, skippedTreeIds = []) {
+  const skipped = new Set(skippedTreeIds.map(String));
+  return (route || [])
+    .map((tree, index) => ({ ...tree, route_number: index + 1 }))
+    .filter((tree) => !skipped.has(String(tree.id)));
+}
+
+export function treesAfterWateringSkips(features, skippedTreeIds = []) {
+  const skipped = new Set(skippedTreeIds.map(String));
+  let changed = false;
+  const updated = features.map((tree) => {
+    if (!skipped.has(String(tree.id)) ||
+        (tree.properties.is_alive === false && tree.properties.is_in_danger === false)) return tree;
+    changed = true;
+    return { ...tree, properties: { ...tree.properties, is_alive: false, is_in_danger: false } };
+  });
+  return changed ? updated : features;
 }
 
 export function pausedWateringRuns(runs) {
@@ -353,13 +376,15 @@ export function dangerWateringNumberMarker(
   index,
   isCurrent = false,
   carryCapacity = 2,
+  routeNumber = index + 1,
 ) {
   const capacity = wateringCarryCapacity(carryCapacity) || 2;
-  const routeNumber = index + 1;
+  const tripParity = capacity === 1 || Math.floor(index / capacity) % 2 === 0 ? "even" : "odd";
+  const skippedSuffix = routeNumber === index + 1 ? "" : `-${tripParity}`;
   return {
     imageName: isCurrent
       ? `watering-route-current-${routeNumber}`
-      : `watering-route-number-${capacity}-${routeNumber}`,
+      : `watering-route-number-${capacity}-${routeNumber}${skippedSuffix}`,
     fillColor: isCurrent
       ? "#d51f2e"
       : capacity === 1 || Math.floor(index / capacity) % 2 === 0
@@ -381,18 +406,20 @@ export function dangerWateringNumberGeoJson(
     features: Array.isArray(route)
       ? route.map((tree, index) => {
           const globalIndex = startIndex + index;
+          const routeNumber = tree.route_number ?? globalIndex + 1;
           const isCurrent =
             currentTreeId != null && String(tree.id) === String(currentTreeId);
           const marker = dangerWateringNumberMarker(
             globalIndex,
             isCurrent,
             capacity,
+            routeNumber,
           );
           return {
             type: "Feature",
             id: tree.id,
             properties: {
-              route_number: globalIndex + 1,
+              route_number: routeNumber,
               route_number_image: marker.imageName,
               trip_parity:
                 capacity === 1 || Math.floor(globalIndex / capacity) % 2 === 0

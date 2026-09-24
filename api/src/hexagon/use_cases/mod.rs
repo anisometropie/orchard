@@ -27,6 +27,7 @@ pub mod load_tree_photo;
 pub mod load_watering_run;
 pub mod log_in_user;
 pub mod log_out_user;
+pub mod mark_watering_tree_dead;
 pub mod move_tree;
 pub mod order_orchard_row;
 pub mod pause_watering_run;

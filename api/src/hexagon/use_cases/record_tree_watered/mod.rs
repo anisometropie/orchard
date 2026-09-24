@@ -34,11 +34,7 @@ pub fn record_tree_watered(
         if run.paused {
             return Err(TreeWateredError::WateringRunIsPaused);
         }
-        let next_tree_id = run
-            .ordered_tree_ids
-            .iter()
-            .find(|tree_id| !run.watered_tree_ids.contains(tree_id))
-            .copied();
+        let next_tree_id = run.next_tree_id();
         if next_tree_id != Some(event.tree_id) {
             return Err(TreeWateredError::TreeIsNotNext);
         }
@@ -46,7 +42,7 @@ pub fn record_tree_watered(
             .mark_watering_tree_watered(event.watering_run_id, event.tree_id)
             .map_err(|_| TreeWateredError::TreeCouldNotBeRecorded)?;
         run.watered_tree_ids.push(event.tree_id);
-        if run.watered_tree_ids.len() == run.ordered_tree_ids.len() {
+        if run.is_finished() {
             orchard
                 .complete_watering_run(event.watering_run_id)
                 .map_err(|_| TreeWateredError::TreeCouldNotBeRecorded)?;

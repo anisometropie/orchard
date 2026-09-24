@@ -7,9 +7,16 @@ import {
   harvestPartsLabel,
   harvestRunStatus,
   visibleHarvestTrees,
+  wateringTreeOutcomeLabel,
 } from "./run-history.mjs";
 
 const indexHtml = fs.readFileSync(new URL("./index.html", import.meta.url), "utf8");
+
+test("distinguish dead trees skipped during watering from watered and unfinished trees", () => {
+  assert.equal(wateringTreeOutcomeLabel({ skipped_at_unix_seconds: 123, watered_at_unix_seconds: null }), "Skipped (dead)");
+  assert.equal(wateringTreeOutcomeLabel({ skipped_at_unix_seconds: null, watered_at_unix_seconds: 123 }), "Watered");
+  assert.equal(wateringTreeOutcomeLabel({ skipped_at_unix_seconds: null, watered_at_unix_seconds: null }), "Not watered");
+});
 
 test("describe harvest outcomes and distinguish completed from stopped tours", () => {
   assert.equal(harvestPartsLabel(["flower", "fruit"]), "Flowers, fruits");

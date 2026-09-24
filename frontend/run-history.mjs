@@ -8,6 +8,11 @@ const HARVEST_PART_LABELS = Object.freeze({
   seed: "seeds",
 });
 
+export function wateringTreeOutcomeLabel(tree) {
+  if (tree.skipped_at_unix_seconds != null) return "Skipped (dead)";
+  return tree.watered_at_unix_seconds == null ? "Not watered" : "Watered";
+}
+
 export function harvestPartsLabel(parts) {
   const label = (parts || [])
     .map((part) => HARVEST_PART_LABELS[part] || part)

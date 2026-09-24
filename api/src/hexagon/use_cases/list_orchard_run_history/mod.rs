@@ -17,6 +17,7 @@ pub struct WateringRunHistoryTree {
     pub tree_id: TreeId,
     pub name: String,
     pub watered_at_unix_seconds: Option<i64>,
+    pub skipped_at_unix_seconds: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,6 +101,7 @@ where
                         tree_id: run_tree.tree_id,
                         name: tree_name(&trees, run_tree.tree_id)?,
                         watered_at_unix_seconds: run_tree.watered_at_unix_seconds,
+                        skipped_at_unix_seconds: run_tree.skipped_at_unix_seconds,
                     })
                 })
                 .collect::<Result<Vec<_>, OrchardRunHistoryError>>()?;

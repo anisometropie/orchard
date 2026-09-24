@@ -103,6 +103,9 @@ use crate::hexagon::use_cases::load_tree_photo::{
 use crate::hexagon::use_cases::load_watering_run::{WateringRunLoadError, load_watering_run};
 use crate::hexagon::use_cases::log_in_user::{UserLoginError, UserLoginRequested, log_in_user};
 use crate::hexagon::use_cases::log_out_user::log_out_user;
+use crate::hexagon::use_cases::mark_watering_tree_dead::{
+    WateringTreeMarkedDead, WateringTreeMarkedDeadError, mark_watering_tree_dead,
+};
 use crate::hexagon::use_cases::move_tree::{
     OrchardTreeMoveConfirmed, OrchardTreeMoveError, move_orchard_tree,
 };
@@ -281,6 +284,10 @@ where
         .route(
             "/orchards/{orchard_id}/watering-runs/{watering_run_id}/watered",
             post(record_tree_watered_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/watering-runs/{watering_run_id}/dead",
+            post(mark_watering_tree_dead_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/harvest-run",
@@ -727,6 +734,11 @@ fn watering_run_history_json(run: WateringRunHistory) -> Value {
         .iter()
         .filter(|tree| tree.watered_at_unix_seconds.is_some())
         .count();
+    let skipped_tree_count = run
+        .trees
+        .iter()
+        .filter(|tree| tree.skipped_at_unix_seconds.is_some())
+        .count();
     json!({
         "run_id": run.run_id.0,
         "target_label": run.target_label,
@@ -734,11 +746,14 @@ fn watering_run_history_json(run: WateringRunHistory) -> Value {
         "started_at_unix_seconds": run.started_at_unix_seconds,
         "completed_at_unix_seconds": run.completed_at_unix_seconds,
         "watered_tree_count": watered_tree_count,
+        "skipped_tree_count": skipped_tree_count,
+        "handled_tree_count": watered_tree_count + skipped_tree_count,
         "total_tree_count": run.trees.len(),
         "trees": run.trees.into_iter().map(|tree| json!({
             "tree_id": tree.tree_id.0,
             "name": tree.name,
             "watered_at_unix_seconds": tree.watered_at_unix_seconds,
+            "skipped_at_unix_seconds": tree.skipped_at_unix_seconds,
         })).collect::<Vec<_>>(),
     })
 }
@@ -1167,6 +1182,50 @@ where
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MarkWateringTreeDeadRequest {
+    tree_id: u64,
+}
+
+async fn mark_watering_tree_dead_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, watering_run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<MarkWateringTreeDeadRequest>, JsonRejection>,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_watering_credential(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_watering_access(&mut *storage, orchard_id, credential)?;
+        mark_watering_tree_dead(
+            WateringTreeMarkedDead {
+                orchard_id,
+                watering_run_id: WateringRunId(watering_run_id),
+                tree_id: TreeId(request.tree_id),
+            },
+            &mut *storage,
+        )
+        .map(|progress| Json(watering_progress_json(progress)))
+        .map_err(|error| match error {
+            WateringTreeMarkedDeadError::WateringRunNotFound => StatusCode::NOT_FOUND,
+            WateringTreeMarkedDeadError::WateringRunAlreadyCompleted
+            | WateringTreeMarkedDeadError::WateringRunIsPaused
+            | WateringTreeMarkedDeadError::TreeIsNotNext => StatusCode::CONFLICT,
+            WateringTreeMarkedDeadError::TreeCouldNotBeMarkedDead => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
 async fn cancel_watering_run_handler<U>(
     State(storage): State<Arc<Mutex<U>>>,
     Path((orchard_id, watering_run_id)): Path<(u64, u64)>,
@@ -1218,6 +1277,10 @@ fn watering_progress_json(progress: WateringProgress) -> Value {
         "carry_capacity": progress.carry_capacity,
         "route": progress.route.into_iter().map(watering_tree_json).collect::<Vec<_>>(),
         "watered_tree_count": progress.watered_tree_count,
+        "skipped_tree_count": progress.skipped_tree_count,
+        "handled_tree_count": progress.handled_tree_count,
+        "watered_tree_ids": progress.watered_tree_ids.into_iter().map(|id| id.0).collect::<Vec<_>>(),
+        "skipped_tree_ids": progress.skipped_tree_ids.into_iter().map(|id| id.0).collect::<Vec<_>>(),
         "total_tree_count": progress.total_tree_count,
         "next_tree": progress.next_tree.map(watering_tree_json),
     })

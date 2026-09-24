@@ -271,6 +271,14 @@ fn persist_row_ranks_and_resumable_watering_progress() {
         &[&(run_id.0 as i64)],
     ).unwrap().get(0);
     assert_eq!(before_timestamps, after_timestamps);
+    #[path = "../../../../tests/support/watering_skip_contract.rs"]
+    mod watering_skip_contract;
+    watering_skip_contract::assert_skips_are_atomic_and_distinct_from_watering(
+        &mut storage,
+        run_id,
+        TreeId(2),
+        TreeId(1),
+    );
     storage
         .transaction(|orchard| orchard.complete_watering_run(run_id))
         .unwrap();
@@ -488,6 +496,165 @@ fn concurrent_workers_join_one_target_and_water_different_rows_independently() {
             .len(),
         2
     );
+}
+
+#[test]
+fn marking_a_tree_dead_skips_overlapping_runs_atomically_and_preserves_watered_history() {
+    use orchard_api::hexagon::use_cases::mark_watering_tree_dead::{
+        WateringTreeMarkedDead, WateringTreeMarkedDeadError, mark_watering_tree_dead,
+    };
+    use orchard_api::hexagon::use_cases::record_tree_watered::{TreeWatered, record_tree_watered};
+    let _database_lock = database_lock();
+    let (database_url, mut connection) = empty_orchard_database();
+    connection.batch_execute(r#"
+        INSERT INTO users (username, default_center, is_default)
+        VALUES ('owner', ST_SetSRID(ST_MakePoint(0, 0), 4326), TRUE);
+        INSERT INTO orchards (owner_user_id, name, center, reference_region)
+        VALUES (1, 'Orchard', ST_SetSRID(ST_MakePoint(0, 0), 4326), 'France');
+        INSERT INTO plant_identities (common_name, botanical_taxon)
+        VALUES ('Apple', '{"Named":{"genus":"Malus","species":null,"species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}');
+        INSERT INTO trees (orchard_id, plant_identity_id, location, row_name, row_rank, roles, is_alive, is_in_danger, identification_status)
+        VALUES (1, 1, ST_SetSRID(ST_MakePoint(0, 0), 4326), 'North', 1, '{}', TRUE, TRUE, 'confirmed'),
+               (1, 1, ST_SetSRID(ST_MakePoint(0, 1), 4326), 'North', 2, '{}', TRUE, FALSE, 'confirmed');
+    "#).unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let north = storage
+        .transaction(|orchard| {
+            orchard.create_watering_run(
+                OrchardId(1),
+                &WateringRunTarget::Row("North".into()),
+                None,
+                None,
+                &[TreeId(1), TreeId(2)],
+            )
+        })
+        .unwrap();
+    let danger = storage
+        .transaction(|orchard| {
+            orchard.create_watering_run(
+                OrchardId(1),
+                &WateringRunTarget::DangerTrees,
+                None,
+                None,
+                &[TreeId(2), TreeId(1)],
+            )
+        })
+        .unwrap();
+    let paused = storage
+        .transaction(|orchard| {
+            orchard.create_watering_run(
+                OrchardId(1),
+                &WateringRunTarget::Row("Paused".into()),
+                None,
+                None,
+                &[TreeId(1)],
+            )
+        })
+        .unwrap();
+    storage
+        .transaction(|orchard| orchard.set_watering_run_paused(paused, true))
+        .unwrap();
+    let previous = storage
+        .transaction(|orchard| {
+            orchard.create_watering_run(
+                OrchardId(1),
+                &WateringRunTarget::Row("Previous".into()),
+                None,
+                None,
+                &[TreeId(1)],
+            )
+        })
+        .unwrap();
+    storage
+        .transaction(|orchard| {
+            orchard.mark_watering_tree_watered(previous, TreeId(1))?;
+            orchard.complete_watering_run(previous)
+        })
+        .unwrap();
+    let historical_watered_at: String = connection
+        .query_one(
+            "SELECT watered_at::text FROM watering_run_trees WHERE watering_run_id = $1",
+            &[&(previous.0 as i64)],
+        )
+        .unwrap()
+        .get(0);
+    let before_trees = storage.trees_in_orchard(OrchardId(1)).unwrap();
+    let before_runs = storage.unfinished_watering_runs(OrchardId(1)).unwrap();
+    connection
+        .batch_execute(&format!(
+            r#"
+        CREATE FUNCTION fail_watering_skip_test() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.watering_run_id = {} THEN RAISE EXCEPTION 'injected later skip failure'; END IF;
+            RETURN NEW;
+        END $$;
+        CREATE TRIGGER fail_watering_skip_test BEFORE UPDATE ON watering_run_trees
+        FOR EACH ROW WHEN (NEW.skipped_at IS NOT NULL) EXECUTE FUNCTION fail_watering_skip_test();
+    "#,
+            danger.0
+        ))
+        .unwrap();
+    let event = || WateringTreeMarkedDead {
+        orchard_id: OrchardId(1),
+        watering_run_id: north,
+        tree_id: TreeId(1),
+    };
+    let failed = mark_watering_tree_dead(event(), &mut storage);
+    connection.batch_execute("DROP TRIGGER fail_watering_skip_test ON watering_run_trees; DROP FUNCTION fail_watering_skip_test()").unwrap();
+    assert_eq!(
+        failed,
+        Err(WateringTreeMarkedDeadError::TreeCouldNotBeMarkedDead)
+    );
+    assert_eq!(
+        storage.trees_in_orchard(OrchardId(1)).unwrap(),
+        before_trees
+    );
+    assert_eq!(
+        storage.unfinished_watering_runs(OrchardId(1)).unwrap(),
+        before_runs
+    );
+    let progress = mark_watering_tree_dead(event(), &mut storage).unwrap();
+    assert_eq!(progress.watered_tree_count, 0);
+    assert_eq!(progress.skipped_tree_count, 1);
+    assert_eq!(progress.next_tree.unwrap().id, TreeId(2));
+    let tree = &storage.trees_in_orchard(OrchardId(1)).unwrap()[0].tree;
+    assert!(!tree.is_alive);
+    assert!(!tree.is_in_danger);
+    let other = storage.watering_run(danger).unwrap().unwrap();
+    assert_eq!(other.skipped_tree_ids, vec![TreeId(1)]);
+    assert_eq!(other.next_tree_id(), Some(TreeId(2)));
+    let stopped = storage.watering_run(paused).unwrap().unwrap();
+    assert!(stopped.completed);
+    assert!(!stopped.paused);
+    assert_eq!(
+        connection
+            .query_one(
+                "SELECT watered_at::text FROM watering_run_trees WHERE watering_run_id = $1",
+                &[&(previous.0 as i64)]
+            )
+            .unwrap()
+            .get::<_, String>(0),
+        historical_watered_at
+    );
+    record_tree_watered(
+        TreeWatered {
+            orchard_id: OrchardId(1),
+            watering_run_id: north,
+            tree_id: TreeId(2),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let completed = storage
+        .completed_watering_runs(OrchardId(1))
+        .unwrap()
+        .into_iter()
+        .find(|run| run.id == north)
+        .unwrap();
+    assert_eq!(completed.trees[0].watered_at_unix_seconds, None);
+    assert!(completed.trees[0].skipped_at_unix_seconds.is_some());
+    assert!(completed.trees[1].watered_at_unix_seconds.is_some());
+    assert_eq!(completed.trees[1].skipped_at_unix_seconds, None);
 }
 
 #[test]
@@ -2661,6 +2828,17 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/027_add_watering_exclusions.sql"
+            ))
+            .unwrap();
+    }
+    let watering_skips_were_applied: bool = verification_connection.query_one(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+         AND table_name = 'watering_run_trees' AND column_name = 'skipped_at')", &[],
+    ).unwrap().get(0);
+    if !watering_skips_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/028_add_skipped_watering_trees.sql"
             ))
             .unwrap();
     }

@@ -7,10 +7,28 @@ use orchard_api::hexagon::models::{
 };
 use orchard_api::hexagon::ports::{OrchardStorage, OrchardStorageError};
 
+#[path = "../../../../tests/support/watering_run_fixture.rs"]
+mod watering_run_fixture;
+
+#[test]
+fn skipped_watering_progress_honors_the_storage_contract() {
+    #[path = "../../../../tests/support/watering_skip_contract.rs"]
+    mod watering_skip_contract;
+    let (mut storage, _) = watering_run_fixture::storage();
+    let run_id = orchard_api::hexagon::models::WateringRunId(1);
+    storage
+        .transaction(|orchard| orchard.mark_watering_tree_watered(run_id, TreeId(1)))
+        .unwrap();
+    watering_skip_contract::assert_skips_are_atomic_and_distinct_from_watering(
+        &mut storage,
+        run_id,
+        TreeId(1),
+        TreeId(2),
+    );
+}
+
 #[test]
 fn paused_watering_progress_honors_the_storage_contract() {
-    #[path = "../../../../tests/support/watering_run_fixture.rs"]
-    mod watering_run_fixture;
     #[path = "../../../../tests/support/watering_pause_contract.rs"]
     mod watering_pause_contract;
     let (mut storage, _) = watering_run_fixture::storage();

@@ -138,6 +138,12 @@ pub trait OrchardStorage {
         watering_run_id: WateringRunId,
         tree_id: TreeId,
     ) -> Result<(), OrchardStorageError>;
+    /// Resolve a pending tree without recording watering; never overwrite an existing outcome.
+    fn mark_watering_tree_skipped(
+        &mut self,
+        watering_run_id: WateringRunId,
+        tree_id: TreeId,
+    ) -> Result<(), OrchardStorageError>;
     fn complete_watering_run(
         &mut self,
         watering_run_id: WateringRunId,

@@ -1070,7 +1070,8 @@ impl OrchardStorage for PostgresOrchardStorage {
             let trees = self
                 .client
                 .query(
-                    "SELECT tree_id, floor(extract(epoch FROM watered_at))::BIGINT
+                    "SELECT tree_id, floor(extract(epoch FROM watered_at))::BIGINT,
+                            floor(extract(epoch FROM skipped_at))::BIGINT
                      FROM watering_run_trees
                      WHERE watering_run_id = $1
                      ORDER BY row_rank",
@@ -1085,6 +1086,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                                 .map_err(|_| OrchardStorageError::RunHistoryCouldNotBeRead)?,
                         ),
                         watered_at_unix_seconds: tree.get(1),
+                        skipped_at_unix_seconds: tree.get(2),
                     })
                 })
                 .collect::<Result<Vec<_>, OrchardStorageError>>()?;
@@ -1175,8 +1177,28 @@ impl OrchardStorage for PostgresOrchardStorage {
         match self.client.execute(
             "UPDATE watering_run_trees
              SET watered_at = now()
-             WHERE watering_run_id = $1 AND tree_id = $2 AND watered_at IS NULL",
+             WHERE watering_run_id = $1 AND tree_id = $2 AND watered_at IS NULL AND skipped_at IS NULL",
             &[&watering_run_id, &tree_id],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::WateringRunCouldNotBeChanged),
+        }
+    }
+
+    fn mark_watering_tree_skipped(
+        &mut self,
+        watering_run_id: WateringRunId,
+        tree_id: TreeId,
+    ) -> Result<(), OrchardStorageError> {
+        let run_id = i64::try_from(watering_run_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeChanged)?;
+        let tree_id = i64::try_from(tree_id.0)
+            .map_err(|_| OrchardStorageError::WateringRunCouldNotBeChanged)?;
+        match self.client.execute(
+            "UPDATE watering_run_trees SET skipped_at = now()
+             WHERE watering_run_id = $1 AND tree_id = $2
+               AND watered_at IS NULL AND skipped_at IS NULL",
+            &[&run_id, &tree_id],
         ) {
             Ok(1) => Ok(()),
             _ => Err(OrchardStorageError::WateringRunCouldNotBeChanged),
@@ -1191,7 +1213,7 @@ impl OrchardStorage for PostgresOrchardStorage {
             .map_err(|_| OrchardStorageError::WateringRunCouldNotBeChanged)?;
         match self.client.execute(
             "UPDATE watering_runs
-             SET completed_at = now()
+             SET completed_at = now(), paused = FALSE
              WHERE id = $1 AND completed_at IS NULL",
             &[&watering_run_id],
         ) {
@@ -2070,7 +2092,7 @@ fn watering_run_from_row(
     let stored_run_id = row.get::<_, i64>(0);
     let entries = client
         .query(
-            "SELECT tree_id, watered_at IS NOT NULL
+            "SELECT tree_id, watered_at IS NOT NULL, skipped_at IS NOT NULL
              FROM watering_run_trees
              WHERE watering_run_id = $1
              ORDER BY row_rank",
@@ -2088,6 +2110,15 @@ fn watering_run_from_row(
     let watered_tree_ids = entries
         .iter()
         .filter(|entry| entry.get::<_, bool>(1))
+        .map(|entry| {
+            u64::try_from(entry.get::<_, i64>(0))
+                .map(TreeId)
+                .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let skipped_tree_ids = entries
+        .iter()
+        .filter(|entry| entry.get::<_, bool>(2))
         .map(|entry| {
             u64::try_from(entry.get::<_, i64>(0))
                 .map(TreeId)
@@ -2126,6 +2157,7 @@ fn watering_run_from_row(
             .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?,
         ordered_tree_ids,
         watered_tree_ids,
+        skipped_tree_ids,
         completed: row.get(4),
         paused: row.get("paused"),
     })

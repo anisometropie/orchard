@@ -178,6 +178,11 @@ In the tree's pencil editor, **Exclude from watering** leaves the tree alive
 but omits it from new row and danger-tree watering runs. Existing runs keep
 their saved routes. Only the orchard owner can change this flag.
 
+During a run, **Mark dead and skip** marks the current tree dead and advances
+without recording it as watered. People with watering links can use this
+action. The tree is also skipped wherever it is still pending in another saved
+run. Watered and skipped counts stay separate, including in completed history.
+
 ## Shared links
 
 View and watering share links are permanent database records. Creating a new
@@ -186,8 +191,8 @@ after `#`.
 
 - View links can read the orchard and its photos.
 - Watering links can also run watering workflows.
-- Neither kind of shared link can edit trees, row order, harvest data, or upload
-  photos.
+- Neither kind of shared link can use the general tree editor, edit row order or
+  harvest data, or upload photos.
 - Only a logged-in orchard owner can create links or upload photos.
 
 If a valid link is rejected after an update, verify that the latest migrations

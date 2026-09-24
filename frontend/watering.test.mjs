@@ -16,12 +16,15 @@ import {
   rowOrderPreview,
   selectedWateringRun,
   treeIdsInRow,
+  treesAfterWateringSkips,
   wateringCarryCapacity,
   wateringRouteWindow,
   wateringRowIsOrdered,
   wateringRunSelectionKey,
   wateringStartConflictMessage,
   wateringCancellationNeedsConfirmation,
+  wateringProgressSummary,
+  wateringRouteWithoutSkippedTrees,
   wateringStartRequest,
   waterSourceGeoJson,
   wateringTargetGeoJson,
@@ -195,6 +198,45 @@ test("only warn before cancelling a run that contains recorded progress", () => 
     wateringCancellationNeedsConfirmation({ watered_tree_count: 1 }),
     true,
   );
+  assert.equal(
+    wateringCancellationNeedsConfirmation({ watered_tree_count: 0, skipped_tree_count: 1 }),
+    true,
+  );
+});
+
+test("count skipped trees separately from trees that were actually watered", () => {
+  assert.equal(wateringProgressSummary({ watered_tree_count: 2, skipped_tree_count: 1 }), "2 watered · 1 skipped");
+  assert.equal(wateringProgressSummary({ watered_tree_count: 2 }), "2 watered · 0 skipped");
+});
+
+test("remote skips update the orchard's dead and danger flags without changing unrelated trees", () => {
+  const trees = [
+    { id: 1, properties: { is_alive: true, is_in_danger: true, is_excluded_from_watering: true } },
+    { id: 2, properties: { is_alive: true, is_in_danger: false } },
+  ];
+  const updated = treesAfterWateringSkips(trees, ["1"]);
+  assert.deepEqual(updated[0].properties, { is_alive: false, is_in_danger: false, is_excluded_from_watering: true });
+  assert.equal(updated[1], trees[1]);
+  assert.equal(trees[0].properties.is_alive, true);
+  assert.equal(treesAfterWateringSkips(updated, [1]), updated);
+});
+
+test("omit non-prefix skipped trees while preserving numbers and using cans only for watering", () => {
+  const snapshot = [1, 2, 3, 4, 5, 6].map((id) => ({ id, longitude: id, latitude: 1 }));
+  const route = wateringRouteWithoutSkippedTrees(snapshot, [2, 5]);
+  const window = wateringRouteWindow(route, 3, 4);
+  assert.deepEqual(snapshot.map((tree) => tree.id), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(window.trees.map((tree) => tree.id), [3, 4, 6]);
+  assert.equal(window.startIndex, 1);
+  const markers = dangerWateringNumberGeoJson(window.trees, 3, window.startIndex, 2).features;
+  assert.deepEqual(markers.map((feature) => feature.properties.route_number), [3, 4, 6]);
+  assert.deepEqual(markers.map((feature) => feature.properties.trip_parity), ["even", "odd", "odd"]);
+  assert.equal(markers[2].properties.route_number_image, "watering-route-number-2-6-odd");
+  const paths = dangerWateringPathGeoJson({ longitude: 0, latitude: 0 }, window.trees, window.startIndex, route.length, 2);
+  assert.deepEqual(paths.features.map((feature) => feature.geometry.coordinates), [
+    [[3, 1], [0, 0]],
+    [[0, 0], [4, 1], [6, 1], [0, 0]],
+  ]);
 });
 
 test("offer paused unfinished watering runs without losing their saved progress", () => {

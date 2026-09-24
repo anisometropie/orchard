@@ -572,6 +572,7 @@
         margin-top: 2px;
       }
       #watering-done,
+      #watering-mark-dead,
       #harvest-previous-tree,
       #harvest-complete-tree,
       #harvest-defer-tree,
@@ -584,6 +585,18 @@
         cursor: pointer;
         font: 700 14px sans-serif;
         padding: 9px 14px;
+      }
+      .watering-tree-actions {
+        display: flex;
+        gap: 6px;
+      }
+      .watering-tree-actions button {
+        min-height: 44px;
+      }
+      #watering-mark-dead {
+        background: white;
+        border-color: #b42318;
+        color: #b42318;
       }
       #harvest-defer-tree {
         background: white;
@@ -1631,6 +1644,7 @@
           white-space: nowrap;
         }
         #watering-done,
+        #watering-mark-dead,
         #harvest-previous-tree,
         #harvest-complete-tree,
         #harvest-defer-tree,
@@ -1645,6 +1659,22 @@
         #watering-done {
           flex: 0 0 auto;
           min-width: 58px;
+        }
+        #watering-done,
+        #watering-mark-dead {
+          min-height: 44px;
+        }
+        #watering-tree-banner {
+          align-items: stretch;
+          flex-direction: column;
+        }
+        #watering-tree-progress {
+          overflow: visible;
+          white-space: normal;
+        }
+        .watering-tree-actions button {
+          flex: 1;
+          min-height: 44px;
         }
         #harvest-tree-banner {
           align-items: center;
@@ -1923,7 +1953,10 @@
         <div id="watering-tree-name"></div>
         <div id="watering-tree-progress"></div>
       </div>
-      <button id="watering-done" type="button">Done</button>
+      <div class="watering-tree-actions">
+        <button id="watering-done" type="button">Done</button>
+        <button id="watering-mark-dead" type="button">Mark dead and skip</button>
+      </div>
     </section>
     <section id="harvest-tree-banner" aria-live="polite" hidden>
       <div>
@@ -2244,7 +2277,8 @@
         harvestPartsLabel,
         harvestRunStatus,
         visibleHarvestTrees,
-      } from "./run-history.mjs?v=1";
+        wateringTreeOutcomeLabel,
+      } from "./run-history.mjs?v=2";
       import {
         adaptiveWateringWideZoom,
         availableWateringRuns,
@@ -2258,9 +2292,12 @@
         rowOrderPreview,
         selectedWateringRun,
         treeIdsInRow,
+        treesAfterWateringSkips,
         wateringCarryCapacity,
         wateringCancellationNeedsConfirmation,
+        wateringProgressSummary,
         wateringRouteWindow,
+        wateringRouteWithoutSkippedTrees,
         wateringRowIsOrdered,
         wateringRunSelectionKey,
         wateringRows,
@@ -2269,7 +2306,7 @@
         wateringTargetGeoJson,
         wateringWideCenter,
         waterSourceGeoJson,
-      } from "./watering.mjs?v=18";
+      } from "./watering.mjs?v=19";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -2603,6 +2640,7 @@
       const wateringTreeName = document.getElementById("watering-tree-name");
       const wateringTreeProgress = document.getElementById("watering-tree-progress");
       const wateringDone = document.getElementById("watering-done");
+      const wateringMarkDead = document.getElementById("watering-mark-dead");
       const wateringZoomControls = document.getElementById(
         "watering-zoom-controls",
       );
@@ -4264,6 +4302,10 @@
 
       function updateWaterSourcePin() {
         const currentTreeId = wateringProgress?.next_tree?.id;
+        const waterableRoute = wateringRouteWithoutSkippedTrees(
+          wateringRoute,
+          wateringProgress?.skipped_tree_ids,
+        );
         const carryCapacity = wateringProgress?.target === "danger"
           ? wateringCarryCapacity(
               wateringProgress?.carry_capacity ?? wateringCarryCapacityInput.value,
@@ -4272,22 +4314,24 @@
         const routeWindow = !wateringProgress
           ? { trees: [], startIndex: 0 }
           : tourRouteDisplay.value === "route"
-            ? { trees: wateringRoute, startIndex: 0 }
+            ? { trees: waterableRoute, startIndex: 0 }
             : tourRouteDisplay.value === "four"
-              ? wateringRouteWindow(wateringRoute, currentTreeId, 4)
+              ? wateringRouteWindow(waterableRoute, currentTreeId, 4)
               : { trees: [], startIndex: 0 };
         const visibleRoute = routeWindow.trees;
         visibleRoute.forEach((tree, index) => {
           const routeIndex = routeWindow.startIndex + index;
+          const routeNumber = tree.route_number;
           const marker = dangerWateringNumberMarker(
             routeIndex,
             false,
             carryCapacity,
+            routeNumber,
           );
           if (!map.hasImage(marker.imageName)) {
             map.addImage(
               marker.imageName,
-              createRouteNumberImage(routeIndex + 1, marker.fillColor),
+              createRouteNumberImage(routeNumber, marker.fillColor),
               { pixelRatio: 2 },
             );
           }
@@ -4299,12 +4343,13 @@
               routeIndex,
               true,
               carryCapacity,
+              routeNumber,
             );
             if (!map.hasImage(currentMarker.imageName)) {
               map.addImage(
                 currentMarker.imageName,
                 createRouteNumberImage(
-                  routeIndex + 1,
+                  routeNumber,
                   currentMarker.fillColor,
                 ),
                 { pixelRatio: 2 },
@@ -4322,7 +4367,7 @@
               wateringSource,
               visibleRoute,
               routeWindow.startIndex,
-              wateringRoute.length,
+              waterableRoute.length,
               carryCapacity,
             ),
           );
@@ -4435,6 +4480,7 @@
         wateringCancel.hidden = wateringProgress == null;
         wateringCancel.disabled = wateringMutationPending;
         wateringDone.disabled = wateringMutationPending;
+        wateringMarkDead.disabled = wateringMutationPending;
         renderSavedWateringRuns();
         rowOrderAutomatic.disabled = rows.length === 0;
         rowOrderManual.disabled = rows.length === 0;
@@ -4813,7 +4859,7 @@
           const title = document.createElement("strong");
           title.textContent = run.target_label || run.row_name || "Watering";
           const status = document.createElement("p");
-          status.textContent = `${run.paused ? "Paused" : "In progress"} · ${run.watered_tree_count} of ${run.total_tree_count} watered`;
+          status.textContent = `${run.paused ? "Paused" : "In progress"} · ${wateringProgressSummary(run)} · ${run.total_tree_count} total`;
           const join = document.createElement("button");
           join.type = "button";
           join.textContent = run.paused ? "Resume run" : "Join run";
@@ -4854,6 +4900,13 @@
         progress,
         { cameraMode = wateringCameraMode, cameraDuration = 700, focusCamera = true } = {},
       ) {
+        const updatedTrees = treesAfterWateringSkips(orchardFeatures, progress?.skipped_tree_ids);
+        if (updatedTrees !== orchardFeatures) {
+          orchardFeatures = updatedTrees;
+          applyHarvestWindow();
+          refreshTaxonomyFilters();
+          renderInventory();
+        }
         if (progress) rememberWateringRun(progress);
         if (progress?.paused) {
           resetCompletedWateringPresentation();
@@ -4897,7 +4950,7 @@
         closeTreeEditor();
         closeTreeTooltip();
         wateringTreeName.textContent = progress.next_tree.name;
-        wateringTreeProgress.textContent = `${targetLabel} · tree ${progress.next_tree.row_rank} of ${progress.total_tree_count} · ${progress.watered_tree_count} done`;
+        wateringTreeProgress.textContent = `${targetLabel} · tree ${progress.next_tree.row_rank} of ${progress.total_tree_count} · ${wateringProgressSummary(progress)}`;
         map
           .getSource("watering-target")
           ?.setData(wateringTargetGeoJson(progress.next_tree));
@@ -4905,7 +4958,7 @@
         wateringZoomControls.hidden = false;
         renderWateringCameraMode();
         layoutMapControls();
-        wateringMenuStatus.textContent = `Watering ${targetLabel}: ${progress.watered_tree_count} of ${progress.total_tree_count} done.`;
+        wateringMenuStatus.textContent = `Watering ${targetLabel}: ${wateringProgressSummary(progress)} · ${progress.total_tree_count} total.`;
         wateringMenuStatus.hidden = false;
         if (focusCamera) {
           applyWateringCameraMode(cameraMode, {
@@ -5147,7 +5200,17 @@
         if (!harvestProgress) return changeWateringRunState(runId, "resume");
       }
 
-      async function markCurrentTreeWatered() {
+      function markCurrentTreeWatered() {
+        return recordCurrentWateringTree("watered");
+      }
+
+      function markCurrentTreeDead() {
+        if (!wateringProgress?.next_tree || wateringMutationPending) return;
+        if (!window.confirm(`Mark “${wateringProgress.next_tree.name}” dead and skip it? It will be skipped in every unfinished watering run.`)) return;
+        return recordCurrentWateringTree("dead");
+      }
+
+      async function recordCurrentWateringTree(outcome) {
         if (!wateringProgress?.next_tree || wateringMutationPending) return;
         const activeRun = wateringProgress;
         const stateVersion = ++wateringStateVersion;
@@ -5158,7 +5221,7 @@
           const response = await fetch(
             orchardResourceUrl(
               currentAccess,
-              `watering-runs/${encodeURIComponent(activeRun.run_id)}/watered`,
+              `watering-runs/${encodeURIComponent(activeRun.run_id)}/${outcome}`,
             ),
             {
               method: "POST",
@@ -5178,6 +5241,15 @@
           const progress = await response.json();
           if (stateVersion !== wateringStateVersion) return;
           showWateringProgress(progress);
+          if (outcome === "dead") {
+            try {
+              await fetchOrchardTrees({ isCurrent: () => stateVersion === wateringStateVersion });
+            } catch {
+              if (stateVersion !== wateringStateVersion) return;
+              wateringError.textContent = "The tree was marked dead, but the map could not refresh. Reload to refresh the orchard.";
+              wateringError.hidden = false;
+            }
+          }
         } catch (error) {
           if (stateVersion !== wateringStateVersion) return;
           wateringError.textContent = error.message;
@@ -6735,16 +6807,18 @@
         }
       }
 
-      async function fetchOrchardTrees() {
+      async function fetchOrchardTrees({ isCurrent = () => true } = {}) {
         const response = await fetch(
           orchardResourceUrl(currentAccess, "trees.geojson"),
           { headers: accessHeaders(currentAccess), cache: "no-store" },
         );
+        if (!isCurrent()) return;
         if ([401, 403, 404].includes(response.status)) {
           throw new Error("access-denied");
         }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const orchard = await response.json();
+        if (!isCurrent()) return;
         orchardFeatures = orchard.features || [];
         applyHarvestWindow();
         refreshTaxonomyFilters();
@@ -7141,15 +7215,16 @@
           const capacity = run.carry_capacity == null
             ? ""
             : ` · ${run.carry_capacity} watering cans per trip`;
-          meta.textContent = `${run.watered_tree_count} of ${run.total_tree_count} trees watered · Started ${historyDateTime(run.started_at_unix_seconds)}${capacity}`;
+          meta.textContent = `${wateringProgressSummary(run)} · ${run.total_tree_count} trees · Started ${historyDateTime(run.started_at_unix_seconds)}${capacity}`;
           const trees = document.createElement("ol");
           trees.className = "history-tree-list";
           trees.append(
             ...run.trees.map((tree) =>
               historyTreeItem(tree.name, [
-                tree.watered_at_unix_seconds == null
-                  ? "Not watered"
-                  : `Watered ${historyDateTime(tree.watered_at_unix_seconds)}`,
+                wateringTreeOutcomeLabel(tree),
+                ...((tree.skipped_at_unix_seconds ?? tree.watered_at_unix_seconds) == null
+                  ? []
+                  : [historyDateTime(tree.skipped_at_unix_seconds ?? tree.watered_at_unix_seconds)]),
               ]),
             ),
           );
@@ -7508,6 +7583,7 @@
       wateringLeave.addEventListener("click", leaveWateringRun);
       wateringCancel.addEventListener("click", cancelWateringRun);
       wateringDone.addEventListener("click", markCurrentTreeWatered);
+      wateringMarkDead.addEventListener("click", markCurrentTreeDead);
       window.setInterval(pollWateringRuns, 3000);
       document.addEventListener("visibilitychange", () => {
         if (!document.hidden) pollWateringRuns();

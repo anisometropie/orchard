@@ -26,6 +26,10 @@ pub struct WateringProgress {
     pub carry_capacity: Option<u32>,
     pub route: Vec<WateringTree>,
     pub watered_tree_count: usize,
+    pub skipped_tree_count: usize,
+    pub handled_tree_count: usize,
+    pub watered_tree_ids: Vec<TreeId>,
+    pub skipped_tree_ids: Vec<TreeId>,
     pub total_tree_count: usize,
     pub next_tree: Option<WateringTree>,
 }
@@ -92,6 +96,7 @@ pub fn start_watering_run(
             carry_capacity: None,
             ordered_tree_ids,
             watered_tree_ids: vec![],
+            skipped_tree_ids: vec![],
             completed: false,
             paused: false,
         };
@@ -125,9 +130,10 @@ pub(crate) fn watering_progress(
             })
         })
         .collect::<Option<Vec<_>>>()?;
+    let next_tree_id = run.next_tree_id();
     let next_tree = route
         .iter()
-        .find(|tree| !run.watered_tree_ids.contains(&tree.id))
+        .find(|tree| Some(tree.id) == next_tree_id)
         .cloned();
     Some(WateringProgress {
         run_id: run.id,
@@ -137,6 +143,10 @@ pub(crate) fn watering_progress(
         carry_capacity: run.carry_capacity,
         route,
         watered_tree_count: run.watered_tree_ids.len(),
+        skipped_tree_count: run.skipped_tree_ids.len(),
+        handled_tree_count: run.watered_tree_ids.len() + run.skipped_tree_ids.len(),
+        watered_tree_ids: run.watered_tree_ids.clone(),
+        skipped_tree_ids: run.skipped_tree_ids.clone(),
         total_tree_count: run.ordered_tree_ids.len(),
         next_tree,
     })

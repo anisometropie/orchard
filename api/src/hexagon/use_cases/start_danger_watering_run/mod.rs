@@ -96,6 +96,7 @@ pub fn start_danger_watering_run(
             carry_capacity: Some(event.carry_capacity),
             ordered_tree_ids,
             watered_tree_ids: vec![],
+            skipped_tree_ids: vec![],
             completed: false,
             paused: false,
         };
