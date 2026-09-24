@@ -1588,6 +1588,25 @@ fn read_and_clear_exact_cultivar_or_cultivarless_harvest_schedules() {
 }
 
 #[test]
+fn harvest_window_edits_honor_the_source_preservation_contract() {
+    #[path = "../../../../tests/support/harvest_window_edit_contract.rs"]
+    mod harvest_window_edit_contract;
+    let _database_lock = database_lock();
+    let (database_url, mut connection) = empty_orchard_database();
+    connection
+        .batch_execute(
+            "
+        INSERT INTO orchards (name, center, reference_region)
+        VALUES ('North orchard', ST_SetSRID(ST_MakePoint(0, 0), 4326), 'Sapporo, Japan'),
+               ('South orchard', ST_SetSRID(ST_MakePoint(0, 0), 4326), 'Sapporo, Japan');
+    ",
+        )
+        .unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    harvest_window_edit_contract::assert_harvest_window_edits_preserve_sources(&mut storage);
+}
+
+#[test]
 fn change_tree_danger_by_numeric_id() {
     let _database_lock = database_lock();
     let (database_url, mut verification_connection) = empty_orchard_database();

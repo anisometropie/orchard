@@ -1090,6 +1090,59 @@ impl OrchardStorage for InMemoryOrchardStorage {
         })
     }
 
+    fn harvest_windows(
+        &mut self,
+        owner: HarvestScheduleOwner,
+    ) -> Result<Vec<AnnualHarvestWindow>, OrchardStorageError> {
+        if let Some((_, windows)) = self.transaction.as_ref().and_then(|transaction| {
+            transaction
+                .staged_harvest_schedule_replacements
+                .iter()
+                .rev()
+                .find(|(stored_owner, _)| *stored_owner == owner)
+        }) {
+            return Ok(windows.clone());
+        }
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .harvest_schedules
+            .iter()
+            .find(|(stored_owner, _)| *stored_owner == owner)
+            .map(|(_, windows)| windows.clone())
+            .unwrap_or_default())
+    }
+
+    fn orchard_harvest_windows(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+    ) -> Result<Vec<AnnualHarvestWindow>, OrchardStorageError> {
+        if let Some((_, _, windows)) = self.transaction.as_ref().and_then(|transaction| {
+            transaction
+                .staged_orchard_harvest_schedule_replacements
+                .iter()
+                .rev()
+                .find(|(stored_orchard, stored_owner, _)| {
+                    *stored_orchard == orchard_id && *stored_owner == owner
+                })
+        }) {
+            return Ok(windows.clone());
+        }
+        Ok(self
+            .orchard
+            .lock()
+            .unwrap()
+            .orchard_harvest_schedules
+            .iter()
+            .find(|(stored_orchard, stored_owner, _)| {
+                *stored_orchard == orchard_id && *stored_owner == owner
+            })
+            .map(|(_, _, windows)| windows.clone())
+            .unwrap_or_default())
+    }
+
     fn replace_harvest_windows(
         &mut self,
         owner: HarvestScheduleOwner,

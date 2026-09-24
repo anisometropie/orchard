@@ -43,7 +43,7 @@ pub fn replace_plant_harvest_windows(
     if !event.windows.is_empty() && reference_region.is_empty() {
         return Err(PlantHarvestWindowsReplacementError::MissingReferenceRegion);
     }
-    let harvest_windows = event
+    let mut harvest_windows = event
         .windows
         .into_iter()
         .map(|window| {
@@ -63,6 +63,10 @@ pub fn replace_plant_harvest_windows(
         .collect::<Result<Vec<_>, _>>()?;
 
     orchard_storage.transaction(|orchard| {
+        preserve_unchanged_window_origins(
+            &mut harvest_windows,
+            orchard.harvest_windows(event.owner)?,
+        );
         match orchard.replace_harvest_windows(event.owner, harvest_windows) {
             Ok(true) => Ok(()),
             Ok(false) => Err(PlantHarvestWindowsReplacementError::OwnerNotFound),
@@ -79,7 +83,7 @@ pub fn replace_orchard_harvest_windows(
     if !event.windows.is_empty() && reference_region.is_empty() {
         return Err(PlantHarvestWindowsReplacementError::MissingReferenceRegion);
     }
-    let harvest_windows = event
+    let mut harvest_windows = event
         .windows
         .into_iter()
         .map(|window| {
@@ -99,6 +103,10 @@ pub fn replace_orchard_harvest_windows(
         .collect::<Result<Vec<_>, _>>()?;
 
     orchard_storage.transaction(|orchard| {
+        preserve_unchanged_window_origins(
+            &mut harvest_windows,
+            orchard.orchard_harvest_windows(event.orchard_id, event.owner)?,
+        );
         match orchard.replace_orchard_harvest_windows(
             event.orchard_id,
             event.owner,
@@ -109,6 +117,24 @@ pub fn replace_orchard_harvest_windows(
             Err(_) => Err(PlantHarvestWindowsReplacementError::HarvestWindowsCouldNotBeReplaced),
         }
     })
+}
+
+fn preserve_unchanged_window_origins(
+    windows: &mut [AnnualHarvestWindow],
+    mut saved_windows: Vec<AnnualHarvestWindow>,
+) {
+    for window in windows {
+        if let Some(index) = saved_windows.iter().position(|saved| {
+            saved.start == window.start
+                && saved.end == window.end
+                && saved.harvested_part == window.harvested_part
+                && saved.reference_region == window.reference_region
+        }) {
+            let saved = saved_windows.remove(index);
+            window.data_origin = saved.data_origin;
+            window.source_url = saved.source_url;
+        }
+    }
 }
 
 impl From<OrchardStorageError> for PlantHarvestWindowsReplacementError {

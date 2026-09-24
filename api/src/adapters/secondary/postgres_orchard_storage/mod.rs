@@ -583,6 +583,21 @@ impl OrchardStorage for PostgresOrchardStorage {
         resolve_plant_identification(&mut self.client, plant_identification)
     }
 
+    fn harvest_windows(
+        &mut self,
+        owner: HarvestScheduleOwner,
+    ) -> Result<Vec<AnnualHarvestWindow>, OrchardStorageError> {
+        read_harvest_windows(&mut self.client, None, owner)
+    }
+
+    fn orchard_harvest_windows(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+    ) -> Result<Vec<AnnualHarvestWindow>, OrchardStorageError> {
+        read_harvest_windows(&mut self.client, Some(orchard_id), owner)
+    }
+
     fn replace_harvest_windows(
         &mut self,
         owner: HarvestScheduleOwner,
@@ -2297,6 +2312,50 @@ fn harvest_tree_outcome_from_stored_values(
 
 fn parse_stored_harvest_date(value: &str) -> Result<HarvestDate, ()> {
     HarvestDate::parse_iso(value).ok_or(())
+}
+
+fn read_harvest_windows(
+    client: &mut Client,
+    orchard_id: Option<OrchardId>,
+    owner: HarvestScheduleOwner,
+) -> Result<Vec<AnnualHarvestWindow>, OrchardStorageError> {
+    let orchard_id = orchard_id
+        .map(|id| i64::try_from(id.0))
+        .transpose()
+        .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeRead)?;
+    let (identity_id, cultivar_id) = match owner {
+        HarvestScheduleOwner::PlantIdentity(id) => (Some(id.0), None),
+        HarvestScheduleOwner::PlantCultivar(id) => (None, Some(id.0)),
+    };
+    let identity_id = identity_id
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeRead)?;
+    let cultivar_id = cultivar_id
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeRead)?;
+    client
+        .query(
+            "SELECT json_build_object(
+            'start', json_build_object('month', start_month, 'day', start_day),
+            'end', json_build_object('month', end_month, 'day', end_day),
+            'reference_region', reference_region, 'harvested_part', harvested_part,
+            'data_origin', data_origin, 'source_url', source_url
+         )::text FROM plant_harvest_windows
+         WHERE ($1::bigint IS NULL OR orchard_id = $1)
+           AND ((plant_identity_id = $2::bigint AND cultivar_id IS NULL)
+                OR cultivar_id = $3::bigint)
+         ORDER BY id FOR UPDATE",
+            &[&orchard_id, &identity_id, &cultivar_id],
+        )
+        .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeRead)?
+        .into_iter()
+        .map(|row| {
+            serde_json::from_str(&row.get::<_, String>(0))
+                .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeRead)
+        })
+        .collect()
 }
 
 fn harvest_windows_from_row(

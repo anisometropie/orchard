@@ -12,6 +12,7 @@ pub enum OrchardStorageError {
     ExistingLegacyTreeCouldNotBeChecked,
     PlantIdentityCouldNotBeResolved,
     HarvestWindowsCouldNotBeReplaced,
+    HarvestWindowsCouldNotBeRead,
     TreeCouldNotBeSaved,
     TreeCouldNotBeRead,
     TreeDangerCouldNotBeChanged,
@@ -58,6 +59,18 @@ pub trait OrchardStorage {
         owner: HarvestScheduleOwner,
         harvest_windows: Vec<AnnualHarvestWindow>,
     ) -> Result<bool, OrchardStorageError>;
+    /// Read saved and staged windows. Use inside a transaction when preparing an edit.
+    fn harvest_windows(
+        &mut self,
+        owner: HarvestScheduleOwner,
+    ) -> Result<Vec<AnnualHarvestWindow>, OrchardStorageError>;
+    /// Read only this orchard's exact species/cultivar schedule, including staged changes.
+    /// Persistent implementations lock existing windows until the editing transaction ends.
+    fn orchard_harvest_windows(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+    ) -> Result<Vec<AnnualHarvestWindow>, OrchardStorageError>;
     fn replace_orchard_harvest_windows(
         &mut self,
         orchard_id: OrchardId,

@@ -11,6 +11,14 @@ use orchard_api::hexagon::ports::{OrchardStorage, OrchardStorageError};
 mod watering_run_fixture;
 
 #[test]
+fn harvest_window_edits_honor_the_source_preservation_contract() {
+    #[path = "../../../../tests/support/harvest_window_edit_contract.rs"]
+    mod harvest_window_edit_contract;
+    let (mut storage, _) = InMemoryOrchardStorage::new();
+    harvest_window_edit_contract::assert_harvest_window_edits_preserve_sources(&mut storage);
+}
+
+#[test]
 fn skipped_watering_progress_honors_the_storage_contract() {
     #[path = "../../../../tests/support/watering_skip_contract.rs"]
     mod watering_skip_contract;

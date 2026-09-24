@@ -1777,6 +1777,63 @@ async fn a_watering_link_can_cancel_an_active_run_but_a_view_link_cannot() {
 }
 
 #[tokio::test]
+async fn editing_a_harvest_window_preserves_the_unchanged_windows_reference_in_geojson() {
+    use orchard_api::hexagon::models::{
+        AnnualDate, AnnualHarvestWindow, HarvestDataOrigin, HarvestScheduleOwner,
+    };
+    let mut storage = owned_storage();
+    storage
+        .transaction(|storage| {
+            storage.replace_orchard_harvest_windows(
+                OrchardId(7),
+                HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
+                [6, 9]
+                    .map(|month| AnnualHarvestWindow {
+                        start: AnnualDate { month, day: 1 },
+                        end: AnnualDate { month, day: 20 },
+                        reference_region: Some("Sapporo, Japan".into()),
+                        harvested_part: HarvestedPart::Fruit,
+                        data_origin: HarvestDataOrigin::ExternalReference,
+                        source_url: Some(format!("https://example.com/harvest/{month}")),
+                    })
+                    .to_vec(),
+            )
+        })
+        .unwrap();
+    let server = start_http_server(storage, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let response = client.put(format!("{}/orchards/7/plant-identities/1/harvest-windows", server.url()))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({
+            "reference_region": "Sapporo, Japan",
+            "windows": [
+                { "start": {"month": 6, "day": 1}, "end": {"month": 6, "day": 25}, "harvested_part": "fruit" },
+                { "start": {"month": 9, "day": 1}, "end": {"month": 9, "day": 20}, "harvested_part": "fruit" }
+            ]
+        })).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let map: serde_json::Value = client
+        .get(format!("{}/orchards/7/trees.geojson", server.url()))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let windows = map["features"][0]["properties"]["harvest_windows"]
+        .as_array()
+        .unwrap();
+    assert_eq!(windows[0]["data_origin"], "field_observation");
+    assert!(windows[0]["source_url"].is_null());
+    assert_eq!(windows[1]["data_origin"], "external_reference");
+    assert_eq!(windows[1]["source_url"], "https://example.com/harvest/9");
+}
+
+#[tokio::test]
 async fn an_owner_can_run_a_resumable_harvest_tour_and_extend_a_shared_window() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await
