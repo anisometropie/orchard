@@ -67,7 +67,9 @@ pub fn start_watering_run(
         let mut row_trees = orchard_trees
             .iter()
             .filter(|tree| {
-                tree.tree.is_alive && tree.tree.row_name.as_deref() == Some(event.row_name.as_str())
+                tree.tree.is_alive
+                    && !tree.tree.is_excluded_from_watering
+                    && tree.tree.row_name.as_deref() == Some(event.row_name.as_str())
             })
             .collect::<Vec<_>>();
         if row_trees.is_empty() {

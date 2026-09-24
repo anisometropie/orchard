@@ -761,6 +761,22 @@ impl OrchardStorage for PostgresOrchardStorage {
         }
     }
 
+    fn change_tree_watering_exclusion(
+        &mut self,
+        tree_id: TreeId,
+        is_excluded_from_watering: bool,
+    ) -> Result<(), OrchardStorageError> {
+        let tree_id = i64::try_from(tree_id.0)
+            .map_err(|_| OrchardStorageError::TreeWateringExclusionCouldNotBeChanged)?;
+        match self.client.execute(
+            "UPDATE trees SET is_excluded_from_watering = $2 WHERE id = $1",
+            &[&tree_id, &is_excluded_from_watering],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::TreeWateringExclusionCouldNotBeChanged),
+        }
+    }
+
     fn change_tree_life_status(
         &mut self,
         tree_id: TreeId,
@@ -812,7 +828,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                         SELECT 1 FROM tree_photos photo
                         WHERE photo.tree_id = t.id
                           AND photo.orchard_id = t.orchard_id
-                    )
+                    ), t.is_excluded_from_watering
                  FROM trees t
                  JOIN plant_identities p ON p.id = t.plant_identity_id
                  LEFT JOIN plant_cultivars c ON c.id = t.cultivar_id
@@ -864,7 +880,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                         SELECT 1 FROM tree_photos photo
                         WHERE photo.tree_id = t.id
                           AND photo.orchard_id = t.orchard_id
-                    )
+                    ), t.is_excluded_from_watering
                  FROM trees t
                  JOIN plant_identities p ON p.id = t.plant_identity_id
                  LEFT JOIN plant_cultivars c ON c.id = t.cultivar_id
@@ -2028,6 +2044,7 @@ fn orchard_tree_from_row(row: &postgres::Row) -> Result<OrchardTree, OrchardStor
             roles: row.get(11),
             is_alive: row.get(12),
             is_in_danger: row.get(16),
+            is_excluded_from_watering: row.get("is_excluded_from_watering"),
             reproductive_role,
             adult_height_meters: row.get(14),
             adult_width_meters: row.get(15),
@@ -2416,11 +2433,11 @@ fn save_tree(client: &mut Client, tree: Tree) -> Result<(), postgres::Error> {
                 legacy_source_url,
                 legacy_identification_name, legacy_identification_latin_name,
                 planted_on, row_name, roles, is_alive, is_in_danger, reproductive_role,
-                adult_height_meters, adult_width_meters
+                adult_height_meters, adult_width_meters, is_excluded_from_watering
             ) VALUES (
                 $1, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326),
                 $7, $8, $9, $10, $11, $12::TEXT::DATE, $13,
-                $14, $15, $16, $17, $18, $19
+                $14, $15, $16, $17, $18, $19, $20
             )",
             &[
                 &legacy_feature_id,
@@ -2442,6 +2459,7 @@ fn save_tree(client: &mut Client, tree: Tree) -> Result<(), postgres::Error> {
                 &reproductive_role,
                 &tree.adult_height_meters,
                 &tree.adult_width_meters,
+                &tree.is_excluded_from_watering,
             ],
         )
         .map(|_| ())

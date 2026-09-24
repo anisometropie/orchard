@@ -31,6 +31,7 @@ fn list_a_stored_tree_with_its_plant_identity() {
         roles: vec!["fruit".into()],
         is_alive: true,
         is_in_danger: true,
+        is_excluded_from_watering: false,
         reproductive_role: None,
         adult_height_meters: Some(4.0),
         adult_width_meters: Some(3.0),

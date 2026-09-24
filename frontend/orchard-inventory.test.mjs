@@ -19,7 +19,7 @@ const indexHtml = readFileSync(new URL("./index.html", import.meta.url), "utf8")
 
 test("the tree editor leaves photo capture to the separate camera action", () => {
   assert.deepEqual(treeEditorPresentation(), {
-    fields: ["danger", "dead"],
+    fields: ["danger", "dead", "watering-exclusion"],
     actions: ["cancel", "save"],
   });
 });

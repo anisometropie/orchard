@@ -56,6 +56,7 @@ fn tree(longitude: f64) -> Tree {
         roles: vec![],
         is_alive: true,
         is_in_danger: false,
+        is_excluded_from_watering: false,
         reproductive_role: None,
         adult_height_meters: None,
         adult_width_meters: None,

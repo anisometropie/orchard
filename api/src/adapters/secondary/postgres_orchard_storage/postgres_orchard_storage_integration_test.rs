@@ -1211,6 +1211,7 @@ fn commit_persists_identity_and_tree() {
                 roles: vec![],
                 is_alive: true,
                 is_in_danger: true,
+                is_excluded_from_watering: false,
                 reproductive_role: None,
                 adult_height_meters: Some(4.0),
                 adult_width_meters: Some(3.0),
@@ -1448,6 +1449,7 @@ fn change_tree_danger_by_numeric_id() {
             tree_id: TreeId(1),
             is_alive: None,
             is_in_danger: Some(true),
+            is_excluded_from_watering: None,
         },
         &mut orchard_storage,
     );
@@ -1458,6 +1460,65 @@ fn change_tree_danger_by_numeric_id() {
         .unwrap()
         .get(0);
     assert!(is_in_danger);
+}
+
+#[test]
+fn persist_watering_exclusion_and_rollback_failed_changes() {
+    let _database_lock = database_lock();
+    let (database_url, mut verification) = empty_orchard_database();
+    verification.batch_execute(r#"
+        INSERT INTO plant_identities (common_name, botanical_taxon)
+        VALUES ('Apple', '{"Named":{"genus":"Malus","species":null,"species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}');
+    "#).unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let mut excluded = tree(
+        PlantIdentityReference {
+            plant_identity_id: PlantIdentityId(1),
+            cultivar_id: None,
+        },
+        17,
+    );
+    excluded.is_excluded_from_watering = true;
+    storage
+        .transaction(|orchard| orchard.save_tree(excluded))
+        .unwrap();
+    assert!(storage.trees().unwrap()[0].tree.is_excluded_from_watering);
+
+    let result: Result<(), OrchardStorageError> = storage.transaction(|orchard| {
+        orchard.change_tree_watering_exclusion(TreeId(1), false)?;
+        Err(OrchardStorageError::TreeCouldNotBeSaved)
+    });
+    assert_eq!(result, Err(OrchardStorageError::TreeCouldNotBeSaved));
+    assert!(storage.trees().unwrap()[0].tree.is_excluded_from_watering);
+
+    verification.batch_execute("BEGIN").unwrap();
+    assert!(
+        verification
+            .batch_execute(include_str!(
+                "../../../../db/migrations/down/027_add_watering_exclusions.sql"
+            ))
+            .is_err()
+    );
+    verification.batch_execute("ROLLBACK").unwrap();
+
+    change_tree_condition(
+        TreeConditionChanged {
+            tree_id: TreeId(1),
+            is_alive: None,
+            is_in_danger: None,
+            is_excluded_from_watering: Some(false),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    assert!(!storage.trees().unwrap()[0].tree.is_excluded_from_watering);
+    verification.batch_execute("BEGIN").unwrap();
+    verification
+        .batch_execute(include_str!(
+            "../../../../db/migrations/down/027_add_watering_exclusions.sql"
+        ))
+        .unwrap();
+    verification.batch_execute("ROLLBACK").unwrap();
 }
 
 #[test]
@@ -1491,6 +1552,7 @@ fn change_tree_life_status_by_numeric_id_and_clear_danger() {
             tree_id: TreeId(1),
             is_alive: Some(false),
             is_in_danger: None,
+            is_excluded_from_watering: None,
         },
         &mut orchard_storage,
     );
@@ -1667,6 +1729,7 @@ fn persist_legacy_details() {
                     roles: vec!["fruit".into()],
                     is_alive: true,
                     is_in_danger: false,
+                    is_excluded_from_watering: false,
                     reproductive_role: Some(ReproductiveRole::SelfFertile),
                     adult_height_meters: Some(6.0),
                     adult_width_meters: Some(5.0),
@@ -1710,6 +1773,7 @@ fn persist_legacy_details() {
                     roles: vec!["fruit".into()],
                     is_alive: true,
                     is_in_danger: false,
+                    is_excluded_from_watering: false,
                     reproductive_role: None,
                     adult_height_meters: Some(0.2),
                     adult_width_meters: Some(0.5),
@@ -1753,6 +1817,7 @@ fn persist_legacy_details() {
                     roles: vec!["fruit".into()],
                     is_alive: true,
                     is_in_danger: false,
+                    is_excluded_from_watering: false,
                     reproductive_role: None,
                     adult_height_meters: Some(1.5),
                     adult_width_meters: Some(1.2),
@@ -2147,6 +2212,7 @@ fn tree(plant_identity: PlantIdentityReference, legacy_feature_id: u32) -> Tree 
         roles: vec!["fruit".into()],
         is_alive: true,
         is_in_danger: false,
+        is_excluded_from_watering: false,
         reproductive_role: Some(ReproductiveRole::SelfFertile),
         adult_height_meters: Some(6.0),
         adult_width_meters: Some(5.0),
@@ -2579,6 +2645,22 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/026_allow_parallel_watering_runs.sql"
+            ))
+            .unwrap();
+    }
+    let exclusions_were_applied: bool = verification_connection
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+         WHERE table_schema = current_schema() AND table_name = 'trees'
+           AND column_name = 'is_excluded_from_watering')",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !exclusions_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/027_add_watering_exclusions.sql"
             ))
             .unwrap();
     }

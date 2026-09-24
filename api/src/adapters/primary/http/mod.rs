@@ -935,7 +935,7 @@ fn watering_start_error_response(error: WateringRunStartError) -> Response {
         WateringRunStartError::RowNotFound => StatusCode::NOT_FOUND.into_response(),
         WateringRunStartError::RowNotOrdered => watering_conflict_response(
             "watering_row_not_ordered",
-            "Order every living tree in this row before starting watering.",
+            "Order every tree included in watering in this row before starting.",
         ),
         WateringRunStartError::HarvestRunIsActive => {
             watering_conflict_response("harvest_run_active", "A harvest tour is already active.")
@@ -2023,6 +2023,7 @@ where
 struct ChangeTreeRequest {
     is_alive: Option<bool>,
     is_in_danger: Option<bool>,
+    is_excluded_from_watering: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -2520,6 +2521,7 @@ where
                 tree_id: TreeId(tree_id),
                 is_alive: request.is_alive,
                 is_in_danger: request.is_in_danger,
+                is_excluded_from_watering: request.is_excluded_from_watering,
             },
             &mut *storage,
         )
@@ -2615,6 +2617,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
             roles,
             is_alive,
             is_in_danger,
+            is_excluded_from_watering,
             adult_height_meters,
             adult_width_meters,
             ..
@@ -2675,6 +2678,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
                 "roles": roles,
                 "is_alive": is_alive,
                 "is_in_danger": is_in_danger,
+                "is_excluded_from_watering": is_excluded_from_watering,
                 "adult_height": adult_height_meters,
                 "adult_width": adult_width_meters
             }

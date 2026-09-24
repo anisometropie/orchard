@@ -7,6 +7,45 @@ use orchard_api::hexagon::use_cases::change_tree_condition::{
 };
 
 #[test]
+fn exclude_and_reinclude_one_tree_without_changing_its_life_or_danger() {
+    let (mut storage, observer) = InMemoryOrchardStorage::with_existing_orchard(
+        vec![apple_identity()],
+        vec![apple_tree(0.64, true, true)],
+    );
+    for excluded in [true, false] {
+        change_tree_condition(
+            TreeConditionChanged {
+                tree_id: TreeId(1),
+                is_alive: None,
+                is_in_danger: None,
+                is_excluded_from_watering: Some(excluded),
+            },
+            &mut storage,
+        )
+        .unwrap();
+        let tree = &observer.trees()[0];
+        assert_eq!(tree.is_excluded_from_watering, excluded);
+        assert!(tree.is_alive);
+        assert!(tree.is_in_danger);
+    }
+}
+
+#[test]
+fn rollback_watering_exclusion_when_the_transaction_fails() {
+    use orchard_api::hexagon::ports::{OrchardStorage, OrchardStorageError};
+    let (mut storage, observer) = InMemoryOrchardStorage::with_existing_orchard(
+        vec![apple_identity()],
+        vec![apple_tree(0.64, true, false)],
+    );
+    let result: Result<(), OrchardStorageError> = storage.transaction(|orchard| {
+        orchard.change_tree_watering_exclusion(TreeId(1), true)?;
+        Err(OrchardStorageError::TreeCouldNotBeSaved)
+    });
+    assert_eq!(result, Err(OrchardStorageError::TreeCouldNotBeSaved));
+    assert!(!observer.trees()[0].is_excluded_from_watering);
+}
+
+#[test]
 fn mark_one_tree_dead_with_a_partial_change_and_clear_its_danger() {
     let first_tree = apple_tree(0.64, true, false);
     let second_tree = apple_tree(0.22, true, true);
@@ -20,6 +59,7 @@ fn mark_one_tree_dead_with_a_partial_change_and_clear_its_danger() {
             tree_id: TreeId(2),
             is_alive: Some(false),
             is_in_danger: None,
+            is_excluded_from_watering: None,
         },
         &mut orchard_storage,
     );
@@ -42,6 +82,7 @@ fn change_only_the_danger_field() {
             tree_id: TreeId(1),
             is_alive: None,
             is_in_danger: Some(true),
+            is_excluded_from_watering: None,
         },
         &mut orchard_storage,
     );
@@ -62,6 +103,7 @@ fn revive_a_tree_and_mark_it_in_danger_in_one_change() {
             tree_id: TreeId(1),
             is_alive: Some(true),
             is_in_danger: Some(true),
+            is_excluded_from_watering: None,
         },
         &mut orchard_storage,
     );
@@ -82,6 +124,7 @@ fn reject_a_change_that_would_leave_a_dead_tree_in_danger() {
             tree_id: TreeId(1),
             is_alive: Some(false),
             is_in_danger: Some(true),
+            is_excluded_from_watering: None,
         },
         &mut orchard_storage,
     );
@@ -105,6 +148,7 @@ fn reject_an_empty_condition_change() {
             tree_id: TreeId(1),
             is_alive: None,
             is_in_danger: None,
+            is_excluded_from_watering: None,
         },
         &mut orchard_storage,
     );
@@ -124,6 +168,7 @@ fn report_when_tree_does_not_exist() {
             tree_id: TreeId(2),
             is_alive: Some(false),
             is_in_danger: None,
+            is_excluded_from_watering: None,
         },
         &mut orchard_storage,
     );
@@ -145,6 +190,7 @@ fn apple_tree(longitude: f64, is_alive: bool, is_in_danger: bool) -> Tree {
         roles: vec!["fruit".into()],
         is_alive,
         is_in_danger,
+        is_excluded_from_watering: false,
         reproductive_role: None,
         adult_height_meters: Some(4.0),
         adult_width_meters: Some(3.0),

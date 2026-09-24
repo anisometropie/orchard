@@ -16,6 +16,69 @@ const USERNAME: &str = "owner";
 const PASSWORD: &str = "correct horse battery staple";
 
 #[tokio::test]
+async fn only_owner_can_change_watering_exclusion_and_the_map_returns_it() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let view_token = create_share_token(&client, server.url(), &cookie).await;
+    let watering_token = create_watering_share_token(&client, server.url(), &cookie).await;
+
+    for token in [&view_token, &watering_token] {
+        assert_eq!(
+            client
+                .patch(format!("{}/orchards/7/trees/1", server.url()))
+                .header("x-orchard-share-token", token)
+                .json(&serde_json::json!({ "is_excluded_from_watering": true }))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    for excluded in [true, false] {
+        assert_eq!(
+            client
+                .patch(format!("{}/orchards/7/trees/1", server.url()))
+                .header(header::COOKIE, &cookie)
+                .json(&serde_json::json!({ "is_excluded_from_watering": excluded }))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let trees = client
+            .get(format!("{}/orchards/7/trees.geojson", server.url()))
+            .header("x-orchard-share-token", &watering_token)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(
+            trees["features"][0]["properties"]["is_excluded_from_watering"],
+            excluded
+        );
+        assert_eq!(trees["features"][0]["properties"]["is_alive"], true);
+    }
+    assert_eq!(
+        client
+            .patch(format!("{}/orchards/8/trees/1", server.url()))
+            .header(header::COOKIE, &cookie)
+            .json(&serde_json::json!({ "is_excluded_from_watering": true }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn owner_login_opens_only_the_owned_orchard_and_sets_a_secure_cookie() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await
@@ -2032,6 +2095,7 @@ fn tree() -> Tree {
         roles: vec!["fruit".into()],
         is_alive: true,
         is_in_danger: false,
+        is_excluded_from_watering: false,
         reproductive_role: None,
         adult_height_meters: None,
         adult_width_meters: None,

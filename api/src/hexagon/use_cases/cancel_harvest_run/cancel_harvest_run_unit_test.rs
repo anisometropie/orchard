@@ -121,6 +121,7 @@ fn harvest_storage_with_tree_count(tree_count: usize) -> InMemoryOrchardStorage 
                 roles: vec!["fruit".into()],
                 is_alive: true,
                 is_in_danger: false,
+                is_excluded_from_watering: false,
                 reproductive_role: None,
                 adult_height_meters: None,
                 adult_width_meters: None,

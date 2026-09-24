@@ -274,6 +274,7 @@ fn tree(plant_identity_id: PlantIdentityId, longitude: f64, is_alive: bool) -> T
         roles: vec!["fruit".into()],
         is_alive,
         is_in_danger: false,
+        is_excluded_from_watering: false,
         reproductive_role: None,
         adult_height_meters: None,
         adult_width_meters: None,

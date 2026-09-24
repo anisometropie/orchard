@@ -129,6 +129,7 @@ fn apple_tree(row_name: &str, longitude: f64, latitude: f64) -> Tree {
         roles: vec!["fruit".into()],
         is_alive: true,
         is_in_danger: false,
+        is_excluded_from_watering: false,
         reproductive_role: None,
         adult_height_meters: None,
         adult_width_meters: None,

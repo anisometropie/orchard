@@ -72,6 +72,7 @@ fn harvest_storage() -> InMemoryOrchardStorage {
             roles: vec!["fruit".into()],
             is_alive: true,
             is_in_danger: false,
+            is_excluded_from_watering: false,
             reproductive_role: None,
             adult_height_meters: None,
             adult_width_meters: None,

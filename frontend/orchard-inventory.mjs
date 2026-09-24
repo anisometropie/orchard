@@ -11,7 +11,7 @@ export function treeTooltipFields(properties = {}) {
 
 export function treeEditorPresentation() {
   return {
-    fields: ["danger", "dead"],
+    fields: ["danger", "dead", "watering-exclusion"],
     actions: ["cancel", "save"],
   };
 }

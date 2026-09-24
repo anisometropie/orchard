@@ -92,6 +92,7 @@ struct InMemoryOrchardTransaction {
     staged_orchard_harvest_schedule_replacements:
         Vec<(OrchardId, HarvestScheduleOwner, Vec<AnnualHarvestWindow>)>,
     staged_tree_danger_changes: Vec<(TreeId, bool)>,
+    staged_tree_watering_exclusions: Vec<(TreeId, bool)>,
     staged_tree_life_status_changes: Vec<(TreeId, bool)>,
     staged_tree_position_changes: Vec<(TreeId, GeoPoint)>,
     staged_row_orders: Vec<(OrchardId, String, Vec<TreeId>)>,
@@ -800,6 +801,15 @@ impl OrchardStorage for InMemoryOrchardStorage {
                         .expect("a staged danger change should target an existing tree")
                         .is_in_danger = is_in_danger;
                 }
+                for (tree_id, excluded) in transaction.staged_tree_watering_exclusions {
+                    let index = tree_index(tree_id)
+                        .expect("a staged watering exclusion should have a positive tree ID");
+                    committed_orchard
+                        .trees
+                        .get_mut(index)
+                        .expect("a staged watering exclusion should target an existing tree")
+                        .is_excluded_from_watering = excluded;
+                }
                 for (tree_id, is_alive) in transaction.staged_tree_life_status_changes {
                     let index = tree_index(tree_id)
                         .expect("a staged life-status change should have a positive tree ID");
@@ -1216,6 +1226,22 @@ impl OrchardStorage for InMemoryOrchardStorage {
             .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
             .staged_tree_danger_changes
             .push((tree_id, is_in_danger));
+        Ok(())
+    }
+
+    fn change_tree_watering_exclusion(
+        &mut self,
+        tree_id: TreeId,
+        is_excluded_from_watering: bool,
+    ) -> Result<(), OrchardStorageError> {
+        if self.tree_is_alive(tree_id)?.is_none() {
+            return Err(OrchardStorageError::TreeWateringExclusionCouldNotBeChanged);
+        }
+        self.transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?
+            .staged_tree_watering_exclusions
+            .push((tree_id, is_excluded_from_watering));
         Ok(())
     }
 

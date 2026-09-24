@@ -21,6 +21,77 @@ use orchard_api::hexagon::use_cases::start_watering_run::{
 };
 
 #[test]
+fn exclude_flagged_trees_before_checking_row_order_and_keep_existing_run_snapshot() {
+    use orchard_api::hexagon::ports::OrchardStorage;
+    use orchard_api::hexagon::use_cases::change_tree_condition::{
+        TreeConditionChanged, change_tree_condition,
+    };
+    let mut excluded = apple_tree("North", -73.409, true);
+    excluded.is_excluded_from_watering = true;
+    let (mut storage, observer) = InMemoryOrchardStorage::with_user_owned_orchard(
+        "owner",
+        "password",
+        orchard(),
+        vec![apple_identity()],
+        vec![excluded, apple_tree("North", -73.227, true)],
+    );
+    storage
+        .transaction(|orchard| orchard.replace_row_order(OrchardId(7), "North", &[TreeId(2)]))
+        .unwrap();
+    let started = start_watering_run(
+        WateringRunStartRequested {
+            orchard_id: OrchardId(7),
+            row_name: "North".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    assert_eq!(started.total_tree_count, 1);
+    assert_eq!(started.next_tree.as_ref().unwrap().id, TreeId(2));
+    assert_eq!(
+        observer.active_watering_run_tree_ids(OrchardId(7)),
+        vec![TreeId(2)]
+    );
+    change_tree_condition(
+        TreeConditionChanged {
+            tree_id: TreeId(2),
+            is_alive: None,
+            is_in_danger: None,
+            is_excluded_from_watering: Some(true),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let restored = load_active_watering_run(OrchardId(7), &mut storage)
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored, started);
+}
+
+#[test]
+fn refuse_a_row_with_no_trees_eligible_for_watering() {
+    let mut excluded = apple_tree("North", -73.409, true);
+    excluded.is_excluded_from_watering = true;
+    let (mut storage, _) = InMemoryOrchardStorage::with_user_owned_orchard(
+        "owner",
+        "password",
+        orchard(),
+        vec![apple_identity()],
+        vec![excluded],
+    );
+    assert_eq!(
+        start_watering_run(
+            WateringRunStartRequested {
+                orchard_id: OrchardId(7),
+                row_name: "North".into(),
+            },
+            &mut storage
+        ),
+        Err(WateringRunStartError::RowNotFound)
+    );
+}
+
+#[test]
 fn start_with_the_first_living_tree_in_the_rows_saved_order() {
     let trees = vec![
         apple_tree("North", -73.409, true),
@@ -364,6 +435,7 @@ fn apple_tree(row_name: &str, longitude: f64, is_alive: bool) -> Tree {
         roles: vec!["fruit".into()],
         is_alive,
         is_in_danger: false,
+        is_excluded_from_watering: false,
         reproductive_role: None,
         adult_height_meters: None,
         adult_width_meters: None,

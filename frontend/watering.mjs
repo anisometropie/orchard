@@ -30,6 +30,13 @@ export function wateringRowIsOrdered(rows, rowName) {
   return rows.some((row) => row.name === rowName && row.isOrdered);
 }
 
+export function wateringRows(features) {
+  return orchardRows(features.filter((feature) =>
+    feature.properties?.is_alive !== false &&
+    feature.properties?.is_excluded_from_watering !== true,
+  ));
+}
+
 export function rowOrderPreview(features, rowName, visible) {
   if (!visible || !wateringRowIsOrdered(orchardRows(features), rowName)) {
     return [];
@@ -52,7 +59,7 @@ export function rowOrderPreview(features, rowName, visible) {
 
 export function wateringStartConflictMessage(code) {
   if (code === "watering_row_not_ordered") {
-    return "Order every living tree in this row before starting watering.";
+    return "Order every tree included in watering in this row before starting.";
   }
   if (code === "harvest_run_active") {
     return "Finish or cancel the active harvest tour first.";
@@ -84,6 +91,7 @@ export function dangerTreeCount(features) {
   return features.filter(
     (feature) =>
       feature.properties?.is_alive !== false &&
+      feature.properties?.is_excluded_from_watering !== true &&
       feature.properties?.is_in_danger === true,
   ).length;
 }

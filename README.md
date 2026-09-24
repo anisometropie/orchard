@@ -174,6 +174,10 @@ run is remembered in that browser tab. **Leave run** only leaves your view;
 the run stays available for everyone else. Starting a row that is already being
 watered joins that row's existing run.
 
+In the tree's pencil editor, **Exclude from watering** leaves the tree alive
+but omits it from new row and danger-tree watering runs. Existing runs keep
+their saved routes. Only the orchard owner can change this flag.
+
 ## Shared links
 
 View and watering share links are permanent database records. Creating a new

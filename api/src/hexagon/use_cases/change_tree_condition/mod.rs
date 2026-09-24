@@ -5,6 +5,7 @@ pub struct TreeConditionChanged {
     pub tree_id: TreeId,
     pub is_alive: Option<bool>,
     pub is_in_danger: Option<bool>,
+    pub is_excluded_from_watering: Option<bool>,
 }
 
 pub struct OrchardTreeConditionChanged {
@@ -12,6 +13,7 @@ pub struct OrchardTreeConditionChanged {
     pub tree_id: TreeId,
     pub is_alive: Option<bool>,
     pub is_in_danger: Option<bool>,
+    pub is_excluded_from_watering: Option<bool>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -26,7 +28,10 @@ pub fn change_tree_condition(
     event: TreeConditionChanged,
     orchard_storage: &mut impl OrchardStorage,
 ) -> Result<(), TreeConditionChangeError> {
-    if event.is_alive.is_none() && event.is_in_danger.is_none() {
+    if event.is_alive.is_none()
+        && event.is_in_danger.is_none()
+        && event.is_excluded_from_watering.is_none()
+    {
         return Err(TreeConditionChangeError::NoChangesRequested);
     }
 
@@ -67,6 +72,12 @@ pub fn change_tree_condition(
                 .map_err(|_| TreeConditionChangeError::TreeCouldNotBeChanged)?;
         }
 
+        if let Some(excluded) = event.is_excluded_from_watering {
+            orchard
+                .change_tree_watering_exclusion(event.tree_id, excluded)
+                .map_err(|_| TreeConditionChangeError::TreeCouldNotBeChanged)?;
+        }
+
         Ok(())
     })
 }
@@ -86,6 +97,7 @@ pub fn change_orchard_tree_condition(
             tree_id: event.tree_id,
             is_alive: event.is_alive,
             is_in_danger: event.is_in_danger,
+            is_excluded_from_watering: event.is_excluded_from_watering,
         },
         orchard_storage,
     )

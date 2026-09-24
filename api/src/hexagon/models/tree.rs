@@ -27,6 +27,8 @@ pub struct Tree {
     pub roles: Vec<String>,
     pub is_alive: bool,
     pub is_in_danger: bool,
+    #[serde(default)]
+    pub is_excluded_from_watering: bool,
     pub reproductive_role: Option<ReproductiveRole>,
     pub adult_height_meters: Option<f64>,
     pub adult_width_meters: Option<f64>,

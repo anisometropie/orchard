@@ -12,6 +12,7 @@ import {
   dangerTreeCount,
   orchardRows,
   pausedWateringRuns,
+  wateringRows,
   rowOrderPreview,
   selectedWateringRun,
   treeIdsInRow,
@@ -34,6 +35,24 @@ const feature = (id, rowName, rowRank, isAlive = true) => ({
     row_rank: rowRank,
     is_alive: isAlive,
   },
+});
+
+test("watering eligibility excludes flagged trees without changing row ordering", () => {
+  const eligible = feature(1, "North", 1);
+  const excluded = feature(2, "North", null);
+  excluded.properties.is_excluded_from_watering = true;
+  excluded.properties.is_in_danger = true;
+  eligible.properties.is_in_danger = true;
+  const excludedRow = feature(3, "South", 1);
+  excludedRow.properties.is_excluded_from_watering = true;
+  const features = [eligible, excluded, excludedRow, feature(4, "North", null, false)];
+
+  assert.deepEqual(wateringRows(features), [
+    { name: "North", treeCount: 1, livingTreeCount: 1, isOrdered: true },
+  ]);
+  assert.equal(dangerTreeCount(features), 1);
+  assert.equal(wateringRowIsOrdered(orchardRows(features), "North"), false);
+  assert.deepEqual(treeIdsInRow(features, "North"), [1, 2, 4]);
 });
 
 test("list named rows and show whether every living tree has a saved order", () => {
@@ -67,7 +86,7 @@ test("explain why row watering cannot start instead of claiming a tour is active
   assert.equal(wateringRowIsOrdered(rows, "Unordered"), false);
   assert.equal(
     wateringStartConflictMessage("watering_row_not_ordered"),
-    "Order every living tree in this row before starting watering.",
+    "Order every tree included in watering in this row before starting.",
   );
   assert.equal(
     wateringStartConflictMessage("harvest_run_active"),

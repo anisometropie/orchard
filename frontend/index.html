@@ -2212,7 +2212,7 @@
         taxonomyOptions,
         treeEditorPresentation,
         treePopupPresentation,
-      } from "./orchard-inventory.mjs?v=7";
+      } from "./orchard-inventory.mjs?v=8";
       import {
         formatHarvestWindows,
         harvestAvailability,
@@ -2263,12 +2263,13 @@
         wateringRouteWindow,
         wateringRowIsOrdered,
         wateringRunSelectionKey,
+        wateringRows,
         wateringStartRequest,
         wateringStartConflictMessage,
         wateringTargetGeoJson,
         wateringWideCenter,
         waterSourceGeoJson,
-      } from "./watering.mjs?v=17";
+      } from "./watering.mjs?v=18";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -4039,6 +4040,7 @@
         const presentation = treeEditorPresentation();
         const originalIsAlive = feature.properties.is_alive !== false;
         const originalIsInDanger = feature.properties.is_in_danger === true;
+        const originalIsExcluded = feature.properties.is_excluded_from_watering === true;
 
         const title = document.createElement("div");
         title.className = "tree-editor-title";
@@ -4060,6 +4062,13 @@
         deadCheckbox.type = "checkbox";
         deadCheckbox.checked = !originalIsAlive;
         deadField.append(deadCheckbox, document.createTextNode("Dead"));
+
+        const exclusionField = document.createElement("label");
+        exclusionField.className = "tree-editor-field";
+        const exclusionCheckbox = document.createElement("input");
+        exclusionCheckbox.type = "checkbox";
+        exclusionCheckbox.checked = originalIsExcluded;
+        exclusionField.append(exclusionCheckbox, document.createTextNode("Exclude from watering"));
 
         const note = document.createElement("div");
         note.className = "tree-editor-note";
@@ -4094,8 +4103,9 @@
         dangerField.hidden =
           !editable || !presentation.fields.includes("danger");
         deadField.hidden = !editable || !presentation.fields.includes("dead");
+        exclusionField.hidden = !editable || !presentation.fields.includes("watering-exclusion");
 
-        form.append(title, dangerField, deadField, note);
+        form.append(title, dangerField, deadField, exclusionField, note);
         form.append(error, actions);
 
         form.addEventListener("submit", async (event) => {
@@ -4103,6 +4113,7 @@
           error.hidden = true;
           dangerCheckbox.disabled = true;
           deadCheckbox.disabled = true;
+          exclusionCheckbox.disabled = true;
           cancelButton.disabled = true;
           saveButton.disabled = true;
           saveButton.textContent = "Saving…";
@@ -4110,6 +4121,9 @@
           try {
             const isAlive = !deadCheckbox.checked;
             const changes = {};
+            if (exclusionCheckbox.checked !== originalIsExcluded) {
+              changes.is_excluded_from_watering = exclusionCheckbox.checked;
+            }
             if (isAlive !== originalIsAlive) {
               changes.is_alive = isAlive;
             }
@@ -4128,6 +4142,7 @@
             error.textContent = requestError.message;
             error.hidden = false;
             deadCheckbox.disabled = false;
+            exclusionCheckbox.disabled = false;
             syncConditionControls();
             cancelButton.disabled = false;
             saveButton.disabled = false;
@@ -4358,7 +4373,8 @@
 
       function refreshWorkflowRows() {
         const rows = orchardRows(orchardFeatures);
-        replaceRowOptions(wateringRow, rows.filter((row) => row.livingTreeCount > 0));
+        const eligibleRows = wateringRows(orchardFeatures);
+        replaceRowOptions(wateringRow, eligibleRows);
         replaceRowOptions(rowOrderRow, rows);
         renderSavedRowOrderPreview();
         const currentDangerTreeCount = dangerTreeCount(orchardFeatures);
@@ -4366,7 +4382,7 @@
           `Danger trees · ${currentDangerTreeCount}`;
         const watersDangerTrees = wateringTargetScope.value === "danger";
         const selectedRowIsOrdered = wateringRowIsOrdered(
-          rows,
+          eligibleRows,
           wateringRow.value,
         );
         const carryCapacity = wateringCarryCapacity(
@@ -4402,8 +4418,8 @@
               ? "The route starts at the tree closest to the source, then follows one optimized path through every danger tree. Returns to the source are not shown."
               : `Blue and purple loops show every source → ${carryCapacity} trees → source trip. Done always advances to the next tree.`
           : !selectedRowIsOrdered
-            ? "Order every living tree in this row before starting watering."
-            : "Trees are visited in their saved order. Dead trees are skipped.";
+            ? "Order every tree included in watering in this row before starting."
+            : "Trees are visited in their saved order. Dead and excluded trees are skipped in new runs.";
         wateringStart.disabled =
           wateringMutationPending ||
           wateringProgress != null ||
@@ -5057,8 +5073,8 @@
           if (response.status === 404) {
             throw new Error(
               target === "danger"
-                ? "No living trees are currently marked in danger."
-                : "This row no longer exists.",
+                ? "No danger trees are currently eligible for watering."
+                : "This row has no trees eligible for watering.",
             );
           }
           if (response.status === 400) {

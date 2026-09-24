@@ -16,6 +16,7 @@ pub enum OrchardStorageError {
     TreeCouldNotBeRead,
     TreeDangerCouldNotBeChanged,
     TreeLifeStatusCouldNotBeChanged,
+    TreeWateringExclusionCouldNotBeChanged,
     TreePositionCouldNotBeChanged,
     RowOrderCouldNotBeSaved,
     WateringRunCouldNotBeRead,
@@ -74,6 +75,11 @@ pub trait OrchardStorage {
         &mut self,
         tree_id: TreeId,
         is_alive: bool,
+    ) -> Result<(), OrchardStorageError>;
+    fn change_tree_watering_exclusion(
+        &mut self,
+        tree_id: TreeId,
+        is_excluded_from_watering: bool,
     ) -> Result<(), OrchardStorageError>;
     fn change_tree_position(
         &mut self,

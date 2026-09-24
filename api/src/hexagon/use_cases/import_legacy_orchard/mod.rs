@@ -155,6 +155,7 @@ fn map_legacy_tree(
         },
         is_alive: legacy_tree.is_alive,
         is_in_danger: false,
+        is_excluded_from_watering: false,
         reproductive_role: legacy_tree.reproductive_role,
         adult_height_meters: Some(legacy_tree.adult_height_meters),
         adult_width_meters: Some(legacy_tree.adult_width_meters),

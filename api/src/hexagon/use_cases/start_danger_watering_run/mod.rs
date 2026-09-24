@@ -66,7 +66,9 @@ pub fn start_danger_watering_run(
 
         let danger_trees = orchard_trees
             .iter()
-            .filter(|tree| tree.tree.is_alive && tree.tree.is_in_danger)
+            .filter(|tree| {
+                tree.tree.is_alive && tree.tree.is_in_danger && !tree.tree.is_excluded_from_watering
+            })
             .collect::<Vec<_>>();
         if danger_trees.is_empty() {
             return Err(DangerWateringRunStartError::NoDangerTrees);

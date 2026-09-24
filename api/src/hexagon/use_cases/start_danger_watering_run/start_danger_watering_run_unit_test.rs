@@ -15,6 +15,41 @@ use orchard_api::hexagon::use_cases::start_harvest_run::{
 };
 
 #[test]
+fn exclude_flagged_danger_trees_from_a_new_route() {
+    let mut excluded = tree(-73.5, 12.25, true, true);
+    excluded.is_excluded_from_watering = true;
+    let (mut storage, _) = InMemoryOrchardStorage::with_user_owned_orchard(
+        "owner",
+        "password",
+        orchard(),
+        vec![apple_identity()],
+        vec![excluded, tree(-73.49, 12.26, true, true)],
+    );
+    let progress = start_danger_watering_run(
+        DangerWateringRunStartRequested {
+            orchard_id: OrchardId(7),
+            water_source: GeoPoint {
+                longitude: -73.5,
+                latitude: 12.25,
+            },
+            carry_capacity: 2,
+        },
+        &mut storage,
+    )
+    .unwrap();
+    assert_eq!(progress.total_tree_count, 1);
+    assert_eq!(progress.next_tree.unwrap().id, TreeId(2));
+    assert_eq!(
+        progress
+            .route
+            .iter()
+            .map(|tree| tree.id)
+            .collect::<Vec<_>>(),
+        vec![TreeId(2)]
+    );
+}
+
+#[test]
 fn start_at_the_danger_tree_closest_to_the_source_then_minimize_all_two_can_trips() {
     let trees = vec![
         tree(-73.5, 12.2952, true, true),
@@ -439,6 +474,7 @@ fn tree(longitude: f64, latitude: f64, is_alive: bool, is_in_danger: bool) -> Tr
         roles: vec!["fruit".into()],
         is_alive,
         is_in_danger,
+        is_excluded_from_watering: false,
         reproductive_role: None,
         adult_height_meters: None,
         adult_width_meters: None,
