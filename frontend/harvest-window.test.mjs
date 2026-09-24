@@ -6,8 +6,34 @@ import {
   harvestAvailability,
   harvestAvailabilitySummary,
   harvestLayerFilter,
+  harvestWindowOrigin,
+  harvestWindowPresentations,
   parseAnnualDate,
 } from "./harvest-window.mjs";
+
+test("show each window's own observation or external-reference origin", () => {
+  assert.deepEqual(harvestWindowPresentations(JSON.stringify([
+    { start: "06-10", end: "06-20", data_origin: "field_observation" },
+    { start: "08-01", end: "09-20", data_origin: "external_reference", source_url: "https://example.com/harvest" },
+  ])), [
+    { dates: "06-10 → 06-20", origin: { icon: "eye", label: "Field observation", sourceUrl: null } },
+    { dates: "08-01 → 09-20", origin: { icon: "scroll", label: "External reference", sourceUrl: "https://example.com/harvest" } },
+  ]);
+  assert.deepEqual(harvestWindowPresentations([]), []);
+  assert.deepEqual(harvestWindowPresentations("not-json"), []);
+  assert.equal(harvestWindowOrigin({}), null);
+});
+
+test("reference links allow web URLs only and handle missing sources honestly", () => {
+  for (const source_url of [null, "", "not a URL", "javascript:alert(1)", "data:text/html,test", "/relative"] ) {
+    assert.deepEqual(harvestWindowOrigin({ data_origin: "external_reference", source_url }), {
+      icon: "scroll", label: "External reference", sourceUrl: null,
+    });
+  }
+  assert.equal(harvestWindowOrigin({ data_origin: "external_reference", source_url: "http://example.com/harvest" }).sourceUrl,
+    "http://example.com/harvest");
+  assert.equal(harvestWindowOrigin({ data_origin: "field_observation", source_url: "https://example.com/old" }).sourceUrl, null);
+});
 
 test("format every configured harvest window for display", () => {
   assert.equal(

@@ -20,6 +20,30 @@ export function formatHarvestWindows(windows) {
     : "Not set";
 }
 
+export function harvestWindowOrigin(window) {
+  if (window.data_origin === "field_observation") {
+    return { icon: "eye", label: "Field observation", sourceUrl: null };
+  }
+  if (window.data_origin !== "external_reference") return null;
+  let sourceUrl = null;
+  try {
+    const url = new URL(window.source_url);
+    if (["https:", "http:"].includes(url.protocol)) sourceUrl = url.href;
+  } catch {
+    // A reference without a usable URL still has a known origin.
+  }
+  return { icon: "scroll", label: "External reference", sourceUrl };
+}
+
+export function harvestWindowPresentations(windows) {
+  return normalizeHarvestWindows(windows)
+    .filter((window) => window?.start && window?.end)
+    .map((window) => ({
+      dates: `${window.start} → ${window.end}`,
+      origin: harvestWindowOrigin(window),
+    }));
+}
+
 export function harvestAvailability(features, startDate, weekCount) {
   const weeks = Math.max(1, Number(weekCount) || 1);
   const selectionStart = startOfUtcDay(startDate);

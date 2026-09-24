@@ -848,6 +848,65 @@
         color: #555;
         font-size: 12px;
       }
+      .harvest-schedule-window {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 10px;
+        min-width: 0;
+      }
+      .harvest-window-entry {
+        align-items: center;
+        display: inline-flex;
+        white-space: nowrap;
+      }
+      .harvest-origin-button {
+        align-items: center;
+        background: transparent;
+        border: 0;
+        border-radius: 4px;
+        color: #245c2a;
+        cursor: pointer;
+        display: inline-flex;
+        flex: none;
+        height: 28px;
+        justify-content: center;
+        padding: 0;
+        width: 28px;
+      }
+      .harvest-origin-button:hover,
+      .harvest-origin-button:focus-visible {
+        background: #e5efe3;
+      }
+      .harvest-origin-button svg {
+        height: 15px;
+        pointer-events: none;
+        width: 15px;
+      }
+      .harvest-origin-tooltip {
+        background: white;
+        border: 1px solid #bbc7b8;
+        border-radius: 5px;
+        box-shadow: 0 3px 12px #0002;
+        box-sizing: border-box;
+        color: #333;
+        font: 12px/1.5 sans-serif;
+        inset: auto;
+        margin: 0;
+        max-width: min(320px, calc(100vw - 16px));
+        overflow-wrap: anywhere;
+        padding: 8px 10px;
+        position: fixed;
+        white-space: normal;
+      }
+      .harvest-origin-tooltip a {
+        color: #245c2a;
+      }
+      @media (hover: none) {
+        .harvest-origin-button {
+          height: 44px;
+          width: 44px;
+        }
+      }
       .harvest-editor {
         display: grid;
         gap: 6px;
@@ -2250,8 +2309,9 @@
         formatHarvestWindows,
         harvestAvailability,
         harvestAvailabilitySummary,
+        harvestWindowPresentations,
         parseAnnualDate,
-      } from "./harvest-window.mjs?v=4";
+      } from "./harvest-window.mjs?v=5";
       import {
         availableHarvestSpecies,
         harvestConflictMessage,
@@ -6093,13 +6153,116 @@
         cell.append(scheduleRow);
       }
 
+      let harvestOriginSequence = 0;
+
+      function createHarvestWindowOrigin(origin) {
+        const wrapper = document.createElement("span");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "harvest-origin-button";
+        button.dataset.origin = origin.icon;
+        button.setAttribute("aria-label", origin.label);
+        button.setAttribute("aria-expanded", "false");
+        const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        icon.setAttribute("viewBox", "0 0 24 24");
+        icon.setAttribute("fill", "none");
+        icon.setAttribute("stroke", "currentColor");
+        icon.setAttribute("stroke-width", "1.6");
+        icon.setAttribute("stroke-linecap", "round");
+        icon.setAttribute("stroke-linejoin", "round");
+        icon.setAttribute("aria-hidden", "true");
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", origin.icon === "eye"
+          ? "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
+          : "M6 3h13a3 3 0 0 1 3 3v2h-6V6a3 3 0 0 0-6 0v12a3 3 0 0 1-6 0v-2h12v2a3 3 0 0 1-3 3H7 M10 6V5a2 2 0 0 0-4 0v11 M12 10h5 M12 13h5");
+        icon.append(path);
+        button.append(icon);
+        const tooltip = document.createElement("span");
+        tooltip.className = "harvest-origin-tooltip";
+        tooltip.id = `harvest-origin-${++harvestOriginSequence}`;
+        tooltip.setAttribute("popover", "auto");
+        button.setAttribute("aria-controls", tooltip.id);
+        button.setAttribute("aria-describedby", tooltip.id);
+        tooltip.textContent = origin.label;
+        if (origin.icon === "scroll") {
+          tooltip.append(document.createTextNode(": "));
+          if (origin.sourceUrl) {
+            const link = document.createElement("a");
+            link.href = origin.sourceUrl;
+            link.textContent = origin.sourceUrl;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            tooltip.append(link);
+          } else {
+            tooltip.append(document.createTextNode("No source link"));
+          }
+        }
+        let closeTimeout;
+        let restoringFocus = false;
+        tooltip.addEventListener("beforetoggle", (event) => {
+          if (event.newState !== "closed") return;
+          // Escape/light dismissal restores trigger focus while the popover is still closing.
+          restoringFocus = true;
+          window.setTimeout(() => { restoringFocus = false; }, 0);
+        });
+        const keepOpen = () => window.clearTimeout(closeTimeout);
+        const open = () => {
+          keepOpen();
+          if (restoringFocus) return;
+          if (!tooltip.matches(":popover-open")) tooltip.showPopover();
+          const anchor = button.getBoundingClientRect();
+          const box = tooltip.getBoundingClientRect();
+          tooltip.style.left = `${Math.max(8, Math.min(anchor.left, innerWidth - box.width - 8))}px`;
+          tooltip.style.top = `${Math.max(8, anchor.bottom + box.height + 6 <= innerHeight
+            ? anchor.bottom + 6 : anchor.top - box.height - 6)}px`;
+        };
+        const closeSoon = () => {
+          keepOpen();
+          closeTimeout = window.setTimeout(() => {
+            if (tooltip.isConnected && tooltip.matches(":popover-open") &&
+                !wrapper.matches(":hover, :focus-within")) tooltip.hidePopover();
+          }, 150);
+        };
+        button.addEventListener("mouseenter", open);
+        button.addEventListener("focus", open);
+        button.addEventListener("click", open);
+        wrapper.addEventListener("mouseleave", closeSoon);
+        wrapper.addEventListener("focusout", closeSoon);
+        tooltip.addEventListener("mouseenter", keepOpen);
+        tooltip.addEventListener("mouseleave", closeSoon);
+        tooltip.addEventListener("toggle", () => {
+          button.setAttribute("aria-expanded", String(tooltip.matches(":popover-open")));
+        });
+        wrapper.append(button, tooltip);
+        return wrapper;
+      }
+
+      function createHarvestWindows(windows) {
+        const container = document.createElement("span");
+        container.className = "harvest-schedule-window";
+        const entries = harvestWindowPresentations(windows);
+        if (entries.length === 0) container.textContent = "Not set";
+        for (const { dates, origin } of entries) {
+          const entry = document.createElement("span");
+          entry.className = "harvest-window-entry";
+          entry.textContent = dates;
+          if (origin) entry.append(createHarvestWindowOrigin(origin));
+          container.append(entry);
+        }
+        return container;
+      }
+
+      function closeHarvestOriginTooltips() {
+        document.querySelectorAll(".harvest-origin-tooltip:popover-open")
+          .forEach((tooltip) => tooltip.hidePopover());
+      }
+      window.addEventListener("resize", closeHarvestOriginTooltips);
+      document.addEventListener("scroll", closeHarvestOriginTooltips, true);
+
       function renderSpeciesHarvest(scheduleRow, schedule, speciesSummary) {
         const children = [];
         if (schedule) {
-          const windows = document.createElement("span");
-          windows.className = "harvest-schedule-window";
-          windows.textContent = formatHarvestWindows(schedule.harvestWindows);
-          children.push(windows);
+          children.push(createHarvestWindows(schedule.harvestWindows));
         }
         const actions = document.createElement("div");
         actions.className = "inventory-species-actions";
@@ -6154,9 +6317,7 @@
         const count = document.createElement("span");
         count.className = "harvest-schedule-count";
         count.textContent = `${schedule.count} tree${schedule.count === 1 ? "" : "s"}`;
-        const windows = document.createElement("span");
-        windows.className = "harvest-schedule-window";
-        windows.textContent = formatHarvestWindows(schedule.harvestWindows);
+        const windows = createHarvestWindows(schedule.harvestWindows);
         const filterButton = createInventoryFilterButton(
           `Show only ${schedule.label} on the map`,
           () => {
