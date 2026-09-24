@@ -6,6 +6,7 @@ pub fn assert_pause_preserves_progress_and_rolls_back(
     orchard_id: OrchardId,
     run_id: WateringRunId,
 ) {
+    storage.transaction(|orchard| orchard.lock_orchard_runs(orchard_id)).unwrap();
     let before = storage.watering_run(run_id).unwrap().unwrap();
     storage.transaction(|orchard| orchard.set_watering_run_paused(run_id, true)).unwrap();
     let mut expected = before.clone();
@@ -20,5 +21,8 @@ pub fn assert_pause_preserves_progress_and_rolls_back(
     assert!(failed.is_err());
     assert_eq!(storage.watering_run(run_id).unwrap(), Some(expected));
     storage.transaction(|orchard| orchard.set_watering_run_paused(run_id, false)).unwrap();
-    assert_eq!(storage.watering_run(run_id).unwrap(), Some(before));
+    assert_eq!(storage.watering_run(run_id).unwrap(), Some(before.clone()));
+    assert!(storage.transaction(|orchard| orchard.create_watering_run(
+        orchard_id, &before.target, before.water_source, before.carry_capacity, &before.ordered_tree_ids,
+    )).is_err());
 }

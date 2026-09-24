@@ -41,6 +41,9 @@ pub trait OrchardStorage {
     where
         E: From<OrchardStorageError>;
 
+    /// Serialize run starts/resumes for one orchard until the surrounding transaction ends.
+    fn lock_orchard_runs(&mut self, orchard_id: OrchardId) -> Result<(), OrchardStorageError>;
+
     fn is_legacy_tree_already_imported(
         &mut self,
         legacy_feature_id: u32,

@@ -556,6 +556,18 @@ impl OrchardStorage for PostgresOrchardStorage {
         }
     }
 
+    fn lock_orchard_runs(&mut self, orchard_id: OrchardId) -> Result<(), OrchardStorageError> {
+        let orchard_id = i64::try_from(orchard_id.0)
+            .map_err(|_| OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        self.client
+            .query_opt(
+                "SELECT id FROM orchards WHERE id = $1 FOR UPDATE",
+                &[&orchard_id],
+            )
+            .map(|_| ())
+            .map_err(|_| OrchardStorageError::AtomicOperationCouldNotBegin)
+    }
+
     fn is_legacy_tree_already_imported(
         &mut self,
         legacy_feature_id: u32,
@@ -949,7 +961,8 @@ impl OrchardStorage for PostgresOrchardStorage {
                 "SELECT id, orchard_id, target_kind, row_name, completed_at IS NOT NULL,
                         ST_X(water_source), ST_Y(water_source), carry_capacity, paused
                  FROM watering_runs
-                 WHERE orchard_id = $1 AND completed_at IS NULL AND NOT paused",
+                 WHERE orchard_id = $1 AND completed_at IS NULL AND NOT paused
+                 ORDER BY id LIMIT 1",
                 &[&orchard_id],
             )
             .map_err(|_| OrchardStorageError::WateringRunCouldNotBeRead)?;

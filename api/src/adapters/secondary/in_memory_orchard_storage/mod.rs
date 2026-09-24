@@ -943,6 +943,13 @@ impl OrchardStorage for InMemoryOrchardStorage {
         }
     }
 
+    fn lock_orchard_runs(&mut self, _orchard_id: OrchardId) -> Result<(), OrchardStorageError> {
+        self.transaction
+            .as_ref()
+            .map(|_| ())
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)
+    }
+
     fn is_legacy_tree_already_imported(
         &mut self,
         legacy_feature_id: u32,
@@ -1500,14 +1507,43 @@ impl OrchardStorage for InMemoryOrchardStorage {
         carry_capacity: Option<u32>,
         ordered_tree_ids: &[TreeId],
     ) -> Result<WateringRunId, OrchardStorageError> {
+        if self
+            .orchard
+            .lock()
+            .unwrap()
+            .watering_runs
+            .iter()
+            .any(|run| {
+                run.orchard_id == orchard_id
+                    && !run.completed
+                    && !run.paused
+                    && &run.target == target
+            })
+        {
+            return Err(OrchardStorageError::WateringRunCouldNotBeCreated);
+        }
         let transaction = self
             .transaction
             .as_mut()
             .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        if transaction
+            .staged_watering_runs
+            .iter()
+            .any(|run| run.orchard_id == orchard_id && &run.target == target)
+        {
+            return Err(OrchardStorageError::WateringRunCouldNotBeCreated);
+        }
         let run_id = WateringRunId(
-            (self.orchard.lock().unwrap().watering_runs.len()
-                + transaction.staged_watering_runs.len()
-                + 1) as u64,
+            self.orchard
+                .lock()
+                .unwrap()
+                .watering_runs
+                .iter()
+                .chain(transaction.staged_watering_runs.iter())
+                .map(|run| run.id.0)
+                .max()
+                .unwrap_or(0)
+                + 1,
         );
         transaction.staged_watering_runs.push(WateringRun {
             id: run_id,

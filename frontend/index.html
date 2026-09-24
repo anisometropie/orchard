@@ -367,6 +367,7 @@
       #watering-row-field[hidden],
       #watering-source-controls[hidden],
       #watering-pause[hidden],
+      #watering-leave[hidden],
       #watering-saved-runs[hidden],
       #watering-cancel[hidden],
       #harvest-cancel[hidden],
@@ -459,7 +460,8 @@
         margin: 5px 0 0;
       }
       .watering-saved-run button,
-      #watering-pause {
+      #watering-pause,
+      #watering-leave {
         min-height: 44px;
       }
       #history-panel {
@@ -1839,8 +1841,9 @@
       </div>
       <button id="watering-start" type="button">Start</button>
       <button id="watering-pause" class="secondary" type="button" hidden>Pause run</button>
+      <button id="watering-leave" class="secondary" type="button" hidden>Leave run</button>
       <button id="watering-cancel" class="danger" type="button" hidden>Cancel run</button>
-      <section id="watering-saved-runs" aria-label="Paused watering runs" hidden></section>
+      <section id="watering-saved-runs" aria-label="Available watering runs" hidden></section>
       <p id="watering-menu-status" class="workflow-status" hidden></p>
       <p id="watering-error" class="workflow-error" role="alert" hidden></p>
     </section>
@@ -2244,6 +2247,7 @@
       } from "./run-history.mjs?v=1";
       import {
         adaptiveWateringWideZoom,
+        availableWateringRuns,
         appendManualTree,
         dangerWateringNumberGeoJson,
         dangerWateringNumberMarker,
@@ -2251,19 +2255,20 @@
         dangerTreeCount,
         defaultWaterSource,
         orchardRows,
-        pausedWateringRuns,
         rowOrderPreview,
+        selectedWateringRun,
         treeIdsInRow,
         wateringCarryCapacity,
         wateringCancellationNeedsConfirmation,
         wateringRouteWindow,
         wateringRowIsOrdered,
+        wateringRunSelectionKey,
         wateringStartRequest,
         wateringStartConflictMessage,
         wateringTargetGeoJson,
         wateringWideCenter,
         waterSourceGeoJson,
-      } from "./watering.mjs?v=16";
+      } from "./watering.mjs?v=17";
 
       const map = new maplibregl.Map({
         container: "map",
@@ -2417,6 +2422,9 @@
       let manualOrderMarkers = [];
       let rowOrderPreviewMarkers = [];
       let wateringProgress = null;
+      let selectedWateringRunId = null;
+      let wateringSelectionStorageKey = null;
+      let wateringPollPending = false;
       let savedWateringRuns = [];
       let wateringMutationPending = false;
       let wateringStateVersion = 0;
@@ -2551,6 +2559,7 @@
       );
       const wateringStart = document.getElementById("watering-start");
       const wateringPause = document.getElementById("watering-pause");
+      const wateringLeave = document.getElementById("watering-leave");
       const wateringCancel = document.getElementById("watering-cancel");
       const wateringSavedRuns = document.getElementById("watering-saved-runs");
       const wateringMenuStatus = document.getElementById("watering-menu-status");
@@ -4405,6 +4414,8 @@
         wateringStart.hidden = wateringProgress != null;
         wateringPause.hidden = wateringProgress == null;
         wateringPause.disabled = wateringMutationPending;
+        wateringLeave.hidden = wateringProgress == null;
+        wateringLeave.disabled = wateringMutationPending;
         wateringCancel.hidden = wateringProgress == null;
         wateringCancel.disabled = wateringMutationPending;
         wateringDone.disabled = wateringMutationPending;
@@ -4715,6 +4726,7 @@
       }
 
       function resetCompletedWateringPresentation() {
+        selectWateringRun(null);
         wateringProgress = null;
         wateringSource = null;
         wateringRoute = [];
@@ -4730,6 +4742,7 @@
         wateringZoomControls.hidden = true;
         wateringStart.hidden = false;
         wateringPause.hidden = true;
+        wateringLeave.hidden = true;
         wateringCancel.hidden = true;
         wateringTreeName.textContent = "";
         wateringTreeProgress.textContent = "";
@@ -4752,8 +4765,31 @@
         layoutMapControls();
       }
 
+      function selectWateringRun(runId) {
+        selectedWateringRunId = runId == null ? null : String(runId);
+        if (!wateringSelectionStorageKey) return;
+        try {
+          if (selectedWateringRunId == null) {
+            sessionStorage.removeItem(wateringSelectionStorageKey);
+          } else {
+            sessionStorage.setItem(wateringSelectionStorageKey, selectedWateringRunId);
+          }
+        } catch {
+          // The run still works when browser storage is unavailable.
+        }
+      }
+
+      function leaveWateringRun() {
+        if (wateringMutationPending) return;
+        wateringStateVersion += 1;
+        resetCompletedWateringPresentation();
+        refreshWorkflowRows();
+        wateringMenuStatus.textContent = "You left this run. Others can keep watering; join again at any time.";
+        wateringMenuStatus.hidden = false;
+      }
+
       function renderSavedWateringRuns() {
-        const runs = pausedWateringRuns(savedWateringRuns);
+        const runs = availableWateringRuns(savedWateringRuns, selectedWateringRunId);
         wateringSavedRuns.hidden = runs.length === 0;
         wateringSavedRuns.replaceChildren(...runs.map((run) => {
           const card = document.createElement("div");
@@ -4761,28 +4797,32 @@
           const title = document.createElement("strong");
           title.textContent = run.target_label || run.row_name || "Watering";
           const status = document.createElement("p");
-          status.textContent = `Paused · ${run.watered_tree_count} of ${run.total_tree_count} watered`;
-          const resume = document.createElement("button");
-          resume.type = "button";
-          resume.textContent = "Resume run";
-          resume.disabled = wateringMutationPending || wateringProgress != null || harvestProgress != null;
-          resume.addEventListener("click", () => resumeWateringRun(run.run_id));
-          card.append(title, status, resume);
+          status.textContent = `${run.paused ? "Paused" : "In progress"} · ${run.watered_tree_count} of ${run.total_tree_count} watered`;
+          const join = document.createElement("button");
+          join.type = "button";
+          join.textContent = run.paused ? "Resume run" : "Join run";
+          join.disabled = wateringMutationPending || harvestProgress != null;
+          join.addEventListener("click", () => run.paused
+            ? resumeWateringRun(run.run_id)
+            : joinWateringRun(run.run_id));
+          card.append(title, status, join);
           return card;
         }));
       }
 
       async function refreshSavedWateringRuns() {
         const requestVersion = ++wateringRunsRequestVersion;
+        const stateVersion = wateringStateVersion;
         if (!canWaterOrchard(currentAccess)) return;
         const response = await fetch(
           orchardResourceUrl(currentAccess, "watering-runs"),
           { headers: accessHeaders(currentAccess), cache: "no-store" },
         );
-        if (requestVersion !== wateringRunsRequestVersion) return;
+        if (requestVersion !== wateringRunsRequestVersion || stateVersion !== wateringStateVersion) return;
         if (!response.ok) throw new Error("Could not load saved watering runs.");
         const { runs } = await response.json();
-        if (requestVersion !== wateringRunsRequestVersion) return;
+        if (requestVersion !== wateringRunsRequestVersion || stateVersion !== wateringStateVersion) return;
+        if (JSON.stringify(runs) === JSON.stringify(savedWateringRuns)) return;
         savedWateringRuns = runs;
         renderSavedWateringRuns();
       }
@@ -4796,7 +4836,7 @@
 
       function showWateringProgress(
         progress,
-        { cameraMode = wateringCameraMode, cameraDuration = 700 } = {},
+        { cameraMode = wateringCameraMode, cameraDuration = 700, focusCamera = true } = {},
       ) {
         if (progress) rememberWateringRun(progress);
         if (progress?.paused) {
@@ -4806,6 +4846,7 @@
           wateringMenuStatus.hidden = false;
           return;
         }
+        if (progress?.next_tree) selectWateringRun(progress.run_id);
         wateringCameraMode = cameraMode;
         wateringRoute = progress?.route || [];
         if (progress?.target === "danger") {
@@ -4850,14 +4891,25 @@
         layoutMapControls();
         wateringMenuStatus.textContent = `Watering ${targetLabel}: ${progress.watered_tree_count} of ${progress.total_tree_count} done.`;
         wateringMenuStatus.hidden = false;
-        applyWateringCameraMode(cameraMode, {
-          duration: cameraDuration,
-          afterLayout: true,
-        });
+        if (focusCamera) {
+          applyWateringCameraMode(cameraMode, {
+            duration: cameraDuration,
+            afterLayout: true,
+          });
+        }
       }
 
       async function restoreActiveWateringRun() {
         const stateVersion = ++wateringStateVersion;
+        wateringSelectionStorageKey = wateringRunSelectionKey(currentAccess, session?.user?.id);
+        let savedRunId = null;
+        try {
+          savedRunId = wateringSelectionStorageKey == null
+            ? null
+            : sessionStorage.getItem(wateringSelectionStorageKey);
+        } catch {
+          // Joining a run does not require browser storage.
+        }
         wateringProgress = null;
         wateringRoute = [];
         wateringCameraMode = "wide";
@@ -4877,23 +4929,86 @@
         if (!canWaterOrchard(currentAccess)) return;
         await refreshSavedWateringRuns();
         if (stateVersion !== wateringStateVersion) return;
-        const response = await fetch(
-          orchardResourceUrl(currentAccess, "watering-run"),
-          { headers: accessHeaders(currentAccess), cache: "no-store" },
-        );
-        if (stateVersion !== wateringStateVersion) return;
-        if (response.status === 204) {
+        const progress = selectedWateringRun(savedWateringRuns, savedRunId);
+        if (!progress) {
+          selectWateringRun(null);
           refreshWorkflowRows();
           layoutMapControls();
           return;
         }
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const progress = await response.json();
-        if (stateVersion !== wateringStateVersion) return;
         showWateringProgress(progress, {
           cameraMode: "wide",
           cameraDuration: 0,
         });
+      }
+
+      async function loadSelectedWateringProgress(runId, stateVersion, { focusCamera = false } = {}) {
+        const response = await fetch(
+          orchardResourceUrl(currentAccess, `watering-runs/${encodeURIComponent(runId)}`),
+          { headers: accessHeaders(currentAccess), cache: "no-store" },
+        );
+        if (stateVersion !== wateringStateVersion) return;
+        if (response.status === 404) {
+          wateringRunsRequestVersion += 1;
+          savedWateringRuns = savedWateringRuns.filter((run) => String(run.run_id) !== String(runId));
+          resetCompletedWateringPresentation();
+          refreshWorkflowRows();
+          wateringMenuStatus.textContent = "This watering run is no longer available. Choose another run or start a new one.";
+          wateringMenuStatus.hidden = false;
+          setWorkflowPanel(wateringPanel);
+          return;
+        }
+        if (!response.ok) throw new Error("Could not refresh watering progress. Please try again.");
+        const progress = await response.json();
+        if (stateVersion !== wateringStateVersion) return;
+        if (JSON.stringify(progress) === JSON.stringify(wateringProgress)) return;
+        const nextTreeChanged = progress.next_tree?.id !== wateringProgress?.next_tree?.id;
+        showWateringProgress(progress, { focusCamera: focusCamera || nextTreeChanged });
+        if (progress.paused) setWorkflowPanel(wateringPanel);
+      }
+
+      async function joinWateringRun(runId) {
+        if (wateringMutationPending || harvestProgress) return;
+        const stateVersion = ++wateringStateVersion;
+        wateringMutationPending = true;
+        wateringError.hidden = true;
+        refreshWorkflowRows();
+        try {
+          await loadSelectedWateringProgress(runId, stateVersion, { focusCamera: true });
+          if (stateVersion !== wateringStateVersion) return;
+          if (selectedWateringRunId === String(runId)) {
+            if (harvestUndoRunId != null) resetCompletedHarvestPresentation();
+            setWorkflowPanel(null);
+          }
+        } catch (error) {
+          if (stateVersion !== wateringStateVersion) return;
+          wateringError.textContent = error.message;
+          wateringError.hidden = false;
+        } finally {
+          if (stateVersion === wateringStateVersion) {
+            wateringMutationPending = false;
+            refreshWorkflowRows();
+          }
+        }
+      }
+
+      async function pollWateringRuns() {
+        if (document.hidden || !canWaterOrchard(currentAccess) || wateringPollPending || wateringMutationPending) return;
+        wateringPollPending = true;
+        const stateVersion = wateringStateVersion;
+        try {
+          if (selectedWateringRunId != null) {
+            await loadSelectedWateringProgress(selectedWateringRunId, stateVersion);
+          }
+          if (stateVersion !== wateringStateVersion || wateringMutationPending) return;
+          if (!wateringPanel.hidden) await refreshSavedWateringRuns();
+        } catch (error) {
+          if (stateVersion !== wateringStateVersion) return;
+          wateringError.textContent = error.message;
+          wateringError.hidden = false;
+        } finally {
+          wateringPollPending = false;
+        }
       }
 
       async function startWatering() {
@@ -4983,8 +5098,9 @@
           );
           if (response.status === 404) throw new Error("This watering run no longer exists.");
           if (response.status === 409) {
+            const conflict = await response.json().catch(() => ({}));
             throw new Error(action === "resume"
-              ? "This run cannot resume while another tour is active or after it has finished."
+              ? wateringStartConflictMessage(conflict.code)
               : "This watering run has already finished.");
           }
           if (!response.ok) throw new Error(`Could not ${action} this watering run. Please try again.`);
@@ -5012,7 +5128,7 @@
       }
 
       function resumeWateringRun(runId) {
-        if (!wateringProgress && !harvestProgress) return changeWateringRunState(runId, "resume");
+        if (!harvestProgress) return changeWateringRunState(runId, "resume");
       }
 
       async function markCurrentTreeWatered() {
@@ -5038,16 +5154,8 @@
             },
           );
           if (stateVersion !== wateringStateVersion) return;
-          if (response.status === 409) {
-            const latest = await fetch(
-              orchardResourceUrl(currentAccess, `watering-runs/${encodeURIComponent(activeRun.run_id)}`),
-              { headers: accessHeaders(currentAccess), cache: "no-store" },
-            );
-            if (!latest.ok) throw new Error("Could not refresh watering progress. Please try again.");
-            const progress = await latest.json();
-            if (stateVersion !== wateringStateVersion) return;
-            showWateringProgress(progress);
-            setWorkflowPanel(wateringPanel);
+          if (response.status === 409 || response.status === 404) {
+            await loadSelectedWateringProgress(activeRun.run_id, stateVersion);
             return;
           }
           if (!response.ok) throw new Error("Could not record this tree. Please try again.");
@@ -5092,7 +5200,8 @@
             },
           );
           if (response.status === 404) {
-            throw new Error("This watering run no longer exists. Reload the page.");
+            await loadSelectedWateringProgress(activeRun.run_id, stateVersion);
+            return;
           }
           if (response.status === 409) {
             throw new Error("This watering run has already finished.");
@@ -6479,6 +6588,8 @@
       function clearOrchardPresentation() {
         wateringStateVersion += 1;
         wateringRunsRequestVersion += 1;
+        selectWateringRun(null);
+        wateringSelectionStorageKey = null;
         wateringMutationPending = false;
         savedWateringRuns = [];
         renderSavedWateringRuns();
@@ -7378,8 +7489,13 @@
       wateringCarryCapacityInput.addEventListener("input", refreshWorkflowRows);
       wateringStart.addEventListener("click", startWatering);
       wateringPause.addEventListener("click", pauseWateringRun);
+      wateringLeave.addEventListener("click", leaveWateringRun);
       wateringCancel.addEventListener("click", cancelWateringRun);
       wateringDone.addEventListener("click", markCurrentTreeWatered);
+      window.setInterval(pollWateringRuns, 3000);
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) pollWateringRuns();
+      });
       wateringZoomClose.addEventListener("click", () => {
         applyWateringCameraMode("close");
       });

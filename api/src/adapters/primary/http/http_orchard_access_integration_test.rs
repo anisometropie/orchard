@@ -1094,6 +1094,98 @@ async fn watering_links_pause_resume_and_load_only_their_orchards_saved_progress
 }
 
 #[tokio::test]
+async fn watering_links_choose_independent_rows_and_can_join_each_others_run() {
+    let mut south_tree = tree();
+    south_tree.row_name = Some("South".into());
+    let (mut storage, _) = InMemoryOrchardStorage::with_user_owned_orchard(
+        USERNAME,
+        PASSWORD,
+        Orchard {
+            id: OrchardId(7),
+            name: "Orchard".into(),
+            longitude: 0.5,
+            latitude: 0.5,
+            reference_region: "France".into(),
+        },
+        vec![apple()],
+        vec![tree(), south_tree],
+    );
+    storage
+        .transaction(|orchard| {
+            orchard.replace_row_order(OrchardId(7), "North", &[TreeId(1)])?;
+            orchard.replace_row_order(OrchardId(7), "South", &[TreeId(2)])
+        })
+        .unwrap();
+    let server = start_http_server(storage, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let first = create_watering_share_token(&client, server.url(), &cookie).await;
+    let second = create_watering_share_token(&client, server.url(), &cookie).await;
+    let mut runs = Vec::new();
+    for (row, token) in [("North", &first), ("South", &second)] {
+        let response = client
+            .post(format!("{}/orchards/7/watering-runs", server.url()))
+            .header("x-orchard-share-token", token)
+            .json(&serde_json::json!({"row_name": row}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        runs.push(response.json::<serde_json::Value>().await.unwrap());
+    }
+    assert_ne!(runs[0]["run_id"], runs[1]["run_id"]);
+    let north_id = runs[0]["run_id"].as_u64().unwrap();
+    let south_id = runs[1]["run_id"].as_u64().unwrap();
+    let joined = client
+        .post(format!("{}/orchards/7/watering-runs", server.url()))
+        .header("x-orchard-share-token", &second)
+        .json(&serde_json::json!({"row_name": "North"}))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(joined, runs[0]);
+    let listed = client
+        .get(format!("{}/orchards/7/watering-runs", server.url()))
+        .header("x-orchard-share-token", &second)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(listed["runs"], serde_json::json!(runs));
+    let finished = client
+        .post(format!(
+            "{}/orchards/7/watering-runs/{north_id}/watered",
+            server.url()
+        ))
+        .header("x-orchard-share-token", &second)
+        .json(&serde_json::json!({"tree_id": 1}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(finished.status(), StatusCode::OK);
+    let south = client
+        .get(format!(
+            "{}/orchards/7/watering-runs/{south_id}",
+            server.url()
+        ))
+        .header("x-orchard-share-token", &first)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(south, runs[1]);
+}
+
+#[tokio::test]
 async fn a_combined_link_can_water_and_run_the_complete_harvest_workflow_but_cannot_edit() {
     let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
         .await

@@ -337,6 +337,160 @@ fn persist_row_ranks_and_resumable_watering_progress() {
 }
 
 #[test]
+fn concurrent_workers_join_one_target_and_water_different_rows_independently() {
+    use orchard_api::hexagon::use_cases::record_tree_watered::{TreeWatered, record_tree_watered};
+    use orchard_api::hexagon::use_cases::start_watering_run::{
+        WateringRunStartRequested, start_watering_run,
+    };
+    use std::sync::Barrier;
+    let _database_lock = database_lock();
+    let (database_url, mut connection) = empty_orchard_database();
+    connection.batch_execute(r#"
+        INSERT INTO users (username, default_center, is_default)
+        VALUES ('owner', ST_SetSRID(ST_MakePoint(0, 0), 4326), TRUE);
+        INSERT INTO orchards (owner_user_id, name, center, reference_region)
+        VALUES (1, 'Orchard', ST_SetSRID(ST_MakePoint(0, 0), 4326), 'France');
+        INSERT INTO plant_identities (common_name, botanical_taxon)
+        VALUES ('Apple', '{"Named":{"genus":"Malus","species":null,"species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}');
+        INSERT INTO trees (orchard_id, plant_identity_id, location, row_name, row_rank, roles, is_alive, identification_status)
+        VALUES (1, 1, ST_SetSRID(ST_MakePoint(0, 0), 4326), 'North', 1, '{}', TRUE, 'confirmed'),
+               (1, 1, ST_SetSRID(ST_MakePoint(0, 1), 4326), 'North', 2, '{}', TRUE, 'confirmed'),
+               (1, 1, ST_SetSRID(ST_MakePoint(1, 0), 4326), 'South', 1, '{}', TRUE, 'confirmed');
+    "#).unwrap();
+    let concurrent_starts = |rows: [&str; 2]| {
+        let barrier = Barrier::new(2);
+        std::thread::scope(|scope| {
+            let handles = rows
+                .into_iter()
+                .map(|row| {
+                    let barrier = &barrier;
+                    let url = &database_url;
+                    scope.spawn(move || {
+                        let mut storage = PostgresOrchardStorage::connect(url).unwrap();
+                        barrier.wait();
+                        start_watering_run(
+                            WateringRunStartRequested {
+                                orchard_id: OrchardId(1),
+                                row_name: row.into(),
+                            },
+                            &mut storage,
+                        )
+                        .unwrap()
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        })
+    };
+    let same_target = concurrent_starts(["North", "North"]);
+    assert_eq!(same_target[0].run_id, same_target[1].run_id);
+    let run_id = same_target[0].run_id;
+    let barrier = Barrier::new(2);
+    let results = std::thread::scope(|scope| {
+        let handles = (0..2)
+            .map(|_| {
+                let barrier = &barrier;
+                let url = &database_url;
+                scope.spawn(move || {
+                    let mut storage = PostgresOrchardStorage::connect(url).unwrap();
+                    barrier.wait();
+                    record_tree_watered(
+                        TreeWatered {
+                            orchard_id: OrchardId(1),
+                            watering_run_id: run_id,
+                            tree_id: TreeId(1),
+                        },
+                        &mut storage,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    assert_eq!(
+        storage
+            .watering_run(run_id)
+            .unwrap()
+            .unwrap()
+            .watered_tree_ids,
+        vec![TreeId(1)]
+    );
+    let timestamp: String = connection.query_one("SELECT watered_at::text FROM watering_run_trees WHERE watering_run_id = $1 AND tree_id = 1", &[&(run_id.0 as i64)]).unwrap().get(0);
+    assert!(
+        record_tree_watered(
+            TreeWatered {
+                orchard_id: OrchardId(1),
+                watering_run_id: run_id,
+                tree_id: TreeId(1)
+            },
+            &mut storage
+        )
+        .is_err()
+    );
+    assert_eq!(connection.query_one("SELECT watered_at::text FROM watering_run_trees WHERE watering_run_id = $1 AND tree_id = 1", &[&(run_id.0 as i64)]).unwrap().get::<_, String>(0), timestamp);
+    record_tree_watered(
+        TreeWatered {
+            orchard_id: OrchardId(1),
+            watering_run_id: run_id,
+            tree_id: TreeId(2),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let different_targets = concurrent_starts(["North", "South"]);
+    assert_ne!(different_targets[0].run_id, different_targets[1].run_id);
+    assert_eq!(
+        storage
+            .unfinished_watering_runs(OrchardId(1))
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        storage
+            .active_watering_run(OrchardId(1))
+            .unwrap()
+            .unwrap()
+            .id,
+        different_targets
+            .iter()
+            .map(|run| run.run_id)
+            .min_by_key(|id| id.0)
+            .unwrap()
+    );
+    assert!(
+        storage
+            .unfinished_watering_runs(OrchardId(2))
+            .unwrap()
+            .is_empty()
+    );
+    connection.batch_execute("BEGIN").unwrap();
+    assert!(
+        connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/down/026_allow_parallel_watering_runs.sql"
+            ))
+            .is_err()
+    );
+    connection.batch_execute("ROLLBACK").unwrap();
+    assert_eq!(
+        storage
+            .unfinished_watering_runs(OrchardId(1))
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn persist_resumable_harvest_progress_history_and_exact_window_extension() {
     let _database_lock = database_lock();
     let (database_url, mut verification_connection) = empty_orchard_database();
@@ -2411,6 +2565,20 @@ fn empty_orchard_database() -> (String, Client) {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/025_add_paused_watering_runs.sql"
+            ))
+            .unwrap();
+    }
+    let parallel_watering_was_applied: bool = verification_connection
+        .query_one(
+            "SELECT to_regclass('watering_runs_one_active_per_target_idx') IS NOT NULL",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !parallel_watering_was_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/026_allow_parallel_watering_runs.sql"
             ))
             .unwrap();
     }

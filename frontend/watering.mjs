@@ -58,7 +58,7 @@ export function wateringStartConflictMessage(code) {
     return "Finish or cancel the active harvest tour first.";
   }
   if (code === "watering_run_active") {
-    return "Finish or cancel the active watering tour first.";
+    return "Another run for this watering target is active. Join it or pause it first.";
   }
   return "Watering could not start because its state changed. Reload the page.";
 }
@@ -143,6 +143,25 @@ export function wateringCancellationNeedsConfirmation(progress) {
 
 export function pausedWateringRuns(runs) {
   return runs.filter((run) => run.paused === true && run.next_tree != null);
+}
+
+export function availableWateringRuns(runs, selectedRunId = null) {
+  return runs.filter((run) =>
+    run.next_tree != null && String(run.run_id) !== String(selectedRunId),
+  );
+}
+
+export function selectedWateringRun(runs, selectedRunId) {
+  if (selectedRunId == null) return null;
+  return runs.find((run) =>
+    String(run.run_id) === String(selectedRunId) && !run.paused && run.next_tree != null,
+  ) || null;
+}
+
+export function wateringRunSelectionKey(access, userId = null) {
+  if (access.orchardId == null || !["editable", "shared"].includes(access.mode)) return null;
+  const actor = access.mode === "shared" ? access.shareToken : userId;
+  return `orchard-watering-selection:${JSON.stringify([access.orchardId, access.mode, actor])}`;
 }
 
 export function waterSourceGeoJson(source) {

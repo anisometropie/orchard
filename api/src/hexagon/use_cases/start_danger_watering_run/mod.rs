@@ -18,7 +18,6 @@ pub enum DangerWateringRunStartError {
     InvalidWaterSource,
     InvalidCarryCapacity,
     NoDangerTrees,
-    AnotherWateringRunIsActive,
     HarvestRunIsActive,
     WateringRunCouldNotBeStarted,
 }
@@ -44,6 +43,7 @@ pub fn start_danger_watering_run(
         return Err(DangerWateringRunStartError::InvalidCarryCapacity);
     }
     storage.transaction(|orchard| {
+        orchard.lock_orchard_runs(event.orchard_id)?;
         if orchard
             .active_harvest_run(event.orchard_id)
             .map_err(|_| DangerWateringRunStartError::WateringRunCouldNotBeStarted)?
@@ -55,12 +55,11 @@ pub fn start_danger_watering_run(
             .trees_in_orchard(event.orchard_id)
             .map_err(|_| DangerWateringRunStartError::WateringRunCouldNotBeStarted)?;
         if let Some(active_run) = orchard
-            .active_watering_run(event.orchard_id)
+            .unfinished_watering_runs(event.orchard_id)
             .map_err(|_| DangerWateringRunStartError::WateringRunCouldNotBeStarted)?
+            .into_iter()
+            .find(|run| !run.paused && run.target == WateringRunTarget::DangerTrees)
         {
-            if active_run.target != WateringRunTarget::DangerTrees {
-                return Err(DangerWateringRunStartError::AnotherWateringRunIsActive);
-            }
             return watering_progress(&active_run, &orchard_trees)
                 .ok_or(DangerWateringRunStartError::WateringRunCouldNotBeStarted);
         }

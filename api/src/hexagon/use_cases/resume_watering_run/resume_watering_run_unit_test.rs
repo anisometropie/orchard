@@ -65,7 +65,7 @@ fn resume_continues_from_the_last_watered_tree_and_completes_the_same_run() {
 }
 
 #[test]
-fn resume_rejects_another_orchard_and_keeps_paused_progress_when_another_run_is_active() {
+fn resume_rejects_another_orchard_and_keeps_paused_progress_when_the_same_target_is_active() {
     let (mut storage, observer) = fixture::storage();
     pause_watering_run(
         WateringRunPauseRequested {
@@ -89,7 +89,7 @@ fn resume_rejects_another_orchard_and_keeps_paused_progress_when_another_run_is_
         .transaction(|orchard| {
             orchard.create_watering_run(
                 OrchardId(7),
-                &WateringRunTarget::DangerTrees,
+                &WateringRunTarget::Row("North".into()),
                 None,
                 None,
                 &[TreeId(2)],
@@ -108,4 +108,46 @@ fn resume_rejects_another_orchard_and_keeps_paused_progress_when_another_run_is_
         Err(WateringRunResumeError::AnotherWateringRunIsActive)
     );
     assert_eq!(observer.watering_run(WateringRunId(1)), before);
+}
+
+#[test]
+fn resume_allows_an_unrelated_run_to_continue() {
+    let (mut storage, observer) = fixture::storage();
+    pause_watering_run(
+        WateringRunPauseRequested {
+            orchard_id: OrchardId(7),
+            watering_run_id: WateringRunId(1),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let other_id = storage
+        .transaction(|orchard| {
+            orchard.create_watering_run(
+                OrchardId(7),
+                &WateringRunTarget::DangerTrees,
+                None,
+                None,
+                &[TreeId(2)],
+            )
+        })
+        .unwrap();
+    let before = observer.watering_run(other_id);
+    let resumed = resume_watering_run(
+        WateringRunResumeRequested {
+            orchard_id: OrchardId(7),
+            watering_run_id: WateringRunId(1),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    assert!(!resumed.paused);
+    assert_eq!(observer.watering_run(other_id), before);
+    assert_eq!(
+        storage
+            .unfinished_watering_runs(OrchardId(7))
+            .unwrap()
+            .len(),
+        2
+    );
 }

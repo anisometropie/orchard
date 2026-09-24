@@ -4,6 +4,7 @@ use orchard_api::hexagon::models::{
     NamedTaxon, Orchard, OrchardId, PlantIdentity, PlantIdentityId, Tree, TreeId, WateringRunId,
     WateringRunTarget,
 };
+use orchard_api::hexagon::ports::OrchardStorage;
 use orchard_api::hexagon::use_cases::load_active_watering_run::load_active_watering_run;
 use orchard_api::hexagon::use_cases::order_orchard_row::{
     OrchardRowOrderRequested, RowOrder, order_orchard_row,
@@ -89,6 +90,141 @@ fn refuse_to_start_an_unordered_row() {
         observer
             .active_watering_run_tree_ids(OrchardId(7))
             .is_empty()
+    );
+}
+
+#[test]
+fn start_two_rows_independently_and_join_the_chosen_existing_row() {
+    let (mut storage, observer) = InMemoryOrchardStorage::with_user_owned_orchard(
+        "owner",
+        "password",
+        orchard(),
+        vec![apple_identity()],
+        vec![
+            apple_tree("North", -73.409, true),
+            apple_tree("South", -73.227, true),
+        ],
+    );
+    for (row, id) in [("North", TreeId(1)), ("South", TreeId(2))] {
+        order_orchard_row(
+            OrchardRowOrderRequested {
+                orchard_id: OrchardId(7),
+                row_name: row.into(),
+                order: RowOrder::Manual(vec![id]),
+            },
+            &mut storage,
+        )
+        .unwrap();
+    }
+    let north = start_watering_run(
+        WateringRunStartRequested {
+            orchard_id: OrchardId(7),
+            row_name: "North".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let south = start_watering_run(
+        WateringRunStartRequested {
+            orchard_id: OrchardId(7),
+            row_name: "South".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    assert_ne!(north.run_id, south.run_id);
+    assert_eq!(
+        start_watering_run(
+            WateringRunStartRequested {
+                orchard_id: OrchardId(7),
+                row_name: "South".into()
+            },
+            &mut storage
+        )
+        .unwrap(),
+        south
+    );
+    assert_eq!(
+        storage
+            .unfinished_watering_runs(OrchardId(7))
+            .unwrap()
+            .len(),
+        2
+    );
+    record_tree_watered(
+        TreeWatered {
+            orchard_id: OrchardId(7),
+            watering_run_id: north.run_id,
+            tree_id: TreeId(1),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    assert!(observer.watering_run(north.run_id).unwrap().completed);
+    assert!(
+        observer
+            .watering_run(south.run_id)
+            .unwrap()
+            .watered_tree_ids
+            .is_empty()
+    );
+}
+
+#[test]
+fn danger_and_row_runs_can_coexist_and_a_second_danger_worker_joins_that_run() {
+    use orchard_api::hexagon::models::GeoPoint;
+    use orchard_api::hexagon::use_cases::start_danger_watering_run::{
+        DangerWateringRunStartRequested, start_danger_watering_run,
+    };
+    let mut tree = apple_tree("North", -73.409, true);
+    tree.is_in_danger = true;
+    let (mut storage, _) = InMemoryOrchardStorage::with_user_owned_orchard(
+        "owner",
+        "password",
+        orchard(),
+        vec![apple_identity()],
+        vec![tree],
+    );
+    order_orchard_row(
+        OrchardRowOrderRequested {
+            orchard_id: OrchardId(7),
+            row_name: "North".into(),
+            order: RowOrder::Manual(vec![TreeId(1)]),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let row = start_watering_run(
+        WateringRunStartRequested {
+            orchard_id: OrchardId(7),
+            row_name: "North".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let start_danger = |storage: &mut InMemoryOrchardStorage| {
+        start_danger_watering_run(
+            DangerWateringRunStartRequested {
+                orchard_id: OrchardId(7),
+                water_source: GeoPoint {
+                    longitude: -73.5,
+                    latitude: 12.25,
+                },
+                carry_capacity: 2,
+            },
+            storage,
+        )
+        .unwrap()
+    };
+    let danger = start_danger(&mut storage);
+    assert_ne!(row.run_id, danger.run_id);
+    assert_eq!(start_danger(&mut storage), danger);
+    assert_eq!(
+        storage
+            .unfinished_watering_runs(OrchardId(7))
+            .unwrap()
+            .len(),
+        2
     );
 }
 

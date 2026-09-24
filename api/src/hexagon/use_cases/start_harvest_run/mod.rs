@@ -57,6 +57,7 @@ pub fn start_harvest_run(
     let harvested_parts = normalized_harvested_parts(event.harvested_parts)
         .ok_or(HarvestRunStartError::NoHarvestPartsSelected)?;
     storage.transaction(|orchard| {
+        orchard.lock_orchard_runs(event.orchard_id)?;
         if orchard
             .active_watering_run(event.orchard_id)
             .map_err(|_| HarvestRunStartError::HarvestRunCouldNotBeStarted)?

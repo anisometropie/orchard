@@ -22,6 +22,7 @@ pub fn resume_watering_run(
     storage: &mut impl OrchardStorage,
 ) -> Result<WateringProgress, WateringRunResumeError> {
     storage.transaction(|orchard| {
+        orchard.lock_orchard_runs(event.orchard_id)?;
         let mut run = orchard
             .watering_run(event.watering_run_id)?
             .filter(|run| run.orchard_id == event.orchard_id)
@@ -33,8 +34,9 @@ pub fn resume_watering_run(
             return Err(WateringRunResumeError::HarvestRunIsActive);
         }
         if orchard
-            .active_watering_run(event.orchard_id)?
-            .is_some_and(|active| active.id != run.id)
+            .unfinished_watering_runs(event.orchard_id)?
+            .iter()
+            .any(|active| !active.paused && active.id != run.id && active.target == run.target)
         {
             return Err(WateringRunResumeError::AnotherWateringRunIsActive);
         }

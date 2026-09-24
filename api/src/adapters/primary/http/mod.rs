@@ -937,9 +937,6 @@ fn watering_start_error_response(error: WateringRunStartError) -> Response {
             "watering_row_not_ordered",
             "Order every living tree in this row before starting watering.",
         ),
-        WateringRunStartError::AnotherWateringRunIsActive => {
-            watering_conflict_response("watering_run_active", "A watering tour is already active.")
-        }
         WateringRunStartError::HarvestRunIsActive => {
             watering_conflict_response("harvest_run_active", "A harvest tour is already active.")
         }
@@ -956,9 +953,6 @@ fn danger_watering_start_error_response(error: DangerWateringRunStartError) -> R
             StatusCode::BAD_REQUEST.into_response()
         }
         DangerWateringRunStartError::NoDangerTrees => StatusCode::NOT_FOUND.into_response(),
-        DangerWateringRunStartError::AnotherWateringRunIsActive => {
-            watering_conflict_response("watering_run_active", "A watering tour is already active.")
-        }
         DangerWateringRunStartError::HarvestRunIsActive => {
             watering_conflict_response("harvest_run_active", "A harvest tour is already active.")
         }
@@ -1059,7 +1053,7 @@ async fn resume_watering_run_handler<U>(
     State(storage): State<Arc<Mutex<U>>>,
     Path((orchard_id, run_id)): Path<(u64, u64)>,
     headers: HeaderMap,
-) -> Result<Json<Value>, StatusCode>
+) -> Result<Response, StatusCode>
 where
     U: AccessControl + OrchardStorage + Send + 'static,
 {
@@ -1068,23 +1062,36 @@ where
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
         authorize_watering_access(&mut *storage, orchard_id, credential)?;
-        resume_watering_run(
-            WateringRunResumeRequested {
-                orchard_id,
-                watering_run_id: WateringRunId(run_id),
+        Ok(
+            match resume_watering_run(
+                WateringRunResumeRequested {
+                    orchard_id,
+                    watering_run_id: WateringRunId(run_id),
+                },
+                &mut *storage,
+            ) {
+                Ok(progress) => Json(watering_progress_json(progress)).into_response(),
+                Err(WateringRunResumeError::WateringRunNotFound) => {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+                Err(WateringRunResumeError::WateringRunAlreadyCompleted) => {
+                    StatusCode::CONFLICT.into_response()
+                }
+                Err(WateringRunResumeError::AnotherWateringRunIsActive) => {
+                    watering_conflict_response(
+                        "watering_run_active",
+                        "Another watering run for this target is already active.",
+                    )
+                }
+                Err(WateringRunResumeError::HarvestRunIsActive) => watering_conflict_response(
+                    "harvest_run_active",
+                    "A harvest tour is already active.",
+                ),
+                Err(WateringRunResumeError::WateringRunCouldNotBeResumed) => {
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
             },
-            &mut *storage,
         )
-        .map(|progress| Json(watering_progress_json(progress)))
-        .map_err(|error| match error {
-            WateringRunResumeError::WateringRunNotFound => StatusCode::NOT_FOUND,
-            WateringRunResumeError::WateringRunAlreadyCompleted
-            | WateringRunResumeError::AnotherWateringRunIsActive
-            | WateringRunResumeError::HarvestRunIsActive => StatusCode::CONFLICT,
-            WateringRunResumeError::WateringRunCouldNotBeResumed => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        })
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?

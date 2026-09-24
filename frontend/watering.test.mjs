@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   adaptiveWateringWideZoom,
+  availableWateringRuns,
   appendManualTree,
   defaultWaterSource,
   dangerWateringNumberGeoJson,
@@ -12,10 +13,12 @@ import {
   orchardRows,
   pausedWateringRuns,
   rowOrderPreview,
+  selectedWateringRun,
   treeIdsInRow,
   wateringCarryCapacity,
   wateringRouteWindow,
   wateringRowIsOrdered,
+  wateringRunSelectionKey,
   wateringStartConflictMessage,
   wateringCancellationNeedsConfirmation,
   wateringStartRequest,
@@ -72,7 +75,7 @@ test("explain why row watering cannot start instead of claiming a tour is active
   );
   assert.equal(
     wateringStartConflictMessage("watering_run_active"),
-    "Finish or cancel the active watering tour first.",
+    "Another run for this watering target is active. Join it or pause it first.",
   );
 });
 
@@ -190,6 +193,32 @@ test("offer paused unfinished watering runs without losing their saved progress"
     saved,
     { ...saved, run_id: 5, next_tree: null },
   ]), [saved]);
+});
+
+test("offer each unfinished run for explicit joining without auto-selecting one", () => {
+  const first = { run_id: 1, paused: false, next_tree: { id: 11 } };
+  const second = { run_id: 2, paused: false, next_tree: { id: 21 } };
+  const paused = { run_id: 3, paused: true, next_tree: { id: 31 } };
+  const finished = { run_id: 4, paused: false, next_tree: null };
+  const runs = [first, second, paused, finished];
+
+  assert.deepEqual(availableWateringRuns(runs), [first, second, paused]);
+  assert.deepEqual(availableWateringRuns(runs, "2"), [first, paused]);
+  assert.equal(selectedWateringRun(runs, null), null);
+  assert.equal(selectedWateringRun(runs, "2"), second);
+  assert.equal(selectedWateringRun(runs, 3), null);
+  assert.equal(selectedWateringRun(runs, 4), null);
+  assert.equal(selectedWateringRun(runs, 99), null);
+});
+
+test("scope the tab's saved run to the orchard and access identity", () => {
+  const first = { mode: "shared", orchardId: 1, shareToken: "first" };
+  assert.equal(wateringRunSelectionKey(first), wateringRunSelectionKey({ ...first }));
+  assert.notEqual(wateringRunSelectionKey(first), wateringRunSelectionKey({ ...first, orchardId: 2 }));
+  assert.notEqual(wateringRunSelectionKey(first), wateringRunSelectionKey({ ...first, shareToken: "second" }));
+  assert.notEqual(wateringRunSelectionKey(first), wateringRunSelectionKey({ mode: "editable", orchardId: 1 }, 10));
+  assert.notEqual(wateringRunSelectionKey({ mode: "editable", orchardId: 1 }, 10), wateringRunSelectionKey({ mode: "editable", orchardId: 1 }, 11));
+  assert.equal(wateringRunSelectionKey({ mode: "empty", orchardId: null }), null);
 });
 
 test("default the water source a few metres north of Ronde de Bordeaux", () => {

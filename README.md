@@ -167,6 +167,13 @@ continues at the next unwatered tree. Pausing affects everyone working on that
 run. **Cancel run** remains a separate action that deletes the run and its
 recorded progress.
 
+Several rows can be watered at the same time. Open the watering menu to start
+a row or choose **Join run** on an existing run. Everyone with watering access
+to that orchard can join the same run and see its progress update. Your chosen
+run is remembered in that browser tab. **Leave run** only leaves your view;
+the run stays available for everyone else. Starting a row that is already being
+watered joins that row's existing run.
+
 ## Shared links
 
 View and watering share links are permanent database records. Creating a new
