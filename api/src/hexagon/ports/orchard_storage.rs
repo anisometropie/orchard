@@ -1,9 +1,9 @@
 use crate::hexagon::models::{
     AnnualHarvestWindow, CompletedHarvestRun, CompletedWateringRun, GeoPoint, HarvestDate,
-    HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree, HarvestScheduleOwner,
-    HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension,
-    OrchardId, OrchardTree, PlantIdentification, PlantIdentityReference, Tree, TreeId, WateringRun,
-    WateringRunId, WateringRunTarget,
+    HarvestObservation, HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree,
+    HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
+    HarvestWindowExtension, OrchardId, OrchardTree, PlantIdentification, PlantIdentityReference,
+    Tree, TreeId, WateringRun, WateringRunId, WateringRunTarget,
 };
 
 #[derive(Debug, PartialEq)]
@@ -165,6 +165,32 @@ pub trait OrchardStorage {
         &mut self,
         watering_run_id: WateringRunId,
     ) -> Result<(), OrchardStorageError>;
+    /// Observations for this exact orchard and species/cultivar, ordered by ID.
+    /// Reads inside a transaction lock the points until review commits.
+    fn harvest_observations(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+    ) -> Result<Vec<HarvestObservation>, OrchardStorageError>;
+    /// All visit facts in this orchard, including production-only records, ordered by ID.
+    fn harvest_observations_in_orchard(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<HarvestObservation>, OrchardStorageError>;
+    fn save_harvest_observation(
+        &mut self,
+        observation: HarvestObservation,
+    ) -> Result<u64, OrchardStorageError>;
+    /// All IDs must exist in this exact scope and be unreviewed; otherwise fail atomically.
+    fn review_harvest_observations(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+        ids: &[u64],
+    ) -> Result<(), OrchardStorageError>;
+    /// Undo removes an unreviewed point only. Reviewed evidence cannot be undone.
+    fn delete_unreviewed_harvest_observation(&mut self, id: u64)
+    -> Result<(), OrchardStorageError>;
     fn harvest_tree_outcomes(
         &mut self,
         orchard_id: OrchardId,

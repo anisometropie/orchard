@@ -33,7 +33,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
     );
     assert_eq!(
         String::from_utf8(adoption.stdout).unwrap(),
-        "Adopted the existing version-10 schema.\nApplied migrations: 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28.\n"
+        "Adopted the existing version-10 schema.\nApplied migrations: 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30.\n"
     );
     let versions = verification_connection
         .query(
@@ -48,7 +48,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-            26, 27, 28
+            26, 27, 28, 29, 30
         ]
     );
 
@@ -70,7 +70,7 @@ fn adopt_an_existing_untracked_database_and_make_repeated_migration_safe() {
     assert!(revert.status.success());
     assert_eq!(
         String::from_utf8(revert.stdout).unwrap(),
-        "Reverted migrations: 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11.\n"
+        "Reverted migrations: 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11.\n"
     );
     verification_connection
         .batch_execute(
@@ -311,6 +311,17 @@ fn empty_orchard_database(database_url: &str) -> Client {
         verification_connection
             .batch_execute(include_str!(
                 "../../../../db/migrations/010_describe_harvest_windows.sql"
+            ))
+            .unwrap();
+    }
+    let exclusions_were_applied: bool = verification_connection.query_one(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+         AND table_name = 'trees' AND column_name = 'is_excluded_from_watering')", &[],
+    ).unwrap().get(0);
+    if !exclusions_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/027_add_watering_exclusions.sql"
             ))
             .unwrap();
     }

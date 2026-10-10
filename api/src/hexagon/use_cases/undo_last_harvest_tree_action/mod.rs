@@ -37,6 +37,11 @@ pub fn undo_last_harvest_tree_action(
             .map_err(|_| LastHarvestTreeActionUndoError::HarvestTreeActionCouldNotBeUndone)?
             .ok_or(LastHarvestTreeActionUndoError::NoHarvestTreeActionToUndo)?;
 
+        if let Some(id) = undo.observation_id {
+            orchard
+                .delete_unreviewed_harvest_observation(id)
+                .map_err(|_| LastHarvestTreeActionUndoError::HarvestTreeActionCouldNotBeUndone)?;
+        }
         for extension in undo.window_extensions.iter().rev() {
             let restored = orchard
                 .restore_orchard_harvest_window(event.orchard_id, extension)

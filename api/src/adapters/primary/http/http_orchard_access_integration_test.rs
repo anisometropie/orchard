@@ -2439,3 +2439,293 @@ fn webp(payload: &[u8]) -> Vec<u8> {
     bytes.extend_from_slice(payload);
     bytes
 }
+
+#[tokio::test]
+async fn harvesters_collect_observations_but_only_the_owner_can_review_and_change_windows() {
+    let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let view_token = create_share_token(&client, server.url(), &cookie).await;
+    let harvest_token = create_harvest_watering_share_token(&client, server.url(), &cookie).await;
+    let windows_url = format!(
+        "{}/orchards/7/plant-identities/1/harvest-windows",
+        server.url()
+    );
+    let windows = serde_json::json!({ "reference_region": "France", "windows": [{
+        "start": { "month": 9, "day": 1 }, "end": { "month": 9, "day": 30 }, "harvested_part": "fruit"
+    }] });
+    assert_eq!(
+        client
+            .put(&windows_url)
+            .header(header::COOKIE, &cookie)
+            .json(&windows)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let start_url = format!("{}/orchards/7/harvest-runs", server.url());
+    let run = client.post(&start_url).header("x-orchard-share-token", &harvest_token)
+        .json(&serde_json::json!({ "target": "all", "harvested_parts": ["fruit"], "on_date": "2026-09-28" }))
+        .send().await.unwrap().json::<serde_json::Value>().await.unwrap();
+    let record_url = format!(
+        "{}/orchards/7/harvest-runs/{}/observations",
+        server.url(),
+        run["run_id"]
+    );
+    let event =
+        serde_json::json!({ "tree_id": 1, "action_date": "2026-09-28", "kind": "too_soon" });
+    assert_eq!(
+        client
+            .post(&record_url)
+            .header("x-orchard-share-token", &view_token)
+            .json(&event)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let recorded = client
+        .post(&record_url)
+        .header("x-orchard-share-token", &harvest_token)
+        .json(&event)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(recorded.status(), StatusCode::OK);
+    assert!(recorded.json::<serde_json::Value>().await.unwrap()["next_tree"].is_null());
+    let review_url = format!("{}/orchards/7/harvest-observations/species/1", server.url());
+    let points = client
+        .get(&review_url)
+        .header("x-orchard-share-token", &view_token)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(points[0]["kind"], "too_soon");
+    assert_eq!(points[0]["recorded_on"], "2026-09-28");
+    assert_eq!(points[0]["window_end"], "2026-09-30");
+    assert_eq!(points[0]["reviewed"], false);
+    let mut changed_windows = windows;
+    changed_windows["windows"][0]["start"]["day"] = serde_json::json!(15);
+    let review = serde_json::json!({ "observation_ids": [points[0]["id"]], "window_change": changed_windows });
+    assert_eq!(
+        client
+            .post(&review_url)
+            .header("x-orchard-share-token", &harvest_token)
+            .json(&review)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .post(&review_url)
+            .header(header::COOKIE, &cookie)
+            .json(&review)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let reviewed = client
+        .get(&review_url)
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(reviewed[0]["reviewed"], true);
+    assert_eq!(
+        client
+            .post(&review_url)
+            .header(header::COOKIE, &cookie)
+            .json(&review)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let map = client
+        .get(format!("{}/orchards/7/trees.geojson", server.url()))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        map["features"][0]["properties"]["harvest_windows"][0]["start"],
+        "09-15"
+    );
+    let history = client
+        .get(format!("{}/orchards/7/run-history", server.url()))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        history["harvest_runs"][0]["trees"][0]["outcome"]["kind"],
+        "too_soon"
+    );
+}
+
+#[tokio::test]
+async fn harvest_visit_facts_are_validated_and_production_only_visits_are_not_window_evidence() {
+    for (kind, fruit_state) in [
+        ("empty_on_arrival", None),
+        ("harvested_all", None),
+        ("all_wasted", None),
+        (
+            "fruit_remaining",
+            Some(serde_json::json!({"ready": false, "unripe": true, "wasted": true})),
+        ),
+    ] {
+        let server = start_http_server(owned_storage(), "127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let client = Client::new();
+        let cookie = login_cookie(&client, server.url()).await;
+        let windows_url = format!(
+            "{}/orchards/7/plant-identities/1/harvest-windows",
+            server.url()
+        );
+        let windows = serde_json::json!({"reference_region":"France", "windows":[{
+            "start":{"month":9,"day":1},"end":{"month":9,"day":30},"harvested_part":"fruit"
+        }]});
+        assert_eq!(
+            client
+                .put(&windows_url)
+                .header(header::COOKIE, &cookie)
+                .json(&windows)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let run = client.post(format!("{}/orchards/7/harvest-runs", server.url())).header(header::COOKIE, &cookie)
+            .json(&serde_json::json!({"target":"all","harvested_parts":["fruit"],"on_date":"2026-09-28"}))
+            .send().await.unwrap().json::<serde_json::Value>().await.unwrap();
+        let record_url = format!(
+            "{}/orchards/7/harvest-runs/{}/observations",
+            server.url(),
+            run["run_id"]
+        );
+        let invalid = serde_json::json!({"tree_id":1,"action_date":"2026-09-28","kind":"fruit_remaining","fruit_state":{"ready":false,"unripe":false,"wasted":true}});
+        assert_eq!(
+            client
+                .post(&record_url)
+                .header(header::COOKIE, &cookie)
+                .json(&invalid)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let event = serde_json::json!({"tree_id":1,"action_date":"2026-09-28","kind":kind,"fruit_state":fruit_state});
+        assert_eq!(
+            client
+                .post(&record_url)
+                .header(header::COOKIE, &cookie)
+                .json(&event)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let all_url = format!("{}/orchards/7/harvest-observations", server.url());
+        assert_eq!(
+            client.get(&all_url).send().await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let all = client
+            .get(&all_url)
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(all.as_array().unwrap().len(), 1);
+        assert_eq!(all[0]["kind"], kind);
+        assert_eq!(all[0]["owner_kind"], "species");
+        assert_eq!(all[0]["owner_id"], 1);
+        assert_eq!(all[0]["fruit_state"]["ready"], kind == "harvested_all");
+        let scope_url = format!("{all_url}/species/1");
+        let scope = client
+            .get(&scope_url)
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(
+            scope.as_array().unwrap().len(),
+            usize::from(kind != "empty_on_arrival")
+        );
+        if kind == "empty_on_arrival" {
+            assert_eq!(all[0]["evidence"], serde_json::json!([]));
+            let review = serde_json::json!({"observation_ids":[all[0]["id"]],"window_change":null});
+            assert_eq!(
+                client
+                    .post(&scope_url)
+                    .header(header::COOKIE, &cookie)
+                    .json(&review)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::CONFLICT
+            );
+        } else if kind == "fruit_remaining" {
+            assert_eq!(
+                all[0]["evidence"],
+                serde_json::json!(["earlier_fruit_missed", "mixed_ripeness"])
+            );
+        }
+        let undone = client
+            .post(format!(
+                "{}/orchards/7/harvest-runs/{}/previous",
+                server.url(),
+                run["run_id"]
+            ))
+            .header(header::COOKIE, &cookie)
+            .json(&serde_json::json!({"action_date":"2026-09-28"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(undone.status(), StatusCode::OK);
+        let all = client
+            .get(&all_url)
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(all, serde_json::json!([]));
+    }
+}

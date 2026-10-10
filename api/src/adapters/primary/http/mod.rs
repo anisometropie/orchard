@@ -1,3 +1,14 @@
+use crate::hexagon::models::{
+    HarvestFruitState, HarvestObservation, HarvestObservationKind, harvest_window_evidence,
+};
+use crate::hexagon::use_cases::list_harvest_observations::list_harvest_observations;
+use crate::hexagon::use_cases::list_orchard_harvest_observations::list_orchard_harvest_observations;
+use crate::hexagon::use_cases::record_harvest_visit::{
+    HarvestVisitRecorded, HarvestVisitRecordingError, record_harvest_visit,
+};
+use crate::hexagon::use_cases::review_harvest_observations::{
+    HarvestObservationReviewError, HarvestObservationsReviewed, review_harvest_observations,
+};
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -288,6 +299,19 @@ where
         .route(
             "/orchards/{orchard_id}/watering-runs/{watering_run_id}/dead",
             post(mark_watering_tree_dead_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-runs/{harvest_run_id}/observations",
+            post(record_harvest_observation_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-observations",
+            get(list_orchard_harvest_observations_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-observations/{owner_kind}/{owner_id}",
+            get(list_harvest_observations_handler::<U>)
+                .post(review_harvest_observations_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/harvest-run",
@@ -792,6 +816,24 @@ fn harvest_history_outcome_json(outcome: HarvestTreeOutcome) -> Value {
         HarvestTreeOutcome::DoneForWindow { recorded_on } => json!({
             "kind": "done_for_window",
             "recorded_on": recorded_on.to_string(),
+        }),
+        HarvestTreeOutcome::TooSoon {
+            recorded_on,
+            retry_on,
+        } => json!({
+            "kind": "too_soon", "recorded_on": recorded_on.to_string(), "retry_on": retry_on.to_string(),
+        }),
+        HarvestTreeOutcome::EmptyOnArrival { recorded_on } => json!({
+            "kind": "empty_on_arrival", "recorded_on": recorded_on.to_string(),
+        }),
+        HarvestTreeOutcome::FruitRemaining {
+            recorded_on,
+            retry_on,
+        } => json!({
+            "kind": "fruit_remaining", "recorded_on": recorded_on.to_string(), "retry_on": retry_on.to_string(),
+        }),
+        HarvestTreeOutcome::TooLate { recorded_on } => json!({
+            "kind": "too_late", "recorded_on": recorded_on.to_string(),
         }),
         HarvestTreeOutcome::Deferred {
             deferred_on,
@@ -2833,4 +2875,236 @@ fn named_taxon(taxon: &NamedTaxon) -> String {
         parts.push(format!("{cultivar_group} Group"));
     }
     parts.join(" ")
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordHarvestObservationRequest {
+    tree_id: u64,
+    action_date: String,
+    kind: HarvestObservationKind,
+    fruit_state: Option<HarvestFruitState>,
+}
+
+async fn record_harvest_observation_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, harvest_run_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<RecordHarvestObservationRequest>, JsonRejection>,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_harvesting_credential(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_harvesting_access(&mut *storage, orchard_id, credential)?;
+        Ok(
+            match record_harvest_visit(
+                HarvestVisitRecorded {
+                    orchard_id,
+                    harvest_run_id: HarvestRunId(harvest_run_id),
+                    tree_id: TreeId(request.tree_id),
+                    action_date: request.action_date,
+                    kind: request.kind,
+                    fruit_state: request.fruit_state,
+                },
+                &mut *storage,
+            ) {
+                Ok(progress) => Json(harvest_progress_json(progress)).into_response(),
+                Err(
+                    HarvestVisitRecordingError::InvalidActionDate
+                    | HarvestVisitRecordingError::InvalidFruitState,
+                ) => StatusCode::BAD_REQUEST.into_response(),
+                Err(HarvestVisitRecordingError::HarvestRunNotFound) => {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+                Err(
+                    HarvestVisitRecordingError::HarvestRunAlreadyCompleted
+                    | HarvestVisitRecordingError::TreeIsNotCurrent,
+                ) => StatusCode::CONFLICT.into_response(),
+                Err(HarvestVisitRecordingError::ActionDateOutsideRunPeriod) => {
+                    harvest_conflict_response(
+                        "harvest_action_date_outside_run_period",
+                        "The action date is outside this tour's harvest period.",
+                    )
+                }
+                Err(HarvestVisitRecordingError::HarvestWindowChanged) => harvest_conflict_response(
+                    "harvest_window_changed",
+                    "The harvest window changed after this tour started.",
+                ),
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            },
+        )
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+fn observation_owner(kind: &str, id: u64) -> Result<HarvestScheduleOwner, StatusCode> {
+    if id == 0 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    match kind {
+        "species" => Ok(HarvestScheduleOwner::PlantIdentity(PlantIdentityId(id))),
+        "cultivar" => Ok(HarvestScheduleOwner::PlantCultivar(PlantCultivarId(id))),
+        _ => Err(StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn list_harvest_observations_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, kind, owner_id)): Path<(u64, String, u64)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_read_credential(&headers)?;
+    let owner = observation_owner(&kind, owner_id)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_orchard_reader(
+            OrchardReadAccessRequested {
+                orchard_id,
+                credential,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        let points = list_harvest_observations(orchard_id, owner, &mut *storage)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Ok(Json(json!(
+            points
+                .iter()
+                .map(|point| harvest_observation_json(point, &points))
+                .collect::<Vec<_>>()
+        )))
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+fn harvest_observation_json(point: &HarvestObservation, history: &[HarvestObservation]) -> Value {
+    let (owner_kind, owner_id) = match point.owner {
+        HarvestScheduleOwner::PlantIdentity(id) => ("species", id.0),
+        HarvestScheduleOwner::PlantCultivar(id) => ("cultivar", id.0),
+    };
+    json!({
+        "id": point.id, "tree_id": point.tree_id.0, "harvest_run_id": point.harvest_run_id.0,
+        "owner_kind": owner_kind, "owner_id": owner_id,
+        "recorded_on": point.recorded_on.to_string(), "kind": point.kind,
+        "fruit_state": point.observed_fruit_state(),
+        "harvested_parts": point.harvested_parts,
+        "window_start": point.period.start.to_string(), "window_end": point.period.end.to_string(),
+        "reviewed": point.reviewed, "evidence": harvest_window_evidence(point, history),
+    })
+}
+
+async fn list_orchard_harvest_observations_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path(orchard_id): Path<u64>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_read_credential(&headers)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_orchard_reader(
+            OrchardReadAccessRequested {
+                orchard_id,
+                credential,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        let points = list_orchard_harvest_observations(orchard_id, &mut *storage)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Ok(Json(json!(
+            points
+                .iter()
+                .map(|point| harvest_observation_json(point, &points))
+                .collect::<Vec<_>>()
+        )))
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewHarvestObservationsRequest {
+    observation_ids: Vec<u64>,
+    window_change: Option<ReplaceHarvestWindowsRequest>,
+}
+
+async fn review_harvest_observations_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, kind, owner_id)): Path<(u64, String, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<ReviewHarvestObservationsRequest>, JsonRejection>,
+) -> Result<StatusCode, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session = owner_session_token(&headers)?;
+    let owner = observation_owner(&kind, owner_id)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session)?;
+        review_harvest_observations(
+            HarvestObservationsReviewed {
+                orchard_id,
+                owner,
+                observation_ids: request.observation_ids,
+                window_change: request
+                    .window_change
+                    .map(|change| OrchardHarvestWindowsReplaced {
+                        orchard_id,
+                        owner,
+                        reference_region: change.reference_region,
+                        windows: change
+                            .windows
+                            .into_iter()
+                            .map(|window| AnnualHarvestWindowChanged {
+                                start_month: window.start.month,
+                                start_day: window.start.day,
+                                end_month: window.end.month,
+                                end_day: window.end.day,
+                                harvested_part: window.harvested_part,
+                            })
+                            .collect(),
+                    }),
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            HarvestObservationReviewError::InvalidObservationSelection => StatusCode::CONFLICT,
+            HarvestObservationReviewError::InvalidWindowChange(
+                PlantHarvestWindowsReplacementError::InvalidAnnualDate
+                | PlantHarvestWindowsReplacementError::MissingReferenceRegion,
+            ) => StatusCode::BAD_REQUEST,
+            HarvestObservationReviewError::InvalidWindowChange(
+                PlantHarvestWindowsReplacementError::OwnerNotFound,
+            ) => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        Ok(StatusCode::NO_CONTENT)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
 }

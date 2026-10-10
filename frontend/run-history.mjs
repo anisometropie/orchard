@@ -38,6 +38,14 @@ export function harvestOutcomeLabel(outcome) {
       return `Harvested everything on ${outcome.recorded_on}`;
     case "done_for_window":
       return `Done for that window on ${outcome.recorded_on}`;
+    case "too_soon":
+      return `Too soon / not ready on ${outcome.recorded_on} · retry ${outcome.retry_on}`;
+    case "too_late":
+      return `All wasted on ${outcome.recorded_on}`;
+    case "empty_on_arrival":
+      return `Empty on arrival on ${outcome.recorded_on}`;
+    case "fruit_remaining":
+      return `Fruit left on ${outcome.recorded_on} · retry ${outcome.retry_on}`;
     case "deferred":
       return `Done for now on ${outcome.recorded_on} · retry ${outcome.retry_on}`;
     default:

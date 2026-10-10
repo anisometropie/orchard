@@ -110,6 +110,20 @@ pub enum HarvestTreeOutcome {
     HarvestedEverything {
         harvested_on: HarvestDate,
     },
+    EmptyOnArrival {
+        recorded_on: HarvestDate,
+    },
+    FruitRemaining {
+        recorded_on: HarvestDate,
+        retry_on: HarvestDate,
+    },
+    TooSoon {
+        recorded_on: HarvestDate,
+        retry_on: HarvestDate,
+    },
+    TooLate {
+        recorded_on: HarvestDate,
+    },
     DoneForWindow {
         recorded_on: HarvestDate,
     },
@@ -165,6 +179,8 @@ pub struct HarvestWindowExtension {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HarvestTreeActionUndo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_id: Option<u64>,
     pub tree_id: TreeId,
     pub previous_outcome: Option<HarvestTreeOutcome>,
     pub previous_period_end: HarvestDate,
@@ -216,8 +232,12 @@ pub(crate) fn eligible_harvest_trees<'a>(
                             && periods_overlap(record.period, *period)
                             && match record.outcome {
                                 HarvestTreeOutcome::HarvestedEverything { .. }
-                                | HarvestTreeOutcome::DoneForWindow { .. } => true,
-                                HarvestTreeOutcome::Deferred { retry_on, .. } => {
+                                | HarvestTreeOutcome::DoneForWindow { .. }
+                                | HarvestTreeOutcome::TooLate { .. }
+                                | HarvestTreeOutcome::EmptyOnArrival { .. } => true,
+                                HarvestTreeOutcome::Deferred { retry_on, .. }
+                                | HarvestTreeOutcome::TooSoon { retry_on, .. }
+                                | HarvestTreeOutcome::FruitRemaining { retry_on, .. } => {
                                     action_date < retry_on
                                 }
                             }
@@ -383,5 +403,89 @@ mod tests {
             HarvestDate::new(2023, 2, 25).unwrap().add_days(7),
             HarvestDate::new(2023, 3, 4)
         );
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarvestObservationKind {
+    TooSoon,
+    TooLate,
+    HarvestedAll,
+    EmptyOnArrival,
+    AllWasted,
+    FruitRemaining,
+}
+
+impl HarvestObservationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TooSoon => "too_soon",
+            Self::TooLate => "too_late",
+            Self::HarvestedAll => "harvested_all",
+            Self::EmptyOnArrival => "empty_on_arrival",
+            Self::AllWasted => "all_wasted",
+            Self::FruitRemaining => "fruit_remaining",
+        }
+    }
+    pub fn from_stored(value: &str) -> Option<Self> {
+        match value {
+            "too_soon" => Some(Self::TooSoon),
+            "too_late" => Some(Self::TooLate),
+            "harvested_all" => Some(Self::HarvestedAll),
+            "empty_on_arrival" => Some(Self::EmptyOnArrival),
+            "all_wasted" => Some(Self::AllWasted),
+            "fruit_remaining" => Some(Self::FruitRemaining),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarvestFruitState {
+    pub ready: bool,
+    pub unripe: bool,
+    pub wasted: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HarvestObservation {
+    pub id: u64,
+    pub orchard_id: OrchardId,
+    pub harvest_run_id: HarvestRunId,
+    pub tree_id: TreeId,
+    pub owner: HarvestScheduleOwner,
+    pub recorded_on: HarvestDate,
+    pub kind: HarvestObservationKind,
+    #[serde(default)]
+    pub fruit_state: Option<HarvestFruitState>,
+    pub harvested_parts: Vec<HarvestedPart>,
+    pub period: HarvestPeriod,
+    pub reviewed: bool,
+}
+
+impl HarvestObservation {
+    pub fn has_timing_evidence(&self) -> bool {
+        self.kind != HarvestObservationKind::EmptyOnArrival
+    }
+    pub fn observed_fruit_state(&self) -> HarvestFruitState {
+        self.fruit_state.unwrap_or_else(|| match self.kind {
+            HarvestObservationKind::TooSoon => HarvestFruitState {
+                unripe: true,
+                ..Default::default()
+            },
+            HarvestObservationKind::TooLate | HarvestObservationKind::AllWasted => {
+                HarvestFruitState {
+                    wasted: true,
+                    ..Default::default()
+                }
+            }
+            HarvestObservationKind::HarvestedAll => HarvestFruitState {
+                ready: true,
+                ..Default::default()
+            },
+            _ => HarvestFruitState::default(),
+        })
     }
 }

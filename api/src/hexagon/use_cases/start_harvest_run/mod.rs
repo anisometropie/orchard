@@ -217,14 +217,23 @@ pub(crate) fn harvest_progress(
         .filter(|tree| {
             matches!(
                 tree.outcome,
-                Some(HarvestTreeOutcome::Deferred { retry_on, .. }) if action_date < retry_on
+                Some(HarvestTreeOutcome::Deferred { retry_on, .. } | HarvestTreeOutcome::TooSoon { retry_on, .. } | HarvestTreeOutcome::FruitRemaining { retry_on, .. }) if action_date < retry_on
             )
         })
         .count();
     let done_for_window_tree_count = run
         .ordered_trees
         .iter()
-        .filter(|tree| matches!(tree.outcome, Some(HarvestTreeOutcome::DoneForWindow { .. })))
+        .filter(|tree| {
+            matches!(
+                tree.outcome,
+                Some(
+                    HarvestTreeOutcome::DoneForWindow { .. }
+                        | HarvestTreeOutcome::TooLate { .. }
+                        | HarvestTreeOutcome::EmptyOnArrival { .. }
+                )
+            )
+        })
         .count();
     Some(HarvestProgress {
         run_id: run.id,
@@ -251,10 +260,16 @@ pub(crate) fn current_harvest_tree_index(
         .iter()
         .position(|tree| match tree.outcome {
             None => true,
-            Some(HarvestTreeOutcome::Deferred { retry_on, .. }) => retry_on <= action_date,
+            Some(
+                HarvestTreeOutcome::Deferred { retry_on, .. }
+                | HarvestTreeOutcome::TooSoon { retry_on, .. }
+                | HarvestTreeOutcome::FruitRemaining { retry_on, .. },
+            ) => retry_on <= action_date,
             Some(
                 HarvestTreeOutcome::HarvestedEverything { .. }
-                | HarvestTreeOutcome::DoneForWindow { .. },
+                | HarvestTreeOutcome::DoneForWindow { .. }
+                | HarvestTreeOutcome::TooLate { .. }
+                | HarvestTreeOutcome::EmptyOnArrival { .. },
             ) => false,
         })
 }

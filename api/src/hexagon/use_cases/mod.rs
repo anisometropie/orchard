@@ -43,3 +43,10 @@ pub mod start_danger_watering_run;
 pub mod start_harvest_run;
 pub mod start_watering_run;
 pub mod undo_last_harvest_tree_action;
+
+pub mod list_harvest_observations;
+pub mod record_harvest_observation;
+pub mod review_harvest_observations;
+
+pub mod list_orchard_harvest_observations;
+pub mod record_harvest_visit;

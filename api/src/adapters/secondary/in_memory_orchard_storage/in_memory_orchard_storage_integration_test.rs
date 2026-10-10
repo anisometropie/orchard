@@ -445,3 +445,22 @@ fn tree(plant_identity: PlantIdentityReference, legacy_feature_id: u32) -> Tree 
         adult_width_meters: None,
     }
 }
+
+#[test]
+fn harvest_observations_honor_the_storage_contract() {
+    #[path = "../../../../tests/support/harvest_observation_contract.rs"]
+    mod contract;
+    #[path = "../../../../tests/support/harvest_observation_fixture.rs"]
+    #[allow(dead_code)]
+    mod fixture;
+    use orchard_api::hexagon::models::HarvestScheduleOwner;
+    let mut storage = fixture::storage_with_cultivar_window();
+    let run = fixture::start(&mut storage, "2026-09-28").unwrap();
+    contract::assert_observations_are_scoped_ordered_and_atomic(
+        &mut storage,
+        run.run_id,
+        OrchardId(7),
+        HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
+        HarvestScheduleOwner::PlantCultivar(PlantCultivarId(1)),
+    );
+}

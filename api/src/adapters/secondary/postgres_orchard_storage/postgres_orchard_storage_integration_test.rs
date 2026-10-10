@@ -965,6 +965,7 @@ fn persist_and_atomically_undo_a_completed_harvest_action_and_its_extension() {
         retry_on: HarvestDate::new(2026, 9, 24).unwrap(),
     };
     let undo = HarvestTreeActionUndo {
+        observation_id: None,
         tree_id: TreeId(1),
         previous_outcome: None,
         previous_period_end: original_period.end,
@@ -2861,6 +2862,31 @@ fn empty_orchard_database() -> (String, Client) {
             ))
             .unwrap();
     }
+    let observations_were_applied: bool = verification_connection
+        .query_one(
+            "SELECT to_regclass('harvest_observations') IS NOT NULL",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    if !observations_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/029_add_harvest_observations.sql"
+            ))
+            .unwrap();
+    }
+    let visit_facts_were_applied: bool = verification_connection.query_one(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+         AND table_name = 'harvest_observations' AND column_name = 'fruit_ready')", &[],
+    ).unwrap().get(0);
+    if !visit_facts_were_applied {
+        verification_connection
+            .batch_execute(include_str!(
+                "../../../../db/migrations/030_rework_harvest_visit_facts.sql"
+            ))
+            .unwrap();
+    }
     verification_connection
         .batch_execute(
             "TRUNCATE TABLE harvest_runs, watering_runs, user_sessions, orchards,
@@ -2899,4 +2925,56 @@ fn webp(payload: &[u8]) -> Vec<u8> {
     bytes.extend_from_slice(b"WEBP");
     bytes.extend_from_slice(payload);
     bytes
+}
+
+#[test]
+fn harvest_observations_honor_the_storage_contract() {
+    #[path = "../../../../tests/support/harvest_observation_contract.rs"]
+    mod contract;
+    use orchard_api::hexagon::use_cases::start_harvest_run::*;
+    let _database_lock = database_lock();
+    let (database_url, mut connection) = empty_orchard_database();
+    connection.batch_execute(r#"
+        INSERT INTO orchards (name, center, reference_region) VALUES ('Orchard', ST_SetSRID(ST_MakePoint(0,0),4326), 'France');
+        INSERT INTO plant_identities (common_name, botanical_taxon) VALUES ('Apple', '{"Named":{"genus":"Malus","species":"domestica","species_is_hybrid":false,"infraspecific":null,"is_aggregate":false,"cultivar_group":null}}');
+        INSERT INTO plant_cultivars (plant_identity_id, cultivar) VALUES (1, 'Boskoop');
+        INSERT INTO trees (orchard_id, plant_identity_id, cultivar_id, location, roles, is_alive, identification_status)
+        VALUES (1,1,NULL,ST_SetSRID(ST_MakePoint(0,0),4326),'{}',TRUE,'confirmed'),
+               (1,1,1,ST_SetSRID(ST_MakePoint(0.1,0),4326),'{}',TRUE,'confirmed');
+    "#).unwrap();
+    let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
+    let species = HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1));
+    let cultivar = HarvestScheduleOwner::PlantCultivar(PlantCultivarId(1));
+    storage
+        .transaction(|storage| {
+            let windows = vec![AnnualHarvestWindow {
+                start: AnnualDate { month: 9, day: 1 },
+                end: AnnualDate { month: 9, day: 30 },
+                reference_region: Some("France".into()),
+                harvested_part: HarvestedPart::Fruit,
+                data_origin: HarvestDataOrigin::ExternalReference,
+                source_url: Some("https://example.com".into()),
+            }];
+            storage.replace_orchard_harvest_windows(OrchardId(1), species, windows.clone())?;
+            storage.replace_orchard_harvest_windows(OrchardId(1), cultivar, windows)?;
+            Ok::<_, OrchardStorageError>(())
+        })
+        .unwrap();
+    let run = start_harvest_run(
+        HarvestRunStartRequested {
+            orchard_id: OrchardId(1),
+            target: HarvestRunTarget::All,
+            harvested_parts: vec![HarvestedPart::Fruit],
+            action_date: "2026-09-28".into(),
+        },
+        &mut storage,
+    )
+    .unwrap();
+    contract::assert_observations_are_scoped_ordered_and_atomic(
+        &mut storage,
+        run.run_id,
+        OrchardId(1),
+        species,
+        cultivar,
+    );
 }

@@ -179,6 +179,7 @@ pub fn defer_harvest_tree(
             .save_harvest_tree_action_undo(
                 event.harvest_run_id,
                 &HarvestTreeActionUndo {
+                    observation_id: None,
                     tree_id: event.tree_id,
                     previous_outcome,
                     previous_period_end: snapshot_period.end,

@@ -6,13 +6,13 @@ use std::{
 use crate::hexagon::models::{
     AerialOverlayId, AerialOverlayImage, AnnualHarvestWindow, BotanicalTaxon, CompletedHarvestRun,
     CompletedWateringRun, CompletedWateringRunTree, GeoPoint, HarvestDataOrigin, HarvestDate,
-    HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree, HarvestScheduleOwner,
-    HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension,
-    HarvestedPart, IssuedOrchardShareToken, MapConfiguration, Orchard, OrchardId,
-    OrchardShareAccess, OrchardSharePermissions, OrchardShareTokenId, OrchardTree, PlantCultivar,
-    PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId, PlantIdentityReference,
-    Tree, TreeId, TreePhoto, TreePhotoId, TreePhotoSummary, TreePhotoVariant, User, UserId,
-    WateringRun, WateringRunId, WateringRunTarget,
+    HarvestObservation, HarvestRun, HarvestRunId, HarvestRunTarget, HarvestRunTree,
+    HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
+    HarvestWindowExtension, HarvestedPart, IssuedOrchardShareToken, MapConfiguration, Orchard,
+    OrchardId, OrchardShareAccess, OrchardSharePermissions, OrchardShareTokenId, OrchardTree,
+    PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity, PlantIdentityId,
+    PlantIdentityReference, Tree, TreeId, TreePhoto, TreePhotoId, TreePhotoSummary,
+    TreePhotoVariant, User, UserId, WateringRun, WateringRunId, WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -37,6 +37,8 @@ pub struct InMemoryOrchardStorage {
 
 #[derive(Default)]
 struct InMemoryOrchard {
+    harvest_observations: Vec<HarvestObservation>,
+    harvest_observation_sequence: u64,
     users: Vec<InMemoryUser>,
     sessions: Vec<(String, UserId)>,
     share_tokens: Vec<InMemoryShareToken>,
@@ -85,6 +87,7 @@ struct StoredCultivar {
 
 #[derive(Default)]
 struct InMemoryOrchardTransaction {
+    staged_observations: Option<(Vec<HarvestObservation>, u64)>,
     staged_plant_identities: Vec<PlantIdentity>,
     staged_plant_cultivars: Vec<StoredCultivar>,
     staged_trees: Vec<Tree>,
@@ -132,6 +135,22 @@ struct InMemoryOrchardConfiguration {
 }
 
 impl InMemoryOrchardStorage {
+    fn observations_for_write(
+        &mut self,
+    ) -> Result<&mut (Vec<HarvestObservation>, u64), OrchardStorageError> {
+        let orchard = self.orchard.lock().unwrap();
+        let transaction = self
+            .transaction
+            .as_mut()
+            .ok_or(OrchardStorageError::AtomicOperationCouldNotBegin)?;
+        Ok(transaction.staged_observations.get_or_insert_with(|| {
+            (
+                orchard.harvest_observations.clone(),
+                orchard.harvest_observation_sequence,
+            )
+        }))
+    }
+
     pub fn new() -> (Self, InMemoryOrchardObserver) {
         Self::with_configuration(InMemoryOrchardConfiguration::default())
     }
@@ -323,6 +342,8 @@ impl InMemoryOrchardStorage {
             watering_runs: Vec::new(),
             harvest_runs: Vec::new(),
             harvest_tree_action_undos: Vec::new(),
+            harvest_observations: Vec::new(),
+            harvest_observation_sequence: 0,
         }));
         (
             Self {
@@ -964,6 +985,10 @@ impl OrchardStorage for InMemoryOrchardStorage {
                 committed_orchard
                     .harvest_runs
                     .retain(|run| !transaction.staged_deleted_harvest_runs.contains(&run.id));
+                if let Some((points, sequence)) = transaction.staged_observations {
+                    committed_orchard.harvest_observations = points;
+                    committed_orchard.harvest_observation_sequence = sequence;
+                }
                 Ok(value)
             }
         }
@@ -1763,6 +1788,85 @@ impl OrchardStorage for InMemoryOrchardStorage {
         Ok(())
     }
 
+    fn harvest_observations(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+    ) -> Result<Vec<HarvestObservation>, OrchardStorageError> {
+        self.harvest_observations_in_orchard(orchard_id)
+            .map(|points| points.into_iter().filter(|p| p.owner == owner).collect())
+    }
+
+    fn harvest_observations_in_orchard(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<HarvestObservation>, OrchardStorageError> {
+        let points = if let Some((points, _)) = self
+            .transaction
+            .as_ref()
+            .and_then(|tx| tx.staged_observations.as_ref())
+        {
+            points.clone()
+        } else {
+            self.orchard.lock().unwrap().harvest_observations.clone()
+        };
+        Ok(points
+            .into_iter()
+            .filter(|p| p.orchard_id == orchard_id)
+            .collect())
+    }
+
+    fn save_harvest_observation(
+        &mut self,
+        mut observation: HarvestObservation,
+    ) -> Result<u64, OrchardStorageError> {
+        let (points, sequence) = self.observations_for_write()?;
+        *sequence = sequence
+            .checked_add(1)
+            .ok_or(OrchardStorageError::HarvestRunCouldNotBeChanged)?;
+        observation.id = *sequence;
+        observation.reviewed = false;
+        points.push(observation);
+        Ok(*sequence)
+    }
+
+    fn review_harvest_observations(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+        ids: &[u64],
+    ) -> Result<(), OrchardStorageError> {
+        let (points, _) = self.observations_for_write()?;
+        let mut unique = ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        if unique.len() != ids.len()
+            || ids.iter().any(|id| {
+                !points.iter().any(|p| {
+                    p.id == *id && p.orchard_id == orchard_id && p.owner == owner && !p.reviewed
+                })
+            })
+        {
+            return Err(OrchardStorageError::HarvestRunCouldNotBeChanged);
+        }
+        for point in points.iter_mut().filter(|p| ids.contains(&p.id)) {
+            point.reviewed = true;
+        }
+        Ok(())
+    }
+
+    fn delete_unreviewed_harvest_observation(
+        &mut self,
+        id: u64,
+    ) -> Result<(), OrchardStorageError> {
+        let (points, _) = self.observations_for_write()?;
+        if !points.iter().any(|p| p.id == id && !p.reviewed) {
+            return Err(OrchardStorageError::HarvestRunCouldNotBeChanged);
+        }
+        points.retain(|p| p.id != id);
+        Ok(())
+    }
+
     fn harvest_tree_outcomes(
         &mut self,
         orchard_id: OrchardId,
@@ -1993,7 +2097,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
                 || tree.outcome.is_some_and(|outcome| {
                     matches!(
                         outcome,
-                        HarvestTreeOutcome::Deferred { retry_on, .. }
+                        HarvestTreeOutcome::Deferred { retry_on, .. } | HarvestTreeOutcome::TooSoon { retry_on, .. } | HarvestTreeOutcome::FruitRemaining { retry_on, .. }
                             if retry_on <= action_date
                     )
                 }))
@@ -2282,9 +2386,19 @@ fn harvest_outcome_fits_period(
         HarvestTreeOutcome::HarvestedEverything { harvested_on } => {
             period.start <= harvested_on && harvested_on <= period.end
         }
-        HarvestTreeOutcome::DoneForWindow { recorded_on } => {
+        HarvestTreeOutcome::DoneForWindow { recorded_on }
+        | HarvestTreeOutcome::TooLate { recorded_on }
+        | HarvestTreeOutcome::EmptyOnArrival { recorded_on } => {
             period.start <= recorded_on && recorded_on <= period.end
         }
+        HarvestTreeOutcome::TooSoon {
+            recorded_on,
+            retry_on,
+        }
+        | HarvestTreeOutcome::FruitRemaining {
+            recorded_on,
+            retry_on,
+        } => period.start <= recorded_on && recorded_on <= period.end && recorded_on < retry_on,
         HarvestTreeOutcome::Deferred {
             deferred_on,
             retry_on,
@@ -2298,12 +2412,16 @@ fn deferred_outcome_is_due(
 ) -> bool {
     let action_date = match new_outcome {
         HarvestTreeOutcome::HarvestedEverything { harvested_on } => harvested_on,
-        HarvestTreeOutcome::DoneForWindow { recorded_on } => recorded_on,
+        HarvestTreeOutcome::DoneForWindow { recorded_on }
+        | HarvestTreeOutcome::TooLate { recorded_on }
+        | HarvestTreeOutcome::TooSoon { recorded_on, .. }
+        | HarvestTreeOutcome::EmptyOnArrival { recorded_on }
+        | HarvestTreeOutcome::FruitRemaining { recorded_on, .. } => recorded_on,
         HarvestTreeOutcome::Deferred { deferred_on, .. } => deferred_on,
     };
     matches!(
         stored_outcome,
-        HarvestTreeOutcome::Deferred { retry_on, .. } if retry_on <= action_date
+        HarvestTreeOutcome::Deferred { retry_on, .. } | HarvestTreeOutcome::TooSoon { retry_on, .. } | HarvestTreeOutcome::FruitRemaining { retry_on, .. } if retry_on <= action_date
     )
 }
 

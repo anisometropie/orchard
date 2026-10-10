@@ -745,6 +745,21 @@
         font-size: 12px;
         margin: 10px 0 7px;
       }
+      .inventory-review-filter {
+        align-items: center;
+        cursor: pointer;
+        display: flex;
+        flex: 0 0 auto;
+        font-size: 13px;
+        gap: 8px;
+        margin-top: 8px;
+        min-height: 44px;
+      }
+      .inventory-review-filter input {
+        height: 20px;
+        margin: 0;
+        width: 20px;
+      }
       .inventory-table-wrap {
         border: 1px solid #d5d5d5;
         border-radius: 5px;
@@ -1589,6 +1604,7 @@
         .workflow-status,
         .workflow-error,
         .inventory-filters label,
+        .inventory-review-filter,
         .inventory-result-summary {
           font-size: 15px;
         }
@@ -1782,6 +1798,62 @@
           color: white;
         }
       }
+      #harvest-review-dialog {
+        width: min(760px, calc(100vw - 32px));
+        max-height: calc(100dvh - 48px);
+        box-sizing: border-box;
+        overflow: auto;
+        border: 1px solid #d4dfce;
+        border-radius: 12px;
+        padding: 20px;
+        color: #243023;
+        background: #fff;
+        font: 14px/1.4 sans-serif;
+      }
+      #harvest-review-dialog::backdrop { background: rgb(20 35 20 / 45%); }
+      #harvest-review-title { font-size: 1.2rem; }
+      #harvest-review-dialog button:not(.inventory-close) {
+        border: 1px solid #245c2a;
+        border-radius: 6px;
+        background: white;
+        color: #245c2a;
+        cursor: pointer;
+        font: inherit;
+        min-height: 44px;
+        padding: 8px 12px;
+      }
+      #harvest-review-dialog button:disabled { cursor: default; opacity: 0.6; }
+      .harvest-review-points { display: grid; gap: 10px; margin: 16px 0; }
+      .harvest-review-point { display: flex; gap: 10px; align-items: start; padding: 10px; background: #f4f7f1; border-radius: 6px; }
+      .harvest-review-point input { margin-top: 3px; flex-shrink: 0; }
+      .harvest-review-button { margin-left: 5px; }
+      .harvest-review-button[hidden] { display: none; }
+      .harvest-tree-actions { flex-wrap: wrap; }
+      #harvest-tree-banner.choosing-visit { flex-wrap: wrap; max-height: 45dvh; overflow-y: auto; }
+      #harvest-visit-details { flex-basis: 100%; }
+      #harvest-visit-details p { margin: 0 0 6px; }
+      #harvest-visit-details button { background: #245c2a; border: 1px solid #245c2a; border-radius: 6px; color: white; cursor: pointer; font: 700 13px sans-serif; min-height: 40px; padding: 6px 10px; }
+      #harvest-visit-details button:disabled { opacity: .6; cursor: default; }
+      #harvest-visit-back { margin-top: 6px; }
+      .harvest-visit-options { display: flex; flex-wrap: wrap; gap: 6px; }
+      #harvest-fruit-form fieldset { border: 0; margin: 0 0 6px; padding: 0; }
+      #harvest-fruit-form label { display: inline-flex; align-items: center; min-height: 40px; margin-right: 10px; }
+      .harvest-history-button { border-radius: 4px; font-size: 12px; height: auto; min-height: 40px; opacity: 1; padding: 5px 8px; pointer-events: auto; width: auto; }
+      .harvest-evidence { display: block; margin-top: 5px; color: #465840; }
+      .harvest-review-point > span { flex: 1; min-width: 0; }
+      .harvest-observation-timeline { display: block; margin-top: 10px; }
+      .harvest-timeline-heading { align-items: center; display: flex; flex-wrap: wrap; font-size: 11px; gap: 3px 10px; justify-content: space-between; }
+      .harvest-timeline-key { align-items: center; color: #465840; display: inline-flex; gap: 5px; }
+      .harvest-timeline-key::before { background: #628c53; border-radius: 2px; content: ""; height: 7px; width: 14px; }
+      .harvest-timeline-position { color: #465840; }
+      .harvest-timeline-plot { display: block; height: 65px; margin-top: 4px; position: relative; }
+      .harvest-timeline-axis { background: #c7d0c3; height: 2px; left: 0; position: absolute; right: 0; top: 28px; }
+      .harvest-timeline-window { background: #628c53; border-radius: 4px; height: 8px; position: absolute; top: 25px; }
+      .harvest-timeline-single-day { min-width: 8px; transform: translateX(-50%); }
+      .harvest-timeline-marker { background: #243023; height: 24px; position: absolute; top: 17px; transform: translateX(-50%); width: 2px; }
+      .harvest-timeline-observed, .harvest-timeline-date { font-size: 11px; line-height: 16px; max-width: 100%; position: absolute; text-align: center; transform: translateX(-50%); white-space: nowrap; }
+      .harvest-timeline-observed { color: #243023; font-weight: 600; top: 0; }
+      .harvest-timeline-date { color: #465840; top: 44px; }
     </style>
   </head>
   <body>
@@ -2032,8 +2104,28 @@
       </div>
       <div class="harvest-tree-actions">
         <button id="harvest-previous-tree" type="button" hidden>Previous tree</button>
-        <button id="harvest-complete-tree" type="button">Harvested everything</button>
-        <button id="harvest-defer-tree" type="button">Done for now</button>
+        <button id="harvest-complete-tree" type="button">Tree empty</button>
+        <button id="harvest-defer-tree" type="button">Fruit left</button>
+      </div>
+      <div id="harvest-visit-details" hidden>
+        <div id="harvest-empty-choices" hidden>
+          <p>Why is the tree empty?</p>
+          <div class="harvest-visit-options">
+            <button type="button" data-visit-kind="harvested_all">Harvested all</button>
+            <button type="button" data-visit-kind="empty_on_arrival">Empty on arrival</button>
+            <button type="button" data-visit-kind="all_wasted">All wasted</button>
+          </div>
+        </div>
+        <form id="harvest-fruit-form" hidden>
+          <fieldset>
+            <legend>What fruit did you observe?</legend>
+            <label><input type="checkbox" name="ready" /> Ready now</label>
+            <label><input type="checkbox" name="unripe" /> Not ready yet</label>
+            <label><input type="checkbox" name="wasted" /> Some fruit wasted</label>
+          </fieldset>
+          <button type="submit">Save &amp; next</button>
+        </form>
+        <button id="harvest-visit-back" type="button">Back</button>
       </div>
     </section>
     <div id="watering-zoom-controls" role="group" aria-label="Watering map zoom" hidden>
@@ -2243,6 +2335,7 @@
                 <th scope="col">Roles</th>
                 <th scope="col">Planted</th>
                 <th scope="col">Condition</th>
+                <th scope="col">Harvest history</th>
               </tr>
             </thead>
             <tbody id="tree-inventory-body"></tbody>
@@ -2256,6 +2349,10 @@
         aria-labelledby="species-tab"
         hidden
       >
+        <label class="inventory-review-filter">
+          <input id="inventory-needs-review" type="checkbox" />
+          Only needs review
+        </label>
         <div id="identity-result-summary" class="inventory-result-summary">
           0 planted species
         </div>
@@ -2273,7 +2370,17 @@
         </div>
       </section>
     </aside>
+    <dialog id="harvest-review-dialog" aria-labelledby="harvest-review-title">
+      <header class="inventory-header">
+        <h2 id="harvest-review-title">Harvest observations</h2>
+        <button id="harvest-review-close" class="inventory-close" type="button" aria-label="Close harvest review">×</button>
+      </header>
+      <div id="harvest-review-content"></div>
+    </dialog>
     <script type="module">
+      import { createHarvestObservationTimeline } from "./harvest-observation-timeline.mjs?v=1";
+      import { remainingFruitVisit, hasWindowObservations, speciesNeedsHarvestReview, harvestVisitLabel, harvestEvidenceLabel, firstRecordedFruit } from "./harvest-visit.mjs?v=2";
+      import { harvestObservationPath, pendingObservationIds, harvestReviewRequest } from "./harvest-review.mjs?v=1";
       import {
         HARVEST_PIN_ICONS,
         harvestPartSelectedByDefault,
@@ -2338,7 +2445,7 @@
         harvestRunStatus,
         visibleHarvestTrees,
         wateringTreeOutcomeLabel,
-      } from "./run-history.mjs?v=2";
+      } from "./run-history.mjs?v=3";
       import {
         adaptiveWateringWideZoom,
         availableWateringRuns,
@@ -2512,6 +2619,9 @@
       let treeMoveMapGestureSnapshot;
       let treeMoveCanvasTabIndex;
       let orchardFeatures = [];
+      let orchardHarvestObservations = [];
+      let harvestObservationLoadVersion = 0;
+      let harvestVisitSaving = false;
       let activeMapIdentityFilter = null;
       let mapMode = "normal";
       let session = null;
@@ -2554,6 +2664,7 @@
       const roleFilter = document.getElementById("inventory-role-filter");
       const genusFilter = document.getElementById("inventory-genus-filter");
       const speciesFilter = document.getElementById("inventory-species-filter");
+      const needsReviewFilter = document.getElementById("inventory-needs-review");
       const treeResultSummary = document.getElementById("tree-result-summary");
       const identityResultSummary = document.getElementById(
         "identity-result-summary",
@@ -2734,6 +2845,10 @@
         "harvest-complete-tree",
       );
       const harvestDeferTree = document.getElementById("harvest-defer-tree");
+      const harvestVisitDetails = document.getElementById("harvest-visit-details");
+      const harvestEmptyChoices = document.getElementById("harvest-empty-choices");
+      const harvestFruitForm = document.getElementById("harvest-fruit-form");
+      const harvestVisitBack = document.getElementById("harvest-visit-back");
       const tourRouteDisplayControl = document.getElementById(
         "tour-route-display-control",
       );
@@ -4282,6 +4397,7 @@
         inventoryToggle.hidden = isOpen;
         inventoryToggle.setAttribute("aria-expanded", String(isOpen));
         if (isOpen) {
+          loadHarvestObservations().catch((error) => console.error("Could not refresh visit history", error));
           closeMobileMenus();
           inventoryClose.focus();
         }
@@ -5624,6 +5740,33 @@
         });
       }
 
+      function clearHarvestVisitDraft() {
+        harvestVisitDetails.hidden = true;
+        harvestEmptyChoices.hidden = true;
+        harvestFruitForm.hidden = true;
+        harvestFruitForm.reset();
+        harvestTreeBanner.classList.remove("choosing-visit");
+        harvestCompleteTree.hidden = harvestDeferTree.hidden = false;
+      }
+
+      function chooseHarvestVisit(empty) {
+        if (!harvestProgress?.next_tree || harvestVisitSaving) return;
+        clearHarvestVisitDraft();
+        harvestTreeError.hidden = true;
+        harvestTreeBanner.classList.add("choosing-visit");
+        harvestVisitDetails.hidden = false;
+        harvestEmptyChoices.hidden = !empty;
+        harvestFruitForm.hidden = empty;
+        harvestCompleteTree.hidden = harvestDeferTree.hidden = true;
+        layoutMapControls();
+        (empty ? harvestEmptyChoices.querySelector("button") : harvestFruitForm.querySelector("input")).focus();
+      }
+
+      function setHarvestVisitSaving(saving) {
+        harvestVisitSaving = saving;
+        harvestVisitDetails.querySelectorAll("button, input").forEach((control) => { control.disabled = saving; });
+      }
+
       function clearHarvestExtensionDecision() {
         pendingHarvestDeferral = null;
         harvestExtensionDecision.hidden = true;
@@ -5643,8 +5786,10 @@
         harvestPreviousTree.hidden = true;
         harvestCompleteTree.hidden = true;
         harvestDeferTree.hidden = true;
+
         harvestCompleteTree.disabled = true;
         harvestDeferTree.disabled = true;
+
         harvestPreviousTree.disabled = true;
         harvestCancel.disabled = true;
         layoutMapControls();
@@ -5658,6 +5803,7 @@
         harvestRoute = [];
         if (!preserveUndo) harvestUndoRunId = null;
         clearHarvestExtensionDecision();
+        clearHarvestVisitDraft();
         harvestPartFilters.disabled = false;
         harvestTreeBanner.hidden = true;
         harvestTreeName.textContent = "";
@@ -5667,6 +5813,7 @@
         harvestPreviousTree.hidden = true;
         harvestCompleteTree.hidden = false;
         harvestDeferTree.hidden = false;
+
         harvestJobError.textContent = "";
         harvestJobError.hidden = true;
         clearHarvestRouteSources();
@@ -5697,11 +5844,13 @@
             harvestPreviousTree.hidden = false;
             harvestCompleteTree.hidden = true;
             harvestDeferTree.hidden = true;
+
             layoutMapControls();
           }
           return;
         }
         clearHarvestExtensionDecision();
+        clearHarvestVisitDraft();
         harvestTargetScope.value = progress.target || "all";
         if (Array.isArray(progress.harvested_parts)) {
           const activeParts = new Set(progress.harvested_parts);
@@ -5733,6 +5882,7 @@
         harvestPreviousTree.disabled = false;
         harvestCompleteTree.hidden = false;
         harvestDeferTree.hidden = false;
+
         harvestJobStatus.textContent = `${resolvedCount} of ${progress.total_tree_count} trees handled.`;
         harvestJobStatus.hidden = false;
         harvestJobStatus.dataset.progress = "true";
@@ -5837,13 +5987,16 @@
         }
       }
 
-      async function recordCurrentHarvestTree(outcome, extendWindow) {
-        if (!harvestProgress?.next_tree) return;
+      async function recordCurrentHarvestTree(outcome, extendWindow, visit = null) {
+        if (!harvestProgress?.next_tree || harvestVisitSaving) return;
+        const access = currentAccess;
+        setHarvestVisitSaving(true);
         const activeRun = harvestProgress;
         const treeId = activeRun.next_tree.id;
         const actionDate = pendingHarvestDeferral?.actionDate || localIsoDate();
         harvestCompleteTree.disabled = true;
         harvestDeferTree.disabled = true;
+
         harvestPreviousTree.disabled = true;
         harvestExtendWindow.disabled = true;
         harvestKeepWindow.disabled = true;
@@ -5858,16 +6011,18 @@
           if (typeof extendWindow === "boolean") {
             request.extend_window = extendWindow;
           }
+          const observationKind = visit?.kind || (["too_soon", "too_late"].includes(outcome) ? outcome : null);
+          if (observationKind) Object.assign(request, visit || { kind: observationKind });
           const response = await fetch(
             orchardResourceUrl(
-              currentAccess,
-              `harvest-runs/${encodeURIComponent(activeRun.run_id)}/${outcome}`,
+              access,
+              `harvest-runs/${encodeURIComponent(activeRun.run_id)}/${observationKind ? "observations" : outcome}`,
             ),
             {
               method: "POST",
               headers: {
                 "content-type": "application/json",
-                ...accessHeaders(currentAccess),
+                ...accessHeaders(access),
               },
               body: JSON.stringify(request),
             },
@@ -5891,10 +6046,16 @@
             throw new Error("Could not record this tree. Please try again.");
           }
           const progress = await response.json();
+          if (currentAccess !== access) return;
           clearHarvestExtensionDecision();
+          clearHarvestVisitDraft();
           harvestUndoRunId = activeRun.run_id;
           showHarvestProgress(progress);
           harvestCancel.disabled = true;
+          if (observationKind) {
+            try { await loadHarvestObservations(); }
+            catch (error) { console.error("Could not refresh visit history", error); }
+          }
           if (extendWindow === true) {
             try {
               await fetchOrchardTrees();
@@ -5908,14 +6069,17 @@
             console.error("Could not refresh harvest availability", error);
           }
         } catch (error) {
+          if (currentAccess !== access) return;
           harvestJobError.textContent = error.message;
           harvestJobError.hidden = false;
           harvestTreeError.textContent = error.message;
           harvestTreeError.hidden = false;
         } finally {
+          setHarvestVisitSaving(false);
           const waitingForExtension = pendingHarvestDeferral != null;
           harvestCompleteTree.disabled = waitingForExtension;
           harvestDeferTree.disabled = waitingForExtension;
+
           harvestPreviousTree.disabled = waitingForExtension;
           harvestExtendWindow.disabled = false;
           harvestKeepWindow.disabled = false;
@@ -5924,25 +6088,28 @@
       }
 
       async function undoLastHarvestTreeAction() {
+        const access = currentAccess;
         const runId = harvestUndoRunId;
-        if (runId == null || pendingHarvestDeferral) return;
+        if (runId == null || pendingHarvestDeferral || harvestVisitSaving) return;
+        setHarvestVisitSaving(true);
         harvestPreviousTree.disabled = true;
         harvestCompleteTree.disabled = true;
         harvestDeferTree.disabled = true;
+
         harvestCancel.disabled = true;
         harvestJobError.hidden = true;
         harvestTreeError.hidden = true;
         try {
           const response = await fetch(
             orchardResourceUrl(
-              currentAccess,
+              access,
               `harvest-runs/${encodeURIComponent(runId)}/previous`,
             ),
             {
               method: "POST",
               headers: {
                 "content-type": "application/json",
-                ...accessHeaders(currentAccess),
+                ...accessHeaders(access),
               },
               body: JSON.stringify({ action_date: localIsoDate() }),
             },
@@ -5960,8 +6127,10 @@
             throw new Error("Could not restore the previous tree. Please try again.");
           }
           const progress = await response.json();
+          if (currentAccess !== access) return;
           harvestUndoRunId = null;
           clearHarvestExtensionDecision();
+          clearHarvestVisitDraft();
           showHarvestProgress(progress);
           try {
             await fetchOrchardTrees();
@@ -5970,14 +6139,17 @@
             console.error("Could not refresh harvest data after undo", error);
           }
         } catch (error) {
+          if (currentAccess !== access) return;
           harvestJobError.textContent = error.message;
           harvestJobError.hidden = false;
           harvestTreeError.textContent = error.message;
           harvestTreeError.hidden = false;
         } finally {
+          setHarvestVisitSaving(false);
           harvestPreviousTree.disabled = false;
           harvestCompleteTree.disabled = false;
           harvestDeferTree.disabled = false;
+
           harvestCancel.disabled = harvestProgress == null;
         }
       }
@@ -5993,6 +6165,7 @@
         harvestCancel.disabled = true;
         harvestCompleteTree.disabled = true;
         harvestDeferTree.disabled = true;
+
         harvestJobError.hidden = true;
         harvestTreeError.hidden = true;
         try {
@@ -6030,6 +6203,7 @@
           harvestCancel.disabled = harvestProgress == null;
           harvestCompleteTree.disabled = false;
           harvestDeferTree.disabled = false;
+
         }
       }
 
@@ -6088,28 +6262,52 @@
           appendCell(row, (properties.roles || []).join(", "));
           appendCell(row, properties.planted_on);
           appendCell(row, treeCondition(properties));
+          const historyCell = document.createElement("td");
+          const points = orchardHarvestObservations.filter((point) => String(point.tree_id) === String(feature.id));
+          if (points.length) {
+            const history = document.createElement("button");
+            history.type = "button";
+            history.className = "inventory-row-action harvest-history-button";
+            const first = firstRecordedFruit(points, properties.planted_on);
+            history.textContent = first ? `First recorded fruit: ${first.date}` : "No production recorded";
+            history.setAttribute("aria-haspopup", "dialog");
+            history.addEventListener("click", () => showTreeHarvestHistory(feature, points));
+            historyCell.append(history);
+          }
+          row.append(historyCell);
           return row;
         });
         treeInventoryBody.replaceChildren(...rows);
         if (rows.length === 0) {
-          treeInventoryBody.append(emptyRow("No trees match these filters.", 6));
+          treeInventoryBody.append(emptyRow("No trees match these filters.", 7));
         }
       }
 
       function renderSpeciesInventory() {
+        const expanded = new Set([...identityInventoryBody.querySelectorAll("tr[data-species-id]")]
+          .filter((row) => row.querySelector("details")?.open).map((row) => row.dataset.speciesId));
         const species = summarizeSpecies(orchardFeatures);
-        identityResultSummary.textContent = `${species.length} planted species · ${orchardFeatures.length} trees`;
-        const rows = species.map((speciesSummary) => {
+        const shownSpecies = needsReviewFilter.checked
+          ? species.filter((summary) => speciesNeedsHarvestReview(orchardHarvestObservations, summary))
+          : species;
+        const shownTreeCount = shownSpecies.reduce((count, summary) => count + summary.count, 0);
+        identityResultSummary.textContent = needsReviewFilter.checked
+          ? `${shownSpecies.length} of ${species.length} planted species · ${shownTreeCount} of ${orchardFeatures.length} trees`
+          : `${species.length} planted species · ${orchardFeatures.length} trees`;
+        const rows = shownSpecies.map((speciesSummary) => {
           const row = document.createElement("tr");
+          row.dataset.speciesId = String(speciesSummary.plantIdentityId);
           appendSpeciesCell(row, speciesSummary);
           appendSpeciesHarvestCell(row, speciesSummary);
           appendCell(row, speciesSummary.count, "inventory-number");
+          const details = row.querySelector("details");
+          if (details) details.open = expanded.has(row.dataset.speciesId);
           return row;
         });
         identityInventoryBody.replaceChildren(...rows);
         if (rows.length === 0) {
           identityInventoryBody.append(
-            emptyRow("No planted species yet.", 3),
+            emptyRow(needsReviewFilter.checked ? "No species need review." : "No planted species yet.", 3),
           );
         }
       }
@@ -6252,7 +6450,7 @@
         return wrapper;
       }
 
-      function createHarvestWindows(windows) {
+      function createHarvestWindows(windows, schedule = null) {
         const container = document.createElement("span");
         container.className = "harvest-schedule-window";
         const entries = harvestWindowPresentations(windows);
@@ -6264,7 +6462,177 @@
           if (origin) entry.append(createHarvestWindowOrigin(origin));
           container.append(entry);
         }
+        if (schedule && currentAccess.orchardId) container.append(createHarvestReviewButton(schedule));
         return container;
+      }
+
+      const harvestReviewDialog = document.getElementById("harvest-review-dialog");
+      const harvestReviewContent = document.getElementById("harvest-review-content");
+      let harvestReviewSession = 0;
+      document.getElementById("harvest-review-close").addEventListener("click", () => harvestReviewDialog.close());
+      harvestReviewDialog.addEventListener("close", () => { harvestReviewSession += 1; });
+
+      function createHarvestReviewButton(schedule) {
+        const button = document.createElement("button");
+        button.hidden = true;
+        button.hidden = !hasWindowObservations(orchardHarvestObservations, schedule);
+        button.type = "button";
+        button.className = "harvest-origin-button harvest-review-button";
+        button.title = `Review harvest observations for ${schedule.label}`;
+        button.setAttribute("aria-label", button.title);
+        button.setAttribute("aria-haspopup", "dialog");
+        const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        icon.setAttribute("viewBox", "0 0 24 24");
+        icon.setAttribute("fill", "none");
+        icon.setAttribute("stroke", "currentColor");
+        icon.setAttribute("stroke-width", "1.6");
+        icon.setAttribute("aria-hidden", "true");
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", "M9 4H5v17h14V4h-4 M9 2h6v5H9Z M8 12l2 2 5-5 M8 18h8");
+        icon.append(path);
+        button.append(icon);
+        button.addEventListener("click", () => showHarvestReview(schedule));
+        return button;
+      }
+
+      function showTreeHarvestHistory(feature, points) {
+        harvestReviewSession += 1;
+        document.getElementById("harvest-review-title").textContent = `Harvest history · ${feature.properties?.name || "Tree"} #${feature.id}`;
+        const summary = document.createElement("p");
+        const first = firstRecordedFruit(points, feature.properties?.planted_on);
+        summary.textContent = first
+          ? `First recorded fruit: ${first.date}${first.years == null ? "" : ` · about ${first.years.toFixed(1)} years after planting`}.`
+          : "No production has been recorded in the visited windows.";
+        const list = document.createElement("div");
+        list.className = "harvest-review-points";
+        for (const point of [...points].sort((a, b) => b.recorded_on.localeCompare(a.recorded_on) || b.id - a.id)) {
+          const entry = document.createElement("div");
+          entry.className = "harvest-review-point";
+          entry.textContent = `${point.recorded_on} · ${harvestVisitLabel(point)} · ${harvestPartsLabel(point.harvested_parts)} · Window then: ${point.window_start} to ${point.window_end}`;
+          list.append(entry);
+        }
+        harvestReviewContent.replaceChildren(summary, list);
+        if (!harvestReviewDialog.open) harvestReviewDialog.showModal();
+      }
+
+      async function showHarvestReview(schedule) {
+        const session = ++harvestReviewSession;
+        const access = currentAccess;
+        document.getElementById("harvest-review-title").textContent = `Harvest observations · ${schedule.label}`;
+        harvestReviewContent.textContent = "Loading observations…";
+        if (!harvestReviewDialog.open) harvestReviewDialog.showModal();
+        try {
+          const response = await fetch(orchardResourceUrl(access, harvestObservationPath(schedule)), {
+            headers: accessHeaders(access), cache: "no-store",
+          });
+          if (!response.ok) throw new Error("Could not load harvest observations. Please try again.");
+          const points = await response.json();
+          if (session !== harvestReviewSession || currentAccess !== access) return;
+          renderHarvestReview(schedule, points, access);
+        } catch (error) {
+          if (session === harvestReviewSession) harvestReviewContent.textContent = error.message;
+        }
+      }
+
+      function renderHarvestReview(schedule, points, access) {
+        const reviewSession = harvestReviewSession;
+        const pending = pendingObservationIds(points);
+        const selected = new Set(pending);
+        const summary = document.createElement("p");
+        summary.textContent = `${pending.length} unreviewed observation${pending.length === 1 ? "" : "s"}. Select the points to review. Closing leaves them unreviewed.`;
+        const currentWindows = document.createElement("p");
+        currentWindows.textContent = `Current windows: ${formatHarvestWindows(schedule.harvestWindows)}`;
+        const list = document.createElement("div");
+        list.className = "harvest-review-points";
+        if (!points.length) list.textContent = "No harvest observations for this species or cultivar yet.";
+        const canReview = isEditable();
+        for (const point of [...points].reverse()) {
+          const label = document.createElement("label");
+          label.className = "harvest-review-point";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = !point.reviewed;
+          checkbox.disabled = point.reviewed || !canReview;
+          checkbox.setAttribute("aria-label", `Select observation ${point.id}`);
+          checkbox.addEventListener("change", () => {
+            if (checkbox.checked) selected.add(point.id); else selected.delete(point.id);
+            keep.disabled = update.disabled = selected.size === 0;
+          });
+          const text = document.createElement("span");
+          const name = orchardFeatures.find((feature) => String(feature.id) === String(point.tree_id))?.properties?.name;
+          text.textContent = `${name || "Tree"} #${point.tree_id} · ${harvestVisitLabel(point)} · ${harvestPartsLabel(point.harvested_parts)} · Tour #${point.harvest_run_id}${point.reviewed ? " · Reviewed" : " · Unreviewed"}`;
+          const details = document.createElement("span");
+          details.append(text);
+          const evidence = document.createElement("small");
+          evidence.className = "harvest-evidence";
+          evidence.textContent = harvestEvidenceLabel(point);
+          const timeline = createHarvestObservationTimeline(point);
+          if (timeline) details.append(timeline);
+          details.append(evidence);
+          label.append(checkbox, details);
+          list.append(label);
+        }
+        const error = document.createElement("p");
+        error.className = "workflow-error";
+        error.setAttribute("role", "alert");
+        error.hidden = true;
+        const actions = document.createElement("div");
+        actions.className = "harvest-editor-actions";
+        const keep = document.createElement("button");
+        keep.type = "button";
+        keep.textContent = "Keep windows and mark reviewed";
+        const update = document.createElement("button");
+        update.type = "button";
+        update.textContent = "Update windows…";
+        keep.disabled = update.disabled = pending.length === 0;
+        const editor = document.createElement("div");
+        editor.hidden = true;
+        if (canReview) actions.append(keep, update);
+        keep.addEventListener("click", async () => {
+          keep.disabled = update.disabled = true;
+          list.querySelectorAll("input").forEach((input) => { input.disabled = true; });
+          error.hidden = true;
+          try {
+            await submitHarvestReview(schedule, [...selected], null, access);
+            if (reviewSession === harvestReviewSession && harvestReviewDialog.open) await showHarvestReview(schedule);
+          } catch (requestError) {
+            if (reviewSession !== harvestReviewSession) return;
+            error.textContent = requestError.message;
+            error.hidden = false;
+            keep.disabled = update.disabled = selected.size === 0;
+            list.querySelectorAll("input").forEach((input, index) => { input.disabled = [...points].reverse()[index].reviewed; });
+          }
+        });
+        update.addEventListener("click", () => {
+          const ids = [...selected];
+          actions.hidden = true;
+          list.querySelectorAll("input").forEach((input) => { input.disabled = true; });
+          editor.hidden = false;
+          showHarvestEditor(editor, schedule, {
+            title: "Update windows and review selected observations",
+            saveLabel: "Update windows and mark reviewed",
+            refreshAfterSave: false,
+            restore: () => renderHarvestReview(schedule, points, access),
+            onSave: async (_, referenceRegion, windows) => {
+              await submitHarvestReview(schedule, ids, { reference_region: referenceRegion, windows }, access);
+              if (reviewSession === harvestReviewSession) harvestReviewDialog.close();
+              await loadOrchardTrees();
+            },
+          });
+        });
+        harvestReviewContent.replaceChildren(summary, currentWindows, list, error, actions, editor);
+      }
+
+      async function submitHarvestReview(schedule, ids, windowChange, access) {
+        if (currentAccess !== access || !isEditable()) throw new Error("Orchard access changed. Reopen the review.");
+        const response = await fetch(orchardResourceUrl(access, harvestObservationPath(schedule)), {
+          method: "POST",
+          headers: { "content-type": "application/json", ...accessHeaders(access) },
+          body: JSON.stringify(harvestReviewRequest(ids, windowChange)),
+        });
+        if (response.status === 409) throw new Error("Some observations were already reviewed or undone. Close and reopen the review.");
+        if (!response.ok) throw new Error("Could not save the review. Check the dates and try again.");
+        await loadHarvestObservations();
       }
 
       function closeHarvestOriginTooltips() {
@@ -6277,8 +6645,12 @@
       function renderSpeciesHarvest(scheduleRow, schedule, speciesSummary) {
         const children = [];
         if (schedule) {
-          children.push(createHarvestWindows(schedule.harvestWindows));
+          children.push(createHarvestWindows(schedule.harvestWindows, { ...schedule, label: speciesSummary.taxonName }));
         }
+        if (!schedule && currentAccess.orchardId) children.push(createHarvestReviewButton({
+          plantIdentityId: speciesSummary.plantIdentityId, cultivarId: null,
+          label: speciesSummary.taxonName, harvestWindows: [],
+        }));
         const actions = document.createElement("div");
         actions.className = "inventory-species-actions";
         if (schedule && isEditable()) {
@@ -6332,7 +6704,7 @@
         const count = document.createElement("span");
         count.className = "harvest-schedule-count";
         count.textContent = `${schedule.count} tree${schedule.count === 1 ? "" : "s"}`;
-        const windows = createHarvestWindows(schedule.harvestWindows);
+        const windows = createHarvestWindows(schedule.harvestWindows, schedule);
         const filterButton = createInventoryFilterButton(
           `Show only ${schedule.label} on the map`,
           () => {
@@ -6369,7 +6741,8 @@
       function showHarvestEditor(
         scheduleRow,
         schedule,
-        { restore = renderHarvestSchedule, title: editorTitle = schedule.label } = {},
+        { restore = renderHarvestSchedule, title: editorTitle = schedule.label,
+          onSave = updateHarvestWindows, saveLabel = "OK", refreshAfterSave = true } = {},
       ) {
         const form = document.createElement("form");
         form.className = "harvest-editor";
@@ -6404,11 +6777,11 @@
         cancel.textContent = "Cancel";
         cancel.addEventListener("click", () => {
           restore(scheduleRow, schedule);
-          scheduleRow.querySelector(".harvest-edit-button").focus();
+          scheduleRow.querySelector(".harvest-edit-button")?.focus();
         });
         const save = document.createElement("button");
         save.type = "submit";
-        save.textContent = "OK";
+        save.textContent = saveLabel;
         actions.append(cancel, save);
         form.append(
           title,
@@ -6477,12 +6850,12 @@
           save.disabled = true;
           save.textContent = "Saving…";
           try {
-            await updateHarvestWindows(
+            await onSave(
               schedule,
               referenceRegionInput.value.trim(),
               windows,
             );
-            await loadOrchardTrees();
+            if (refreshAfterSave) await loadOrchardTrees();
           } catch (requestError) {
             error.textContent = requestError.message;
             error.hidden = false;
@@ -6496,7 +6869,7 @@
             addWindow.disabled = false;
             cancel.disabled = false;
             save.disabled = false;
-            save.textContent = "OK";
+            save.textContent = saveLabel;
           }
         });
 
@@ -6850,6 +7223,9 @@
       }
 
       function clearOrchardPresentation() {
+        orchardHarvestObservations = [];
+        harvestObservationLoadVersion += 1;
+        if (harvestReviewDialog.open) harvestReviewDialog.close();
         wateringStateVersion += 1;
         wateringRunsRequestVersion += 1;
         selectWateringRun(null);
@@ -6872,6 +7248,7 @@
         harvestRoute = [];
         harvestUndoRunId = null;
         clearHarvestExtensionDecision();
+        clearHarvestVisitDraft();
         harvestCandidateTreeIds = new Set();
         harvestCandidatesLoaded = false;
         harvestCandidatesOnDate = null;
@@ -6983,19 +7360,35 @@
         }
       }
 
+      async function loadHarvestObservations({ isCurrent = () => true } = {}) {
+        const access = currentAccess;
+        const version = ++harvestObservationLoadVersion;
+        const response = await fetch(orchardResourceUrl(access, "harvest-observations"), {
+          headers: accessHeaders(access), cache: "no-store",
+        });
+        if (!response.ok) throw new Error("Could not load harvest history.");
+        const points = await response.json();
+        if (!isCurrent() || currentAccess !== access || version !== harvestObservationLoadVersion) return;
+        orchardHarvestObservations = points;
+        renderInventory();
+      }
+
       async function fetchOrchardTrees({ isCurrent = () => true } = {}) {
+        const access = currentAccess;
         const response = await fetch(
-          orchardResourceUrl(currentAccess, "trees.geojson"),
-          { headers: accessHeaders(currentAccess), cache: "no-store" },
+          orchardResourceUrl(access, "trees.geojson"),
+          { headers: accessHeaders(access), cache: "no-store" },
         );
-        if (!isCurrent()) return;
+        if (!isCurrent() || currentAccess !== access) return;
         if ([401, 403, 404].includes(response.status)) {
           throw new Error("access-denied");
         }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const orchard = await response.json();
-        if (!isCurrent()) return;
+        if (!isCurrent() || currentAccess !== access) return;
         orchardFeatures = orchard.features || [];
+        await loadHarvestObservations({ isCurrent });
+        if (!isCurrent() || currentAccess !== access) return;
         applyHarvestWindow();
         refreshTaxonomyFilters();
         refreshWorkflowRows();
@@ -7044,6 +7437,7 @@
           harvestRoute = [];
           harvestUndoRunId = null;
           clearHarvestExtensionDecision();
+          clearHarvestVisitDraft();
           harvestTreeBanner.hidden = true;
           clearHarvestRouteSources();
         }
@@ -7673,10 +8067,10 @@
       harvestStart.addEventListener("click", startHarvesting);
       harvestCancel.addEventListener("click", cancelHarvestRun);
       harvestCompleteTree.addEventListener("click", () =>
-        recordCurrentHarvestTree("harvested"),
+        chooseHarvestVisit(true),
       );
       harvestDeferTree.addEventListener("click", () =>
-        recordCurrentHarvestTree("deferred"),
+        chooseHarvestVisit(false),
       );
       harvestExtendWindow.addEventListener("click", () =>
         recordCurrentHarvestTree("deferred", true),
@@ -7685,6 +8079,24 @@
         recordCurrentHarvestTree("deferred", false),
       );
       harvestPreviousTree.addEventListener("click", undoLastHarvestTreeAction);
+      harvestVisitBack.addEventListener("click", () => {
+        if (harvestVisitSaving) return;
+        clearHarvestVisitDraft();
+        layoutMapControls();
+      });
+      harvestEmptyChoices.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => recordCurrentHarvestTree("observations", undefined, { kind: button.dataset.visitKind }));
+      });
+      harvestFruitForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        try {
+          const visit = remainingFruitVisit(Object.fromEntries(["ready", "unripe", "wasted"].map((name) => [name, harvestFruitForm.elements[name].checked])));
+          recordCurrentHarvestTree("observations", undefined, visit);
+        } catch (error) {
+          harvestTreeError.textContent = error.message;
+          harvestTreeError.hidden = false;
+        }
+      });
       mapModeButtons.forEach((button) => {
         button.addEventListener("click", () => {
           setMapMode(button.dataset.mapMode);
@@ -7717,6 +8129,7 @@
         selectInventoryView("species"),
       );
       roleFilter.addEventListener("change", renderTreeInventory);
+      needsReviewFilter.addEventListener("change", renderSpeciesInventory);
       speciesFilter.addEventListener("change", renderTreeInventory);
       genusFilter.addEventListener("change", () => {
         refreshSpeciesFilter();

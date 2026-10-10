@@ -183,6 +183,48 @@ without recording it as watered. People with watering links can use this
 action. The tree is also skipped wherever it is still pending in another saved
 run. Watered and skipped counts stay separate, including in completed history.
 
+## Harvest observations
+
+During a harvest tour, choose **Tree empty** or **Fruit left**. Tree empty
+asks for one reason: **Harvested all**, **Empty on arrival**, or **All wasted**.
+Empty on arrival records no production for that window and asks no timing
+questions. All three finish the tree until its next harvest window.
+
+Fruit left lets you combine **Ready now**, **Not ready yet**, and **Some fruit
+wasted**, then **Save & next**. Viable fruit keeps the tree eligible for another
+visit after seven days while its window is open. Waste alone records all wasted
+and finishes the tree. The follow-up panel collapses after saving, leaving room
+for the map. These visits never automatically change harvest windows.
+
+Open **Tree inventory → Species planted** and use the clipboard review icon
+beside the exact species or cultivar's window. The icon appears only when that
+species or cultivar has fruit observations; empty-on-arrival records alone do
+not show it. Reviewed observations keep the icon available.
+
+The review shows the raw fruit states, visited tree, tour, part, date, saved
+window, and review status. Timing hints compare the visit with its saved window;
+mixed stages remain separate facts. Ready fruit confirms a useful visit date.
+Waste at the end can support the window, especially with earlier ready-fruit
+evidence. Hints are evidence for manual review, not automatic date changes.
+Select unreviewed points, then choose **Keep windows and mark reviewed**, or
+**Update windows…** followed by **Update windows and mark reviewed**. Closing
+leaves points unreviewed.
+
+The **Trees** inventory also shows harvest history, including empty-on-arrival
+visits and the first recorded fruit date. When planting is dated, the history
+shows the elapsed time to that first recorded fruit; it does not claim to know
+the tree's first-ever production.
+
+Harvest share links can record visits and readers can view them. Only an
+orchard owner can review points or edit windows. **Previous tree** removes an
+unreviewed visit when correcting the last choice; reviewed evidence cannot be
+removed through that action.
+
+This feature requires migrations `029_add_harvest_observations.sql` and
+`030_rework_harvest_visit_facts.sql` and the updated API. Follow the migration
+deployment sequence above. Migration 030 cannot be reverted while new visit
+facts exist, so rollback cannot silently discard production history.
+
 ## Shared links
 
 View and watering share links are permanent database records. Creating a new

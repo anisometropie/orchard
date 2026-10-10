@@ -1,4 +1,5 @@
 mod harvest;
+mod harvest_evidence;
 mod legacy_tree_source;
 mod map_configuration;
 mod orchard_access;
@@ -8,7 +9,8 @@ mod tree_photo;
 mod watering;
 
 pub use harvest::{
-    CompletedHarvestRun, HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget,
+    CompletedHarvestRun, HarvestDate, HarvestFruitState, HarvestObservation,
+    HarvestObservationKind, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget,
     HarvestRunTree, HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
     HarvestWindowExtension,
 };
@@ -47,3 +49,5 @@ pub struct OrchardTree {
     pub plant_cultivar: Option<PlantCultivar>,
     pub harvest_windows: Vec<AnnualHarvestWindow>,
 }
+
+pub use harvest_evidence::{HarvestWindowEvidence, harvest_window_evidence};

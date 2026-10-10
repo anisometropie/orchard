@@ -79,6 +79,14 @@ pub fn replace_orchard_harvest_windows(
     event: OrchardHarvestWindowsReplaced,
     orchard_storage: &mut impl OrchardStorage,
 ) -> Result<(), PlantHarvestWindowsReplacementError> {
+    orchard_storage
+        .transaction(|orchard| replace_orchard_harvest_windows_in_transaction(event, orchard))
+}
+
+pub(crate) fn replace_orchard_harvest_windows_in_transaction(
+    event: OrchardHarvestWindowsReplaced,
+    orchard_storage: &mut impl OrchardStorage,
+) -> Result<(), PlantHarvestWindowsReplacementError> {
     let reference_region = event.reference_region.trim();
     if !event.windows.is_empty() && reference_region.is_empty() {
         return Err(PlantHarvestWindowsReplacementError::MissingReferenceRegion);
@@ -102,21 +110,16 @@ pub fn replace_orchard_harvest_windows(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    orchard_storage.transaction(|orchard| {
-        preserve_unchanged_window_origins(
-            &mut harvest_windows,
-            orchard.orchard_harvest_windows(event.orchard_id, event.owner)?,
-        );
-        match orchard.replace_orchard_harvest_windows(
-            event.orchard_id,
-            event.owner,
-            harvest_windows,
-        ) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(PlantHarvestWindowsReplacementError::OwnerNotFound),
-            Err(_) => Err(PlantHarvestWindowsReplacementError::HarvestWindowsCouldNotBeReplaced),
-        }
-    })
+    let orchard = orchard_storage;
+    preserve_unchanged_window_origins(
+        &mut harvest_windows,
+        orchard.orchard_harvest_windows(event.orchard_id, event.owner)?,
+    );
+    match orchard.replace_orchard_harvest_windows(event.orchard_id, event.owner, harvest_windows) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(PlantHarvestWindowsReplacementError::OwnerNotFound),
+        Err(_) => Err(PlantHarvestWindowsReplacementError::HarvestWindowsCouldNotBeReplaced),
+    }
 }
 
 fn preserve_unchanged_window_origins(

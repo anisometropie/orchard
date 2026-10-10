@@ -10,15 +10,16 @@ use sha2::{Digest, Sha256};
 use crate::hexagon::models::{
     AerialOverlay, AerialOverlayId, AerialOverlayImage, AnnualDate, AnnualHarvestWindow,
     CompletedHarvestRun, CompletedWateringRun, CompletedWateringRunTree, CreatedOrchardShareToken,
-    GeoPoint, HarvestDataOrigin, HarvestDate, HarvestPeriod, HarvestRun, HarvestRunId,
-    HarvestRunTarget, HarvestRunTree, HarvestScheduleOwner, HarvestTreeActionUndo,
-    HarvestTreeOutcome, HarvestTreeOutcomeRecord, HarvestWindowExtension, HarvestedPart,
-    IdentificationStatus, IssuedOrchardShareToken, LegacyPlantIdentification, LegacyTreeSource,
-    MapConfiguration, Orchard, OrchardId, OrchardShareAccess, OrchardSharePermissions,
-    OrchardShareTokenId, OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification,
-    PlantIdentity, PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId,
-    TreePhoto, TreePhotoId, TreePhotoSummary, TreePhotoVariant, User, UserId, WateringRun,
-    WateringRunId, WateringRunTarget,
+    GeoPoint, HarvestDataOrigin, HarvestDate, HarvestFruitState, HarvestObservation,
+    HarvestObservationKind, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget,
+    HarvestRunTree, HarvestScheduleOwner, HarvestTreeActionUndo, HarvestTreeOutcome,
+    HarvestTreeOutcomeRecord, HarvestWindowExtension, HarvestedPart, IdentificationStatus,
+    IssuedOrchardShareToken, LegacyPlantIdentification, LegacyTreeSource, MapConfiguration,
+    Orchard, OrchardId, OrchardShareAccess, OrchardSharePermissions, OrchardShareTokenId,
+    OrchardTree, PlantCultivar, PlantCultivarId, PlantIdentification, PlantIdentity,
+    PlantIdentityId, PlantIdentityReference, ReproductiveRole, Tree, TreeId, TreePhoto,
+    TreePhotoId, TreePhotoSummary, TreePhotoVariant, User, UserId, WateringRun, WateringRunId,
+    WateringRunTarget,
 };
 use crate::hexagon::ports::{
     AccessControl, AccessControlError, MapConfigurationStorage, MapConfigurationStorageError,
@@ -1252,6 +1253,104 @@ impl OrchardStorage for PostgresOrchardStorage {
         }
     }
 
+    fn harvest_observations(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+    ) -> Result<Vec<HarvestObservation>, OrchardStorageError> {
+        let orchard_key = observation_key(orchard_id.0)?;
+        let (identity, cultivar) = observation_owner_keys(owner)?;
+        self.client.query(
+            "SELECT id, harvest_run_id, tree_id, recorded_on::text, kind, harvested_parts,
+                window_start::text, window_end::text, reviewed, fruit_ready, fruit_unripe, fruit_wasted,
+                plant_identity_id, cultivar_id
+             FROM harvest_observations WHERE orchard_id = $1
+             AND plant_identity_id IS NOT DISTINCT FROM $2 AND cultivar_id IS NOT DISTINCT FROM $3
+             ORDER BY id FOR UPDATE", &[&orchard_key, &identity, &cultivar]
+        ).map_err(|_| OrchardStorageError::HarvestHistoryCouldNotBeRead)?
+        .into_iter().map(|row| harvest_observation_from_row(&row, orchard_id)).collect()
+    }
+
+    fn harvest_observations_in_orchard(
+        &mut self,
+        orchard_id: OrchardId,
+    ) -> Result<Vec<HarvestObservation>, OrchardStorageError> {
+        self.client.query(
+            "SELECT id, harvest_run_id, tree_id, recorded_on::text, kind, harvested_parts,
+                window_start::text, window_end::text, reviewed, fruit_ready, fruit_unripe, fruit_wasted,
+                plant_identity_id, cultivar_id
+             FROM harvest_observations WHERE orchard_id = $1 ORDER BY id FOR UPDATE", &[&observation_key(orchard_id.0)?]
+        ).map_err(|_| OrchardStorageError::HarvestHistoryCouldNotBeRead)?
+        .into_iter().map(|row| harvest_observation_from_row(&row, orchard_id)).collect()
+    }
+
+    fn save_harvest_observation(
+        &mut self,
+        observation: HarvestObservation,
+    ) -> Result<u64, OrchardStorageError> {
+        let (identity, cultivar) = observation_owner_keys(observation.owner)?;
+        let parts = observation
+            .harvested_parts
+            .iter()
+            .map(|p| p.as_str())
+            .collect::<Vec<_>>();
+        let kind = observation.kind.as_str();
+        let ready = observation.fruit_state.map(|state| state.ready);
+        let unripe = observation.fruit_state.map(|state| state.unripe);
+        let wasted = observation.fruit_state.map(|state| state.wasted);
+        self.client.query_one(
+            "INSERT INTO harvest_observations (orchard_id, harvest_run_id, tree_id, plant_identity_id, cultivar_id,
+                recorded_on, kind, harvested_parts, window_start, window_end, fruit_ready, fruit_unripe, fruit_wasted)
+             VALUES ($1,$2,$3,$4,$5,$6::text::date,$7,$8,$9::text::date,$10::text::date,$11,$12,$13) RETURNING id",
+            &[&observation_key(observation.orchard_id.0)?, &observation_key(observation.harvest_run_id.0)?,
+              &observation_key(observation.tree_id.0)?, &identity, &cultivar, &observation.recorded_on.to_string(),
+              &kind, &parts, &observation.period.start.to_string(), &observation.period.end.to_string(), &ready, &unripe, &wasted]
+        ).map(|row| row.get::<_, i64>(0) as u64).map_err(|_| OrchardStorageError::HarvestRunCouldNotBeChanged)
+    }
+
+    fn review_harvest_observations(
+        &mut self,
+        orchard_id: OrchardId,
+        owner: HarvestScheduleOwner,
+        ids: &[u64],
+    ) -> Result<(), OrchardStorageError> {
+        let mut unique = ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        let points = self.harvest_observations(orchard_id, owner)?;
+        if unique.len() != ids.len()
+            || ids
+                .iter()
+                .any(|id| !points.iter().any(|p| p.id == *id && !p.reviewed))
+        {
+            return Err(OrchardStorageError::HarvestRunCouldNotBeChanged);
+        }
+        let keys = ids
+            .iter()
+            .map(|id| observation_key(*id))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.client
+            .execute(
+                "UPDATE harvest_observations SET reviewed = TRUE WHERE id = ANY($1)",
+                &[&keys],
+            )
+            .map(|_| ())
+            .map_err(|_| OrchardStorageError::HarvestRunCouldNotBeChanged)
+    }
+
+    fn delete_unreviewed_harvest_observation(
+        &mut self,
+        id: u64,
+    ) -> Result<(), OrchardStorageError> {
+        match self.client.execute(
+            "DELETE FROM harvest_observations WHERE id = $1 AND reviewed = FALSE",
+            &[&observation_key(id)?],
+        ) {
+            Ok(1) => Ok(()),
+            _ => Err(OrchardStorageError::HarvestRunCouldNotBeChanged),
+        }
+    }
+
     fn harvest_tree_outcomes(
         &mut self,
         orchard_id: OrchardId,
@@ -1482,7 +1581,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                AND (
                    run_tree.outcome IS NULL
                    OR (
-                       run_tree.outcome = 'deferred'
+                       run_tree.outcome IN ('deferred', 'too_soon', 'fruit_remaining')
                        AND run_tree.retry_on <= $4::text::date
                    )
                )
@@ -1517,7 +1616,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                AND (
                    run_tree.outcome IS NULL
                    OR (
-                       run_tree.outcome = 'deferred'
+                       run_tree.outcome IN ('deferred', 'too_soon', 'fruit_remaining')
                        AND run_tree.retry_on <= $4::text::date
                    )
                )
@@ -2251,6 +2350,30 @@ fn harvest_tree_outcome_columns(
         Some(HarvestTreeOutcome::DoneForWindow { recorded_on }) => {
             (Some("done_for_window"), Some(recorded_on.to_string()), None)
         }
+        Some(HarvestTreeOutcome::EmptyOnArrival { recorded_on }) => (
+            Some("empty_on_arrival"),
+            Some(recorded_on.to_string()),
+            None,
+        ),
+        Some(HarvestTreeOutcome::FruitRemaining {
+            recorded_on,
+            retry_on,
+        }) => (
+            Some("fruit_remaining"),
+            Some(recorded_on.to_string()),
+            Some(retry_on.to_string()),
+        ),
+        Some(HarvestTreeOutcome::TooLate { recorded_on }) => {
+            (Some("too_late"), Some(recorded_on.to_string()), None)
+        }
+        Some(HarvestTreeOutcome::TooSoon {
+            recorded_on,
+            retry_on,
+        }) => (
+            Some("too_soon"),
+            Some(recorded_on.to_string()),
+            Some(retry_on.to_string()),
+        ),
         Some(HarvestTreeOutcome::Deferred {
             deferred_on,
             retry_on,
@@ -2298,6 +2421,26 @@ fn harvest_tree_outcome_from_stored_values(
         (Some("done_for_window"), Some(recorded_on), None) => {
             Ok(Some(HarvestTreeOutcome::DoneForWindow {
                 recorded_on: parse_stored_harvest_date(&recorded_on)?,
+            }))
+        }
+        (Some("empty_on_arrival"), Some(recorded_on), None) => {
+            Ok(Some(HarvestTreeOutcome::EmptyOnArrival {
+                recorded_on: parse_stored_harvest_date(&recorded_on)?,
+            }))
+        }
+        (Some("fruit_remaining"), Some(recorded_on), Some(retry_on)) => {
+            Ok(Some(HarvestTreeOutcome::FruitRemaining {
+                recorded_on: parse_stored_harvest_date(&recorded_on)?,
+                retry_on: parse_stored_harvest_date(&retry_on)?,
+            }))
+        }
+        (Some("too_late"), Some(recorded_on), None) => Ok(Some(HarvestTreeOutcome::TooLate {
+            recorded_on: parse_stored_harvest_date(&recorded_on)?,
+        })),
+        (Some("too_soon"), Some(recorded_on), Some(retry_on)) => {
+            Ok(Some(HarvestTreeOutcome::TooSoon {
+                recorded_on: parse_stored_harvest_date(&recorded_on)?,
+                retry_on: parse_stored_harvest_date(&retry_on)?,
             }))
         }
         (Some("deferred"), Some(deferred_on), Some(retry_on)) => {
@@ -2554,4 +2697,57 @@ fn save_tree(client: &mut Client, tree: Tree) -> Result<(), postgres::Error> {
             ],
         )
         .map(|_| ())
+}
+
+fn observation_key(id: u64) -> Result<i64, OrchardStorageError> {
+    i64::try_from(id).map_err(|_| OrchardStorageError::HarvestRunCouldNotBeChanged)
+}
+fn observation_owner_keys(
+    owner: HarvestScheduleOwner,
+) -> Result<(Option<i64>, Option<i64>), OrchardStorageError> {
+    match owner {
+        HarvestScheduleOwner::PlantIdentity(id) => Ok((Some(observation_key(id.0)?), None)),
+        HarvestScheduleOwner::PlantCultivar(id) => Ok((None, Some(observation_key(id.0)?))),
+    }
+}
+
+fn harvest_observation_from_row(
+    row: &postgres::Row,
+    orchard_id: OrchardId,
+) -> Result<HarvestObservation, OrchardStorageError> {
+    let error = || OrchardStorageError::HarvestHistoryCouldNotBeRead;
+    let owner = match (row.get::<_, Option<i64>>(12), row.get::<_, Option<i64>>(13)) {
+        (Some(id), None) => HarvestScheduleOwner::PlantIdentity(PlantIdentityId(id as u64)),
+        (None, Some(id)) => HarvestScheduleOwner::PlantCultivar(PlantCultivarId(id as u64)),
+        _ => return Err(error()),
+    };
+    let fruit_state = match (
+        row.get::<_, Option<bool>>(9),
+        row.get::<_, Option<bool>>(10),
+        row.get::<_, Option<bool>>(11),
+    ) {
+        (Some(ready), Some(unripe), Some(wasted)) => Some(HarvestFruitState {
+            ready,
+            unripe,
+            wasted,
+        }),
+        (None, None, None) => None,
+        _ => return Err(error()),
+    };
+    Ok(HarvestObservation {
+        id: row.get::<_, i64>(0) as u64,
+        orchard_id,
+        owner,
+        fruit_state,
+        harvest_run_id: HarvestRunId(row.get::<_, i64>(1) as u64),
+        tree_id: TreeId(row.get::<_, i64>(2) as u64),
+        recorded_on: HarvestDate::parse_iso(&row.get::<_, String>(3)).ok_or_else(error)?,
+        kind: HarvestObservationKind::from_stored(&row.get::<_, String>(4)).ok_or_else(error)?,
+        harvested_parts: harvested_parts_from_stored_values(row.get(5)).map_err(|_| error())?,
+        period: crate::hexagon::models::HarvestPeriod {
+            start: HarvestDate::parse_iso(&row.get::<_, String>(6)).ok_or_else(error)?,
+            end: HarvestDate::parse_iso(&row.get::<_, String>(7)).ok_or_else(error)?,
+        },
+        reviewed: row.get(8),
+    })
 }
