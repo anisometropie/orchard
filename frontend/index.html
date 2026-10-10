@@ -661,9 +661,10 @@
         font-family: sans-serif;
         left: 20px;
         max-width: calc(100vw - 40px);
+        overflow-y: auto;
         padding: 16px;
         position: absolute;
-        top: 20px;
+        top: 68px;
         width: 760px;
         z-index: 20;
       }
@@ -1326,7 +1327,7 @@
           left: 10px;
           max-width: calc(100vw - 20px);
           padding: 12px;
-          top: 10px;
+          top: 68px;
           width: calc(100vw - 20px);
         }
         .workflow-panel {
@@ -2961,8 +2962,9 @@
 
       function placeWorkflowPanelsBelowToolbar() {
         if (mapToolbar.hidden) return;
+        const panels = [wateringPanel, harvestTourPanel, rowOrderPanel, inventoryPanel];
         if (compactMobileLayout.matches) {
-          [wateringPanel, harvestTourPanel, rowOrderPanel].forEach((panel) => {
+          panels.forEach((panel) => {
             panel.style.removeProperty("top");
             panel.style.removeProperty("max-height");
           });
@@ -2975,10 +2977,8 @@
             .map((banner) => banner.getBoundingClientRect().bottom),
           0,
         );
-        const top = Math.ceil(
-          Math.max(mapToolbar.getBoundingClientRect().bottom, bannerBottom) + 12,
-        );
-        [wateringPanel, harvestTourPanel, rowOrderPanel].forEach((panel) => {
+        const top = Math.ceil(Math.max(mapToolbar.getBoundingClientRect().bottom, bannerBottom) + 12);
+        panels.forEach((panel) => {
           panel.style.top = `${top}px`;
           panel.style.maxHeight = `${Math.max(
             120,
@@ -4393,9 +4393,7 @@
       }
 
       function setInventoryOpen(isOpen) {
-        inventoryPanel.hidden = !isOpen;
-        inventoryToggle.hidden = isOpen;
-        inventoryToggle.setAttribute("aria-expanded", String(isOpen));
+        if (isOpen || !inventoryPanel.hidden) setWorkflowPanel(isOpen ? inventoryPanel : null);
         if (isOpen) {
           loadHarvestObservations().catch((error) => console.error("Could not refresh visit history", error));
           closeMobileMenus();
@@ -4426,7 +4424,9 @@
         harvestTourPanel.hidden = openPanel !== harvestTourPanel;
         rowOrderPanel.hidden = openPanel !== rowOrderPanel;
         historyPanel.hidden = openPanel !== historyPanel;
+        inventoryPanel.hidden = openPanel !== inventoryPanel;
         mapFilterPanel.hidden = openPanel != null || !hasOpenOrchard(currentAccess);
+        inventoryToggle.setAttribute("aria-expanded", String(openPanel === inventoryPanel));
         wateringToggle.setAttribute(
           "aria-expanded",
           String(openPanel === wateringPanel),
@@ -4445,7 +4445,6 @@
         );
         if (openPanel) {
           closeMobileMenus();
-          setInventoryOpen(false);
         }
         renderSavedRowOrderPreview();
         layoutMapControls();
@@ -8110,7 +8109,7 @@
       mobileTopRightMenuToggle.addEventListener("click", () =>
         toggleMobileMenu(topRightControls, mobileTopRightMenuToggle),
       );
-      inventoryToggle.addEventListener("click", () => setInventoryOpen(true));
+      inventoryToggle.addEventListener("click", () => setInventoryOpen(inventoryPanel.hidden));
       inventoryClose.addEventListener("click", () => setInventoryOpen(false));
       historyToggle.addEventListener("click", async () => {
         const opensHistory = historyPanel.hidden;
