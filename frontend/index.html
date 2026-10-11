@@ -7015,7 +7015,7 @@
             if (session === harvestObservationSession && currentAccess === access) harvestObservationDialog.close();
             if (currentAccess === access) {
               loadHarvestObservations().catch(console.error);
-              if (legacyVisit) loadRunHistory();
+              if (legacyVisit) loadRunHistory({ refresh: true });
             }
           } catch (requestError) {
             if (session !== harvestObservationSession || currentAccess !== access) return;
@@ -8442,15 +8442,17 @@
         harvestHistoryList.replaceChildren(...cards);
       }
 
-      async function loadRunHistory() {
+      async function loadRunHistory({ refresh = false } = {}) {
         if (!isEditable()) return;
         const access = currentAccess;
         const expanded = new Set([...harvestHistoryList.querySelectorAll("details[open][data-run-id]")].map((card) => card.dataset.runId));
         historyError.hidden = true;
         historyStatus.textContent = "Loading run history…";
-        historyStatus.hidden = false;
-        wateringHistoryList.replaceChildren();
-        harvestHistoryList.replaceChildren();
+        historyStatus.hidden = refresh;
+        if (!refresh) {
+          wateringHistoryList.replaceChildren();
+          harvestHistoryList.replaceChildren();
+        }
         try {
           const response = await fetch(
             orchardResourceUrl(currentAccess, "run-history"),
@@ -8459,10 +8461,13 @@
           if (!response.ok) throw new Error("Could not load run history.");
           const history = await response.json();
           if (currentAccess !== access) return;
+          const scroller = historyPanel.querySelector(".history-scroll");
+          const scrollTop = scroller.scrollTop;
           renderWateringHistory(history.watering_runs || []);
           renderHarvestHistory(history.harvest_runs || []);
           harvestHistoryList.querySelectorAll("details[data-run-id]").forEach((card) => { card.open = expanded.has(card.dataset.runId); });
           historyStatus.hidden = true;
+          scroller.scrollTop = scrollTop;
         } catch (error) {
           historyError.textContent = error.message;
           historyError.hidden = false;
