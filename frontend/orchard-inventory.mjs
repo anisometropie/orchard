@@ -1,11 +1,19 @@
-import { formatHarvestWindows } from "./harvest-window.mjs?v=4";
+import { formatHarvestWindows, normalizeHarvestWindows } from "./harvest-window.mjs?v=6";
+import { HARVEST_PIN_ICONS } from "./harvest-marker.mjs?v=3";
 
 export function treeTooltipFields(properties = {}) {
+  const harvestPeriods = normalizeHarvestWindows(properties.harvest_windows)
+    .filter((window) => window?.start && window?.end)
+    .map((window) => {
+      const icon = HARVEST_PIN_ICONS[window.harvested_part || "fruit"] || HARVEST_PIN_ICONS.multiple;
+      return `${icon} ${formatHarvestWindows([window])}`;
+    })
+    .join(" · ");
   return [
     ["Name", properties.name],
     ["Latin name", properties.latin_name],
     ["Date", properties.planted_on],
-    ["Harvest", formatHarvestWindows(properties.harvest_windows)],
+    ["Harvest", harvestPeriods || "Not set"],
   ].filter(([, value]) => value != null && value !== "");
 }
 

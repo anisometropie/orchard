@@ -98,21 +98,24 @@ test("hovering a tree on desktop presents only its name and existing photo", () 
 });
 
 test("include every harvest window in the selected tree fields", () => {
-  assert.deepEqual(
-    treeTooltipFields({
-      name: "Apple",
-      latin_name: "Malus domestica",
-      harvest_windows: [
-        { start: "08-01", end: "08-20" },
-        { start: "09-10", end: "09-30" },
+  const harvestWindows = [
+    { start: "08-01", end: "08-20" },
+    { start: "09-10", end: "09-30", harvested_part: "flower" },
+  ];
+  for (const harvest_windows of [harvestWindows, JSON.stringify(harvestWindows)]) {
+    assert.deepEqual(
+      treeTooltipFields({
+        name: "Apple",
+        latin_name: "Malus domestica",
+        harvest_windows,
+      }),
+      [
+        ["Name", "Apple"],
+        ["Latin name", "Malus domestica"],
+        ["Harvest", "🍎 08-01 → 08-20 · 🌸 09-10 → 09-30"],
       ],
-    }),
-    [
-      ["Name", "Apple"],
-      ["Latin name", "Malus domestica"],
-      ["Harvest", "08-01 → 08-20 · 09-10 → 09-30"],
-    ],
-  );
+    );
+  }
 });
 
 const trees = [

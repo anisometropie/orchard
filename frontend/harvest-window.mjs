@@ -94,7 +94,7 @@ function harvestWindows(properties) {
   return normalizeHarvestWindows(properties.harvest_windows);
 }
 
-function normalizeHarvestWindows(windows) {
+export function normalizeHarvestWindows(windows) {
   if (Array.isArray(windows)) return windows;
   if (typeof windows !== "string") return [];
   try {
