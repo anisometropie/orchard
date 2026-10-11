@@ -1871,6 +1871,8 @@
       .harvest-cues p { margin: 6px 0; }
       .harvest-review-points { display: grid; gap: 10px; margin: 16px 0; }
       .harvest-review-point { display: flex; gap: 10px; align-items: start; padding: 10px; background: #f4f7f1; border-radius: 6px; }
+      .harvest-review-point-title { display: block; font-size: 15px; font-weight: 600; }
+      .harvest-review-point-meta { display: block; margin-top: 4px; color: #66735f; font-size: 12px; }
       .harvest-review-button { margin-left: 5px; }
       .harvest-review-button[hidden] { display: none; }
       .harvest-tree-actions { flex-wrap: wrap; }
@@ -1884,12 +1886,13 @@
       #harvest-fruit-form fieldset { border: 0; margin: 0 0 6px; padding: 0; }
       #harvest-fruit-form label { display: inline-flex; align-items: center; min-height: 40px; margin-right: 10px; }
       .harvest-history-button { border-radius: 4px; font-size: 12px; height: auto; min-height: 40px; opacity: 1; padding: 5px 8px; pointer-events: auto; width: auto; }
-      .harvest-evidence { display: block; margin-top: 5px; color: #465840; }
+      .harvest-review-point-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; margin-top: 5px; }
+      .harvest-evidence { display: block; color: #465840; }
       .harvest-review-point > span { flex: 1; min-width: 0; }
       .harvest-observation-timeline { display: block; margin-top: 10px; }
-      .harvest-timeline-heading { align-items: center; display: flex; flex-wrap: wrap; font-size: 11px; gap: 3px 10px; justify-content: space-between; }
-      .harvest-timeline-key { align-items: center; color: #465840; display: inline-flex; gap: 5px; }
-      .harvest-timeline-key::before { background: #628c53; border-radius: 2px; content: ""; height: 7px; width: 14px; }
+      .harvest-timeline-heading { align-items: center; display: flex; flex-wrap: wrap; font-size: 11px; gap: 3px 10px; justify-content: flex-end; }
+      .harvest-timeline-key { align-items: center; color: #465840; display: inline-flex; font-size: 11px; gap: 5px; white-space: nowrap; }
+      .harvest-timeline-key::before { background: #628c53; border-radius: 2px; content: ""; flex: none; height: 7px; width: 14px; }
       .harvest-timeline-position { color: #465840; }
       .harvest-timeline-plot { display: block; height: 65px; margin-top: 4px; position: relative; }
       .harvest-timeline-axis { background: #c7d0c3; height: 2px; left: 0; position: absolute; right: 0; top: 28px; }
@@ -2610,7 +2613,7 @@
     </dialog>
     <script type="module">
       import { observationWindows, observationPeriod, nearestObservationSeason, standaloneObservationRequest, unreviewedObservationCues } from "./standalone-harvest-observation.mjs?v=1";
-      import { createHarvestObservationTimeline } from "./harvest-observation-timeline.mjs?v=1";
+      import { createHarvestObservationTimeline } from "./harvest-observation-timeline.mjs?v=2";
       import { remainingFruitVisit, speciesNeedsHarvestReview, harvestVisitLabel, harvestEvidenceLabel, firstRecordedFruit } from "./harvest-visit.mjs?v=3";
       import { harvestObservationPath, pendingObservationIds, harvestReviewRequest, observationsForHarvestWindow } from "./harvest-review.mjs?v=2";
       import {
@@ -7029,17 +7032,30 @@
         for (const point of [...points].reverse()) {
           const entry = document.createElement("div");
           entry.className = "harvest-review-point";
-          const text = document.createElement("span");
+          const text = document.createElement("strong");
+          text.className = "harvest-review-point-title";
+          text.textContent = harvestVisitLabel(point);
           const name = orchardFeatures.find((feature) => String(feature.id) === String(point.tree_id))?.properties?.name;
-          text.textContent = `${name || "Tree"} #${point.tree_id} · ${harvestVisitLabel(point)} · ${harvestPartsLabel(point.harvested_parts)} · ${point.harvest_run_id == null ? "Individual observation" : `Tour #${point.harvest_run_id}`}${point.reviewed ? " · Reviewed" : " · Unreviewed"}`;
+          const metadata = document.createElement("small");
+          metadata.className = "harvest-review-point-meta";
+          metadata.textContent = `${name || "Tree"} #${point.tree_id} · ${harvestPartsLabel(point.harvested_parts)} · ${point.harvest_run_id == null ? "Standalone observation" : `Tour #${point.harvest_run_id}`}${point.reviewed ? " · Reviewed" : " · Unreviewed"}`;
           const details = document.createElement("span");
-          details.append(text);
+          details.append(text, metadata);
           const evidence = document.createElement("small");
           evidence.className = "harvest-evidence";
           evidence.textContent = harvestEvidenceLabel(point);
           const timeline = createHarvestObservationTimeline(point);
           if (timeline) details.append(timeline);
-          details.append(evidence);
+          const footer = document.createElement("span");
+          footer.className = "harvest-review-point-footer";
+          footer.append(evidence);
+          if (timeline) {
+            const key = document.createElement("span");
+            key.className = "harvest-timeline-key";
+            key.textContent = "Saved window";
+            footer.append(key);
+          }
+          if (timeline || evidence.textContent) details.append(footer);
           entry.append(details);
           list.append(entry);
         }

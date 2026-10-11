@@ -55,7 +55,7 @@ export function createHarvestObservationTimeline(point) {
   timeline.setAttribute("aria-label", layout.description);
   const heading = span("harvest-timeline-heading");
   heading.setAttribute("aria-hidden", "true");
-  heading.append(span("harvest-timeline-key", "Saved window"), span("harvest-timeline-position", layout.relativeDate));
+  heading.append(span("harvest-timeline-position", layout.relativeDate));
   const plot = span("harvest-timeline-plot");
   plot.setAttribute("aria-hidden", "true");
   const axis = span("harvest-timeline-axis");
