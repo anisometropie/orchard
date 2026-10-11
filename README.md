@@ -206,9 +206,9 @@ window, and review status. Timing hints compare the visit with its saved window;
 mixed stages remain separate facts. Ready fruit confirms a useful visit date.
 Waste at the end can support the window, especially with earlier ready-fruit
 evidence. Hints are evidence for manual review, not automatic date changes.
-Select unreviewed points, then choose **Keep windows and mark reviewed**, or
-**Update windows…** followed by **Update windows and mark reviewed**. Closing
-leaves points unreviewed.
+Choose **Keep window and mark reviewed**, or **Edit this window…** followed by
+**Save window and mark reviewed**. Each review applies to one specific window.
+Closing leaves points unreviewed.
 
 The **Trees** inventory also shows harvest history, including empty-on-arrival
 visits and the first recorded fruit date. When planting is dated, the history
@@ -220,10 +220,23 @@ orchard owner can review points or edit windows. **Previous tree** removes an
 unreviewed visit when correcting the last choice; reviewed evidence cannot be
 removed through that action.
 
-This feature requires migrations `029_add_harvest_observations.sql` and
-`030_rework_harvest_visit_facts.sql` and the updated API. Follow the migration
+Click any tree and use **Record harvest observation** to record these same facts
+outside a tour, even when no harvest period exists. Choose the date and harvested
+part. A saved period can be selected with its season start year; observations
+may fall before or after it. Individual observations do not advance a tour.
+
+Observations with **No recorded period** appear as dated cues in the species or
+cultivar's harvest editor. Cues match the harvested parts being edited. **OK**
+saves dates and leaves cues unreviewed; **Save and mark cues reviewed** saves the
+windows and reviews those cues together. History retains the original absence
+of a period rather than inventing a historical period.
+
+This feature requires migrations `029_add_harvest_observations.sql`,
+`030_rework_harvest_visit_facts.sql`, and
+`031_add_standalone_harvest_observations.sql` and the updated API. Follow the migration
 deployment sequence above. Migration 030 cannot be reverted while new visit
-facts exist, so rollback cannot silently discard production history.
+facts exist, and migration 031 cannot be reverted while individual observations
+exist, so rollback cannot silently discard production history.
 
 ## Shared links
 

@@ -17,6 +17,11 @@ import {
 
 const indexHtml = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 
+test("harvesters can record an observation on a tree with no period", () => {
+  assert.deepEqual(treePopupPresentation({ name: "Tree" }, { canRecordHarvest: true }).actions, ["observe-harvest", "library"]);
+  assert.deepEqual(treePopupPresentation({ name: "Tree" }, { interaction: "hover", canRecordHarvest: true }).actions, []);
+});
+
 test("the tree editor leaves photo capture to the separate camera action", () => {
   assert.deepEqual(treeEditorPresentation(), {
     fields: ["danger", "dead", "watering-exclusion"],

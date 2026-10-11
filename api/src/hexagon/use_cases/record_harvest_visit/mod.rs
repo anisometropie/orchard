@@ -119,14 +119,14 @@ pub fn record_harvest_visit(
         let observation_id = orchard.save_harvest_observation(HarvestObservation {
             id: 0,
             orchard_id: event.orchard_id,
-            harvest_run_id: event.harvest_run_id,
+            harvest_run_id: Some(event.harvest_run_id),
             tree_id: event.tree_id,
             owner,
             recorded_on,
             kind: event.kind,
             fruit_state,
             harvested_parts: snapshot_parts,
-            period: run.ordered_trees[current_index].period,
+            period: Some(run.ordered_trees[current_index].period),
             reviewed: false,
         })?;
         orchard
@@ -164,7 +164,7 @@ impl From<OrchardStorageError> for HarvestVisitRecordingError {
     }
 }
 
-fn visit_fruit_state(
+pub(super) fn visit_fruit_state(
     kind: HarvestObservationKind,
     supplied: Option<HarvestFruitState>,
 ) -> Result<Option<HarvestFruitState>, HarvestVisitRecordingError> {

@@ -2887,6 +2887,15 @@ fn empty_orchard_database() -> (String, Client) {
             ))
             .unwrap();
     }
+    let standalone_observations_were_applied: bool = verification_connection.query_one(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+         AND table_name = 'harvest_observations' AND column_name = 'harvest_run_id' AND is_nullable = 'YES')", &[],
+    ).unwrap().get(0);
+    if !standalone_observations_were_applied {
+        verification_connection.batch_execute(include_str!(
+            "../../../../db/migrations/031_add_standalone_harvest_observations.sql"
+        )).unwrap();
+    }
     verification_connection
         .batch_execute(
             "TRUNCATE TABLE harvest_runs, watering_runs, user_sessions, orchards,

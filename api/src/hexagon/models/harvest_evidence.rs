@@ -30,6 +30,7 @@ pub fn harvest_window_evidence(
     if !point.has_timing_evidence() {
         return vec![];
     }
+    let Some(period) = point.period else { return vec![]; };
     let fruit = point.observed_fruit_state();
     let mut evidence = vec![];
     let earlier_ready = history.iter().any(|earlier| {
@@ -45,40 +46,40 @@ pub fn harvest_window_evidence(
             && earlier.observed_fruit_state().ready
     });
     if fruit.ready {
-        evidence.push(if point.recorded_on < point.period.start {
+        evidence.push(if point.recorded_on < period.start {
             StartTooLate
-        } else if point.recorded_on > point.period.end {
+        } else if point.recorded_on > period.end {
             EndTooEarly
         } else {
             ReadyWithinWindow
         });
     }
     if fruit.unripe && !fruit.ready && !fruit.wasted {
-        evidence.push(if point.recorded_on < point.period.start {
+        evidence.push(if point.recorded_on < period.start {
             NotReadyYet
-        } else if point.recorded_on >= point.period.end {
+        } else if point.recorded_on >= period.end {
             LaterFruitPossible
         } else if earlier_ready {
             GapAfterEarlierHarvest
         } else {
             StartTooEarly
         });
-    } else if fruit.unripe && point.recorded_on >= point.period.end {
+    } else if fruit.unripe && point.recorded_on >= period.end {
         evidence.push(LaterFruitPossible);
     }
     if fruit.wasted {
         if fruit.ready || fruit.unripe {
-            if point.recorded_on <= point.period.start {
+            if point.recorded_on <= period.start {
                 evidence.push(StartMayBeTooLate);
             }
             if !fruit.ready {
                 evidence.push(EarlierFruitMissed);
             }
-        } else if point.recorded_on <= point.period.start {
+        } else if point.recorded_on <= period.start {
             evidence.push(StartTooLate);
-        } else if point.recorded_on < point.period.end {
+        } else if point.recorded_on < period.end {
             evidence.push(HarvestOverWithinWindow);
-        } else if point.recorded_on == point.period.end {
+        } else if point.recorded_on == period.end {
             evidence.push(if earlier_ready {
                 EndConfirmedByEarlierVisit
             } else {
@@ -103,17 +104,17 @@ mod tests {
         HarvestObservation {
             id: 1,
             orchard_id: OrchardId(7),
-            harvest_run_id: HarvestRunId(1),
+            harvest_run_id: Some(HarvestRunId(1)),
             tree_id: TreeId(1),
             owner: HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
             recorded_on: HarvestDate::parse_iso(date).unwrap(),
             kind: HarvestObservationKind::FruitRemaining,
             fruit_state: Some(fruit_state),
             harvested_parts: vec![HarvestedPart::Fruit],
-            period: HarvestPeriod {
+            period: Some(HarvestPeriod {
                 start: HarvestDate::new(2026, 9, 1).unwrap(),
                 end: HarvestDate::new(2026, 9, 30).unwrap(),
-            },
+            }),
             reviewed: false,
         }
     }
@@ -216,7 +217,7 @@ mod tests {
         let mut other = earlier.clone();
         other.tree_id = TreeId(2);
         let mut other_window = earlier.clone();
-        other_window.period.end = HarvestDate::new(2026, 10, 1).unwrap();
+        other_window.period.as_mut().unwrap().end = HarvestDate::new(2026, 10, 1).unwrap();
         let mut other_part = earlier;
         other_part.harvested_parts = vec![HarvestedPart::Flower];
         for history in [other, other_window, other_part] {

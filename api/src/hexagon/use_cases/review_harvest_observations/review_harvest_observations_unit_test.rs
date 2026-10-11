@@ -309,12 +309,12 @@ fn observations_for_two_windows() -> (InMemoryOrchardStorage, Vec<u64>) {
     storage
         .transaction(|storage| {
             storage.replace_orchard_harvest_windows(OrchardId(7), owner(), windows)?;
-            point.period.start.month = 6;
-            point.period.end.month = 6;
+            point.period.as_mut().unwrap().start.month = 6;
+            point.period.as_mut().unwrap().end.month = 6;
             point.recorded_on.month = 6;
             ids.push(storage.save_harvest_observation(point.clone())?);
-            point.period.start.month = 9;
-            point.period.end.month = 9;
+            point.period.as_mut().unwrap().start.month = 9;
+            point.period.as_mut().unwrap().end.month = 9;
             point.recorded_on.month = 9;
             point.harvested_parts = vec![HarvestedPart::Flower];
             ids.push(storage.save_harvest_observation(point)?);

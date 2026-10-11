@@ -1302,9 +1302,9 @@ impl OrchardStorage for PostgresOrchardStorage {
             "INSERT INTO harvest_observations (orchard_id, harvest_run_id, tree_id, plant_identity_id, cultivar_id,
                 recorded_on, kind, harvested_parts, window_start, window_end, fruit_ready, fruit_unripe, fruit_wasted)
              VALUES ($1,$2,$3,$4,$5,$6::text::date,$7,$8,$9::text::date,$10::text::date,$11,$12,$13) RETURNING id",
-            &[&observation_key(observation.orchard_id.0)?, &observation_key(observation.harvest_run_id.0)?,
+            &[&observation_key(observation.orchard_id.0)?, &observation.harvest_run_id.map(|id| observation_key(id.0)).transpose()?,
               &observation_key(observation.tree_id.0)?, &identity, &cultivar, &observation.recorded_on.to_string(),
-              &kind, &parts, &observation.period.start.to_string(), &observation.period.end.to_string(), &ready, &unripe, &wasted]
+              &kind, &parts, &observation.period.map(|period| period.start.to_string()), &observation.period.map(|period| period.end.to_string()), &ready, &unripe, &wasted]
         ).map(|row| row.get::<_, i64>(0) as u64).map_err(|_| OrchardStorageError::HarvestRunCouldNotBeChanged)
     }
 
@@ -2739,14 +2739,18 @@ fn harvest_observation_from_row(
         orchard_id,
         owner,
         fruit_state,
-        harvest_run_id: HarvestRunId(row.get::<_, i64>(1) as u64),
+        harvest_run_id: row.get::<_, Option<i64>>(1).map(|id| HarvestRunId(id as u64)),
         tree_id: TreeId(row.get::<_, i64>(2) as u64),
         recorded_on: HarvestDate::parse_iso(&row.get::<_, String>(3)).ok_or_else(error)?,
         kind: HarvestObservationKind::from_stored(&row.get::<_, String>(4)).ok_or_else(error)?,
         harvested_parts: harvested_parts_from_stored_values(row.get(5)).map_err(|_| error())?,
-        period: crate::hexagon::models::HarvestPeriod {
-            start: HarvestDate::parse_iso(&row.get::<_, String>(6)).ok_or_else(error)?,
-            end: HarvestDate::parse_iso(&row.get::<_, String>(7)).ok_or_else(error)?,
+        period: match (row.get::<_, Option<String>>(6), row.get::<_, Option<String>>(7)) {
+            (Some(start), Some(end)) => Some(HarvestPeriod {
+                start: HarvestDate::parse_iso(&start).ok_or_else(error)?,
+                end: HarvestDate::parse_iso(&end).ok_or_else(error)?,
+            }),
+            (None, None) => None,
+            _ => return Err(error()),
         },
         reviewed: row.get(8),
     })

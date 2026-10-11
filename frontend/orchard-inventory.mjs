@@ -31,6 +31,7 @@ export function treePopupPresentation(
     canMove = false,
     canEdit = false,
     canAddPhotos = false,
+    canRecordHarvest = false,
   } = {},
 ) {
   if (interaction === "hover") {
@@ -50,6 +51,7 @@ export function treePopupPresentation(
     actions: [
       canMove && "move",
       canEdit && "edit",
+      canRecordHarvest && "observe-harvest",
       canFilter && "filter",
       canAddPhotos && "photo",
       "library",

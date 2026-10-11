@@ -54,6 +54,7 @@ pub fn assert_observations_are_scoped_ordered_and_atomic(storage: &mut impl Orch
     storage.transaction(|storage| storage.delete_unreviewed_harvest_observation(second_id)).unwrap();
     assert!(storage.harvest_observations(orchard_id, cultivar).unwrap().is_empty());
     assert_visit_facts_round_trip(storage, orchard_id, species);
+    assert_standalone_cues_can_be_saved_and_reviewed_atomically(storage, orchard_id, species);
 }
 
 pub fn assert_visit_facts_round_trip(storage: &mut impl OrchardStorage, orchard_id: OrchardId, species: HarvestScheduleOwner) {
@@ -76,7 +77,7 @@ pub fn assert_visit_facts_round_trip(storage: &mut impl OrchardStorage, orchard_
         HarvestTreeOutcome::EmptyOnArrival { recorded_on: date },
         HarvestTreeOutcome::FruitRemaining { recorded_on: date, retry_on: date.add_days(7).unwrap() },
     ] {
-        let mut run = storage.harvest_run(template.harvest_run_id).unwrap().unwrap();
+        let mut run = storage.harvest_run(template.harvest_run_id.unwrap()).unwrap().unwrap();
         run.id = HarvestRunId(0); run.completed = false;
         for tree in &mut run.ordered_trees { tree.outcome = None; }
         let run_id = storage.transaction(|storage| storage.create_harvest_run(run.orchard_id, run.target, &run.harvested_parts, run.started_on, &run.ordered_trees)).unwrap();
@@ -94,4 +95,118 @@ pub fn assert_visit_facts_round_trip(storage: &mut impl OrchardStorage, orchard_
         assert_eq!(point.harvested_parts, template.harvested_parts);
     }
     assert!(storage.harvest_observations_in_orchard(OrchardId(99)).unwrap().is_empty());
+}
+
+pub fn assert_standalone_cues_can_be_saved_and_reviewed_atomically(
+    storage: &mut impl OrchardStorage,
+    orchard_id: OrchardId,
+    owner: HarvestScheduleOwner,
+) {
+    use orchard_api::hexagon::use_cases::record_standalone_harvest_observation::*;
+    storage
+        .transaction(|storage| storage.replace_orchard_harvest_windows(orchard_id, owner, vec![]))
+        .unwrap();
+    let mut ids = Vec::new();
+    for kind in [
+        HarvestObservationKind::FruitRemaining,
+        HarvestObservationKind::EmptyOnArrival,
+    ] {
+        ids.push(
+            record_standalone_harvest_observation(
+                StandaloneHarvestObservationRecorded {
+                    orchard_id,
+                    tree_id: TreeId(1),
+                    action_date: "2026-07-12".into(),
+                    harvested_part: HarvestedPart::Flower,
+                    window: None,
+                    kind,
+                    fruit_state: (kind == HarvestObservationKind::FruitRemaining).then_some(
+                        HarvestFruitState {
+                            ready: true,
+                            ..Default::default()
+                        },
+                    ),
+                },
+                storage,
+            )
+            .unwrap(),
+        );
+    }
+    let before = storage.harvest_observations(orchard_id, owner).unwrap();
+    for id in &ids {
+        let point = before.iter().find(|point| point.id == *id).unwrap();
+        assert_eq!(point.harvest_run_id, None);
+        assert_eq!(point.period, None);
+        assert_eq!(point.harvested_parts, vec![HarvestedPart::Flower]);
+        assert_eq!(point.recorded_on.to_string(), "2026-07-12");
+        assert!(!point.reviewed);
+    }
+    let change = |day| OrchardHarvestWindowsReplaced {
+        orchard_id,
+        owner,
+        reference_region: "France".into(),
+        windows: vec![AnnualHarvestWindowChanged {
+            start_month: 7,
+            start_day: day,
+            end_month: 7,
+            end_day: 31,
+            harvested_part: HarvestedPart::Flower,
+        }],
+    };
+    let review = |day| HarvestObservationsReviewed {
+        orchard_id,
+        owner,
+        observation_ids: ids.clone(),
+        window_change: Some(change(day)),
+    };
+    assert!(review_harvest_observations(review(32), storage).is_err());
+    assert_eq!(
+        storage.harvest_observations(orchard_id, owner).unwrap(),
+        before
+    );
+    assert!(
+        storage
+            .orchard_harvest_windows(orchard_id, owner)
+            .unwrap()
+            .is_empty()
+    );
+    let rolled_back: Result<(), OrchardStorageError> = storage.transaction(|storage| {
+        storage.replace_orchard_harvest_windows(
+            orchard_id,
+            owner,
+            vec![AnnualHarvestWindow {
+                start: AnnualDate::new(7, 1).unwrap(),
+                end: AnnualDate::new(7, 31).unwrap(),
+                harvested_part: HarvestedPart::Flower,
+                reference_region: Some("France".into()),
+                data_origin: HarvestDataOrigin::FieldObservation,
+                source_url: None,
+            }],
+        )?;
+        storage.review_harvest_observations(orchard_id, owner, &ids)?;
+        Err(OrchardStorageError::HarvestRunCouldNotBeChanged)
+    });
+    assert!(rolled_back.is_err());
+    assert_eq!(
+        storage.harvest_observations(orchard_id, owner).unwrap(),
+        before
+    );
+    assert!(
+        storage
+            .orchard_harvest_windows(orchard_id, owner)
+            .unwrap()
+            .is_empty()
+    );
+    review_harvest_observations(review(1), storage).unwrap();
+    let windows = storage.orchard_harvest_windows(orchard_id, owner).unwrap();
+    assert_eq!(windows[0].harvested_part, HarvestedPart::Flower);
+    assert_eq!(windows[0].data_origin, HarvestDataOrigin::FieldObservation);
+    let after = storage.harvest_observations(orchard_id, owner).unwrap();
+    for (original, point) in before.iter().zip(&after) {
+        let mut expected = original.clone();
+        if ids.contains(&point.id) {
+            expected.reviewed = true;
+        }
+        assert_eq!(*point, expected);
+    }
 }

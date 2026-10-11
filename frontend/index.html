@@ -971,6 +971,7 @@
       }
       .harvest-editor-actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 5px;
       }
       .harvest-editor-actions[hidden] {
@@ -1835,7 +1836,7 @@
           color: white;
         }
       }
-      #harvest-review-dialog {
+      #harvest-review-dialog, #harvest-observation-dialog {
         width: min(760px, calc(100vw - 32px));
         max-height: calc(100dvh - 48px);
         box-sizing: border-box;
@@ -1847,9 +1848,9 @@
         background: #fff;
         font: 14px/1.4 sans-serif;
       }
-      #harvest-review-dialog::backdrop { background: rgb(20 35 20 / 45%); }
-      #harvest-review-title { font-size: 1.2rem; }
-      #harvest-review-dialog button:not(.inventory-close) {
+      #harvest-review-dialog::backdrop, #harvest-observation-dialog::backdrop { background: rgb(20 35 20 / 45%); }
+      #harvest-review-title, #harvest-observation-title { font-size: 1.2rem; }
+      #harvest-review-dialog button:not(.inventory-close), #harvest-observation-dialog button:not(.inventory-close) {
         border: 1px solid #245c2a;
         border-radius: 6px;
         background: white;
@@ -1859,7 +1860,15 @@
         min-height: 44px;
         padding: 8px 12px;
       }
-      #harvest-review-dialog button:disabled { cursor: default; opacity: 0.6; }
+      #harvest-review-dialog button:disabled, #harvest-observation-dialog button:disabled { cursor: default; opacity: 0.6; }
+      .harvest-observation-form { display: grid; gap: 12px; }
+      .harvest-observation-form > label { display: grid; gap: 4px; min-width: 0; }
+      .harvest-observation-form input:not([type="checkbox"]),
+      .harvest-observation-form select { box-sizing: border-box; font: inherit; min-height: 40px; min-width: 0; width: 100%; }
+      .harvest-observation-form fieldset { display: flex; flex-wrap: wrap; gap: 12px; margin: 0; border: 1px solid #d4dfce; }
+      .harvest-observation-form [hidden], .harvest-cues[hidden] { display: none; }
+      .harvest-cues { min-width: 0; overflow-wrap: anywhere; }
+      .harvest-cues p { margin: 6px 0; }
       .harvest-review-points { display: grid; gap: 10px; margin: 16px 0; }
       .harvest-review-point { display: flex; gap: 10px; align-items: start; padding: 10px; background: #f4f7f1; border-radius: 6px; }
       .harvest-review-button { margin-left: 5px; }
@@ -2592,9 +2601,17 @@
       </header>
       <div id="harvest-review-content"></div>
     </dialog>
+    <dialog id="harvest-observation-dialog" aria-labelledby="harvest-observation-title">
+      <header class="inventory-header">
+        <h2 id="harvest-observation-title">Record harvest observation</h2>
+        <button id="harvest-observation-close" class="inventory-close" type="button" aria-label="Close harvest observation">×</button>
+      </header>
+      <div id="harvest-observation-content"></div>
+    </dialog>
     <script type="module">
+      import { observationWindows, observationPeriod, nearestObservationSeason, standaloneObservationRequest, unreviewedObservationCues } from "./standalone-harvest-observation.mjs?v=1";
       import { createHarvestObservationTimeline } from "./harvest-observation-timeline.mjs?v=1";
-      import { remainingFruitVisit, speciesNeedsHarvestReview, harvestVisitLabel, harvestEvidenceLabel, firstRecordedFruit } from "./harvest-visit.mjs?v=2";
+      import { remainingFruitVisit, speciesNeedsHarvestReview, harvestVisitLabel, harvestEvidenceLabel, firstRecordedFruit } from "./harvest-visit.mjs?v=3";
       import { harvestObservationPath, pendingObservationIds, harvestReviewRequest, observationsForHarvestWindow } from "./harvest-review.mjs?v=2";
       import {
         HARVEST_PIN_ICONS,
@@ -2626,8 +2643,9 @@
         taxonomyOptions,
         treeEditorPresentation,
         treePopupPresentation,
-      } from "./orchard-inventory.mjs?v=10";
+      } from "./orchard-inventory.mjs?v=11";
       import {
+        normalizeHarvestWindows,
         formatHarvestWindows,
         harvestAvailability,
         harvestAvailabilitySummary,
@@ -4041,6 +4059,7 @@
             !manualOrder &&
             !placingWaterSource,
           canEdit: isEditable(),
+          canRecordHarvest: canHarvestOrchard(currentAccess),
           canAddPhotos: canAddPhotosToOrchard(currentAccess),
         });
 
@@ -4064,6 +4083,16 @@
               actions.append(createTreeMoveButton(feature));
             } else if (action === "edit") {
               actions.append(createTreeEditButton(feature));
+            } else if (action === "observe-harvest") {
+              const button = document.createElement("button");
+              button.type = "button";
+              button.className = "inventory-row-action";
+              button.title = "Record harvest observation";
+              button.setAttribute("aria-label", button.title);
+              button.setAttribute("aria-haspopup", "dialog");
+              button.append(createInventoryActionIcon("review"));
+              button.addEventListener("click", () => showStandaloneHarvestObservation(feature));
+              actions.append(button);
             } else if (action === "filter") {
               const selection = speciesFilterSelection(properties);
               actions.append(
@@ -6771,6 +6800,163 @@
         return container;
       }
 
+      const harvestObservationDialog = document.getElementById("harvest-observation-dialog");
+      const harvestObservationContent = document.getElementById("harvest-observation-content");
+      let harvestObservationSession = 0;
+      document.getElementById("harvest-observation-close").addEventListener("click", () => harvestObservationDialog.close());
+      harvestObservationDialog.addEventListener("close", () => { harvestObservationSession += 1; });
+
+      function showStandaloneHarvestObservation(feature) {
+        if (!canHarvestOrchard(currentAccess)) return;
+        const access = currentAccess;
+        const session = ++harvestObservationSession;
+        closeTreeTooltip();
+        document.getElementById("harvest-observation-title").textContent = `Harvest observation · ${feature.properties.name || "Tree"} #${feature.id}`;
+        const form = document.createElement("form");
+        form.className = "harvest-observation-form";
+        function field(text, type) {
+          const label = document.createElement("label");
+          label.append(document.createTextNode(text));
+          const input = document.createElement(type === "select" ? "select" : "input");
+          input.setAttribute("aria-label", text);
+          if (type !== "select") input.type = type;
+          label.append(input);
+          form.append(label);
+          return { label, input };
+        }
+        const date = field("Observation date", "date");
+        date.input.required = true;
+        date.input.value = localIsoDate();
+        const part = harvestedPartInput("Harvested part", normalizeHarvestWindows(feature.properties.harvest_windows)[0]?.harvested_part || "fruit");
+        form.append(part.label);
+        const period = field("Harvest period", "select");
+        const year = field("Season start year", "number");
+        year.input.min = "1";
+        year.input.max = "9999";
+        const periodHint = document.createElement("small");
+        form.append(periodHint);
+        let windows = [];
+        function updatePeriodHint() {
+          const selected = windows[Number(period.input.value)];
+          year.label.hidden = !selected;
+          year.input.required = !!selected;
+          if (!selected) {
+            periodHint.textContent = "This observation will be a cue when you create a harvest period.";
+            return;
+          }
+          try {
+            const concrete = observationPeriod(selected, year.input.value);
+            periodHint.textContent = `${concrete.start} → ${concrete.end}. Observations may be recorded before or after this period.`;
+          } catch (error) { periodHint.textContent = error.message; }
+        }
+        function updatePeriodChoices() {
+          windows = observationWindows(feature.properties, part.input.value);
+          period.input.replaceChildren();
+          const none = document.createElement("option");
+          none.value = "none";
+          none.textContent = "No recorded period";
+          period.input.append(none);
+          windows.forEach((window, index) => {
+            const option = document.createElement("option");
+            option.value = String(index);
+            option.textContent = `${window.start} → ${window.end}`;
+            period.input.append(option);
+          });
+          if (windows.length) {
+            const nearest = windows.map((window, index) => {
+              const startYear = nearestObservationSeason(window, date.input.value);
+              try {
+                const concrete = observationPeriod(window, startYear);
+                const day = Date.parse(date.input.value);
+                return { index, startYear, distance: Math.max(Date.parse(concrete.start) - day, day - Date.parse(concrete.end), 0) };
+              } catch { return { index, startYear, distance: Infinity }; }
+            }).sort((a, b) => a.distance - b.distance)[0];
+            period.input.value = String(nearest.index);
+            year.input.value = String(nearest.startYear);
+          }
+          updatePeriodHint();
+        }
+        part.input.addEventListener("change", updatePeriodChoices);
+        date.input.addEventListener("change", () => {
+          const selected = windows[Number(period.input.value)];
+          if (selected) year.input.value = String(nearestObservationSeason(selected, date.input.value));
+          updatePeriodHint();
+        });
+        period.input.addEventListener("change", () => {
+          const selected = windows[Number(period.input.value)];
+          if (selected) year.input.value = String(nearestObservationSeason(selected, date.input.value));
+          updatePeriodHint();
+        });
+        year.input.addEventListener("input", updatePeriodHint);
+        updatePeriodChoices();
+        const kind = field("Observation", "select");
+        for (const [value, text] of [["fruit_remaining", "Still on tree"], ["harvested_all", "Harvested all"], ["empty_on_arrival", "Empty on arrival"], ["all_wasted", "All wasted"]]) {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = text;
+          kind.input.append(option);
+        }
+        const facts = document.createElement("fieldset");
+        const legend = document.createElement("legend");
+        legend.textContent = "What remains?";
+        facts.append(legend);
+        const fruitInputs = {};
+        for (const [key, text] of [["ready", "Ready now"], ["unripe", "Not ready yet"], ["wasted", "Some wasted"]]) {
+          const label = document.createElement("label");
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          fruitInputs[key] = input;
+          label.append(input, document.createTextNode(text));
+          facts.append(label);
+        }
+        kind.input.addEventListener("change", () => { facts.hidden = kind.input.value !== "fruit_remaining"; });
+        const error = document.createElement("p");
+        error.className = "workflow-error";
+        error.setAttribute("role", "alert");
+        error.hidden = true;
+        const actions = document.createElement("div");
+        actions.className = "harvest-editor-actions";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", () => harvestObservationDialog.close());
+        const save = document.createElement("button");
+        save.type = "submit";
+        save.textContent = "Save observation";
+        actions.append(cancel, save);
+        form.append(facts, error, actions);
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          if (save.disabled) return;
+          error.hidden = true;
+          try {
+            if (currentAccess !== access || !canHarvestOrchard(access)) throw new Error("Orchard access changed. Reopen the observation.");
+            const request = standaloneObservationRequest({
+              recordedOn: date.input.value, part: part.input.value, kind: kind.input.value,
+              fruitState: Object.fromEntries(Object.entries(fruitInputs).map(([key, input]) => [key, input.checked])),
+              window: windows[Number(period.input.value)] || null, startYear: year.input.value,
+            });
+            save.disabled = true;
+            save.textContent = "Saving…";
+            const response = await fetch(orchardResourceUrl(access, `trees/${feature.id}/harvest-observations`), {
+              method: "POST", headers: { "content-type": "application/json", ...accessHeaders(access) }, body: JSON.stringify(request),
+            });
+            if (response.status === 409) throw new Error("This harvest period changed. Reopen the tree and record again.");
+            if (!response.ok) throw new Error("Could not save the observation. Check the date and try again.");
+            if (session === harvestObservationSession && currentAccess === access) harvestObservationDialog.close();
+            if (currentAccess === access) loadHarvestObservations().catch(console.error);
+          } catch (requestError) {
+            if (session !== harvestObservationSession || currentAccess !== access) return;
+            error.textContent = requestError.message;
+            error.hidden = false;
+            save.disabled = false;
+            save.textContent = "Save observation";
+          }
+        });
+        harvestObservationContent.replaceChildren(form);
+        if (!harvestObservationDialog.open) harvestObservationDialog.showModal();
+      }
+
       const harvestReviewDialog = document.getElementById("harvest-review-dialog");
       const harvestReviewContent = document.getElementById("harvest-review-content");
       let harvestReviewSession = 0;
@@ -6803,7 +6989,7 @@
         for (const point of [...points].sort((a, b) => b.recorded_on.localeCompare(a.recorded_on) || b.id - a.id)) {
           const entry = document.createElement("div");
           entry.className = "harvest-review-point";
-          entry.textContent = `${point.recorded_on} · ${harvestVisitLabel(point)} · ${harvestPartsLabel(point.harvested_parts)} · Window then: ${point.window_start} to ${point.window_end}`;
+          entry.textContent = `${point.recorded_on} · ${harvestVisitLabel(point)} · ${harvestPartsLabel(point.harvested_parts)} · ${point.window_start ? `Window then: ${point.window_start} to ${point.window_end}` : "No period recorded"}${point.reviewed ? " · Reviewed" : " · Unreviewed"}`;
           list.append(entry);
         }
         harvestReviewContent.replaceChildren(summary, list);
@@ -6845,7 +7031,7 @@
           entry.className = "harvest-review-point";
           const text = document.createElement("span");
           const name = orchardFeatures.find((feature) => String(feature.id) === String(point.tree_id))?.properties?.name;
-          text.textContent = `${name || "Tree"} #${point.tree_id} · ${harvestVisitLabel(point)} · ${harvestPartsLabel(point.harvested_parts)} · Tour #${point.harvest_run_id}${point.reviewed ? " · Reviewed" : " · Unreviewed"}`;
+          text.textContent = `${name || "Tree"} #${point.tree_id} · ${harvestVisitLabel(point)} · ${harvestPartsLabel(point.harvested_parts)} · ${point.harvest_run_id == null ? "Individual observation" : `Tour #${point.harvest_run_id}`}${point.reviewed ? " · Reviewed" : " · Unreviewed"}`;
           const details = document.createElement("span");
           details.append(text);
           const evidence = document.createElement("small");
@@ -7025,6 +7211,7 @@
       ) {
         const form = document.createElement("form");
         form.className = "harvest-editor";
+        const editorAccess = currentAccess;
         const title = document.createElement("strong");
         title.textContent = editorTitle;
         const referenceRegion = document.createElement("label");
@@ -7062,8 +7249,38 @@
         save.type = "submit";
         save.textContent = saveLabel;
         actions.append(cancel, save);
+        const cues = document.createElement("section");
+        cues.className = "harvest-cues";
+        const saveAndReview = document.createElement("button");
+        saveAndReview.type = "submit";
+        saveAndReview.textContent = "Save and mark cues reviewed";
+        saveAndReview.hidden = true;
+        let cuePoints = [];
+        function renderCues() {
+          if (singleWindow) return;
+          const parts = windowEditors.map((editor) => editor.harvestedPartInput.input.value);
+          cuePoints = unreviewedObservationCues(orchardHarvestObservations, schedule, parts.length ? parts : null);
+          cues.replaceChildren();
+          cues.hidden = cuePoints.length === 0;
+          saveAndReview.hidden = cuePoints.length === 0 || parts.length === 0;
+          if (!cuePoints.length) return;
+          const heading = document.createElement("strong");
+          heading.textContent = "Observations without a harvest period";
+          const hint = document.createElement("p");
+          hint.textContent = "Use these dates as cues for the period. OK leaves them unreviewed.";
+          cues.append(heading, hint);
+          for (const point of cuePoints) {
+            const entry = document.createElement("p");
+            const name = orchardFeatures.find((feature) => String(feature.id) === String(point.tree_id))?.properties?.name;
+            entry.textContent = `${point.recorded_on} · ${name || "Tree"} #${point.tree_id} · ${harvestVisitLabel(point)} · ${harvestPartsLabel(point.harvested_parts)}`;
+            cues.append(entry);
+          }
+        }
         form.append(title, referenceRegion, windowList);
-        if (!singleWindow) form.append(addWindow, clearHint);
+        if (!singleWindow) {
+          form.append(addWindow, clearHint, cues);
+          actions.append(saveAndReview);
+        }
         form.append(error, actions);
 
         function addHarvestWindowRow(window = {}) {
@@ -7087,6 +7304,7 @@
           remove.addEventListener("click", () => {
             windowEditors.splice(windowEditors.indexOf(editor), 1);
             editor.row.remove();
+            renderCues();
           });
           editor.remove = remove;
           editor.row.append(
@@ -7097,10 +7315,13 @@
           if (!singleWindow) editor.row.append(remove);
           windowEditors.push(editor);
           windowList.append(editor.row);
+          editor.harvestedPartInput.input.addEventListener("change", renderCues);
+          renderCues();
           editor.startInput.input.focus();
         }
 
         schedule.harvestWindows.forEach(addHarvestWindowRow);
+        renderCues();
 
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
@@ -7125,13 +7346,15 @@
           addWindow.disabled = true;
           cancel.disabled = true;
           save.disabled = true;
+          saveAndReview.disabled = true;
           save.textContent = "Saving…";
           try {
-            await onSave(
-              schedule,
-              referenceRegionInput.value.trim(),
-              windows,
-            );
+            if (event.submitter === saveAndReview) {
+              const ids = unreviewedObservationCues(orchardHarvestObservations, schedule, windows.map((window) => window.harvested_part)).map((point) => point.id);
+              await submitHarvestReview(schedule, null, ids, { reference_region: referenceRegionInput.value.trim(), windows }, editorAccess);
+            } else {
+              await onSave(schedule, referenceRegionInput.value.trim(), windows);
+            }
             if (refreshAfterSave) await loadOrchardTrees();
           } catch (requestError) {
             error.textContent = requestError.message;
@@ -7146,6 +7369,7 @@
             addWindow.disabled = false;
             cancel.disabled = false;
             save.disabled = false;
+            saveAndReview.disabled = false;
             save.textContent = saveLabel;
           }
         });
@@ -7170,6 +7394,7 @@
         const label = document.createElement("label");
         label.append(document.createTextNode(text));
         const input = document.createElement("select");
+        input.setAttribute("aria-label", text);
         ["fruit", "flower", "leaf", "seed", "cone", "nut", "pod"].forEach(
           (part) => {
             const option = document.createElement("option");
@@ -7503,6 +7728,7 @@
         orchardHarvestObservations = [];
         harvestObservationLoadVersion += 1;
         if (harvestReviewDialog.open) harvestReviewDialog.close();
+        if (harvestObservationDialog.open) harvestObservationDialog.close();
         wateringStateVersion += 1;
         wateringRunsRequestVersion += 1;
         selectWateringRun(null);

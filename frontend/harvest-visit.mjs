@@ -13,7 +13,7 @@ export function hasWindowObservations(points, schedule) {
 }
 
 export function speciesNeedsHarvestReview(points, species) {
-  return points.some((point) => !point.reviewed && point.kind !== "empty_on_arrival" && (
+  return points.some((point) => !point.reviewed && (point.kind !== "empty_on_arrival" || point.window_start === null) && (
     (point.owner_kind === "species" && point.owner_id === species.plantIdentityId) ||
     (point.owner_kind === "cultivar" && species.cultivars.some((cultivar) => cultivar.id === point.owner_id))
   ));
@@ -22,7 +22,7 @@ export function speciesNeedsHarvestReview(points, species) {
 export function harvestVisitLabel(point) {
   switch (point.kind) {
     case "harvested_all": return "Harvested all";
-    case "empty_on_arrival": return "Empty on arrival · no production recorded for this window";
+    case "empty_on_arrival": return point.window_start === null ? "Empty on arrival" : "Empty on arrival · no production recorded for this window";
     case "all_wasted": return "All wasted · nothing left to collect";
     case "too_soon": return "Not ready yet";
     case "too_late": return "All wasted";

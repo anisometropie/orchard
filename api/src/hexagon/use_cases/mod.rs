@@ -50,3 +50,4 @@ pub mod review_harvest_observations;
 
 pub mod list_orchard_harvest_observations;
 pub mod record_harvest_visit;
+pub mod record_standalone_harvest_observation;

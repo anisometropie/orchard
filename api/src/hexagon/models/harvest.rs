@@ -453,7 +453,7 @@ pub struct HarvestFruitState {
 pub struct HarvestObservation {
     pub id: u64,
     pub orchard_id: OrchardId,
-    pub harvest_run_id: HarvestRunId,
+    pub harvest_run_id: Option<HarvestRunId>,
     pub tree_id: TreeId,
     pub owner: HarvestScheduleOwner,
     pub recorded_on: HarvestDate,
@@ -461,7 +461,7 @@ pub struct HarvestObservation {
     #[serde(default)]
     pub fruit_state: Option<HarvestFruitState>,
     pub harvested_parts: Vec<HarvestedPart>,
-    pub period: HarvestPeriod,
+    pub period: Option<HarvestPeriod>,
     pub reviewed: bool,
 }
 

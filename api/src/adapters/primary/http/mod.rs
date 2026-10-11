@@ -6,6 +6,10 @@ use crate::hexagon::use_cases::list_orchard_harvest_observations::list_orchard_h
 use crate::hexagon::use_cases::record_harvest_visit::{
     HarvestVisitRecorded, HarvestVisitRecordingError, record_harvest_visit,
 };
+use crate::hexagon::use_cases::record_standalone_harvest_observation::{
+    ObservationHarvestWindow, StandaloneHarvestObservationError,
+    StandaloneHarvestObservationRecorded, record_standalone_harvest_observation,
+};
 use crate::hexagon::use_cases::review_harvest_observations::{
     HarvestObservationReviewError, HarvestObservationsReviewed, review_harvest_observations,
     review_harvest_observations_for_window,
@@ -308,6 +312,10 @@ where
         .route(
             "/orchards/{orchard_id}/harvest-observations",
             get(list_orchard_harvest_observations_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/trees/{tree_id}/harvest-observations",
+            post(record_standalone_harvest_observation_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/harvest-observations/{owner_kind}/{owner_id}",
@@ -2944,6 +2952,74 @@ where
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StandaloneHarvestObservationRequest {
+    action_date: String,
+    harvested_part: HarvestedPart,
+    kind: HarvestObservationKind,
+    fruit_state: Option<HarvestFruitState>,
+    window: Option<StandaloneObservationWindowRequest>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StandaloneObservationWindowRequest {
+    start: AnnualDate,
+    end: AnnualDate,
+    start_year: i32,
+}
+
+async fn record_standalone_harvest_observation_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, tree_id)): Path<(u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<StandaloneHarvestObservationRequest>, JsonRejection>,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_harvesting_credential(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_harvesting_access(&mut *storage, orchard_id, credential)?;
+        match record_standalone_harvest_observation(
+            StandaloneHarvestObservationRecorded {
+                orchard_id,
+                tree_id: TreeId(tree_id),
+                action_date: request.action_date,
+                harvested_part: request.harvested_part,
+                window: request.window.map(|window| ObservationHarvestWindow {
+                    start: window.start,
+                    end: window.end,
+                    start_year: window.start_year,
+                }),
+                kind: request.kind,
+                fruit_state: request.fruit_state,
+            },
+            &mut *storage,
+        ) {
+            Ok(id) => Ok((StatusCode::CREATED, Json(json!({ "id": id }))).into_response()),
+            Err(
+                StandaloneHarvestObservationError::InvalidActionDate
+                | StandaloneHarvestObservationError::InvalidFruitState,
+            ) => Err(StatusCode::BAD_REQUEST),
+            Err(StandaloneHarvestObservationError::TreeNotFound) => Err(StatusCode::NOT_FOUND),
+            Err(StandaloneHarvestObservationError::HarvestWindowChanged) => {
+                Ok(harvest_conflict_response(
+                    "harvest_window_changed",
+                    "The selected harvest period changed. Reopen the tree and try again.",
+                ))
+            }
+            Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        }
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
 fn observation_owner(kind: &str, id: u64) -> Result<HarvestScheduleOwner, StatusCode> {
     if id == 0 {
         return Err(StatusCode::BAD_REQUEST);
@@ -2998,12 +3074,12 @@ fn harvest_observation_json(point: &HarvestObservation, history: &[HarvestObserv
         HarvestScheduleOwner::PlantCultivar(id) => ("cultivar", id.0),
     };
     json!({
-        "id": point.id, "tree_id": point.tree_id.0, "harvest_run_id": point.harvest_run_id.0,
+        "id": point.id, "tree_id": point.tree_id.0, "harvest_run_id": point.harvest_run_id.map(|id| id.0),
         "owner_kind": owner_kind, "owner_id": owner_id,
         "recorded_on": point.recorded_on.to_string(), "kind": point.kind,
         "fruit_state": point.observed_fruit_state(),
         "harvested_parts": point.harvested_parts,
-        "window_start": point.period.start.to_string(), "window_end": point.period.end.to_string(),
+        "window_start": point.period.map(|period| period.start.to_string()), "window_end": point.period.map(|period| period.end.to_string()),
         "reviewed": point.reviewed, "evidence": harvest_window_evidence(point, history),
     })
 }

@@ -83,7 +83,7 @@ fn review(
             !observations.iter().any(|point| {
                 point.id == *id
                     && !point.reviewed
-                    && point.has_timing_evidence()
+                    && (point.has_timing_evidence() || (window.is_none() && point.period.is_none()))
                     && window.is_none_or(|window| observation_matches_window(point, window))
             })
         }) {
@@ -106,10 +106,11 @@ fn observation_matches_window(
     point: &HarvestObservation,
     window: AnnualHarvestWindowChanged,
 ) -> bool {
-    point.period.start.month == window.start_month
-        && point.period.start.day == window.start_day
-        && point.period.end.month == window.end_month
-        && point.period.end.day == window.end_day
+    let Some(period) = point.period else { return false; };
+    period.start.month == window.start_month
+        && period.start.day == window.start_day
+        && period.end.month == window.end_month
+        && period.end.day == window.end_day
         && point.harvested_parts.contains(&window.harvested_part)
 }
 
