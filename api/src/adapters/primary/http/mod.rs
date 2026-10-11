@@ -8,6 +8,7 @@ use crate::hexagon::use_cases::record_harvest_visit::{
 };
 use crate::hexagon::use_cases::review_harvest_observations::{
     HarvestObservationReviewError, HarvestObservationsReviewed, review_harvest_observations,
+    review_harvest_observations_for_window,
 };
 use std::{
     net::SocketAddr,
@@ -3048,6 +3049,7 @@ where
 struct ReviewHarvestObservationsRequest {
     observation_ids: Vec<u64>,
     window_change: Option<ReplaceHarvestWindowsRequest>,
+    window: Option<HarvestWindowRequest>,
 }
 
 async fn review_harvest_observations_handler<U>(
@@ -3066,33 +3068,45 @@ where
         let mut storage = storage.lock().unwrap();
         let orchard_id = OrchardId(orchard_id);
         authorize_owner_access(&mut *storage, orchard_id, session)?;
-        review_harvest_observations(
-            HarvestObservationsReviewed {
-                orchard_id,
-                owner,
-                observation_ids: request.observation_ids,
-                window_change: request
-                    .window_change
-                    .map(|change| OrchardHarvestWindowsReplaced {
-                        orchard_id,
-                        owner,
-                        reference_region: change.reference_region,
-                        windows: change
-                            .windows
-                            .into_iter()
-                            .map(|window| AnnualHarvestWindowChanged {
-                                start_month: window.start.month,
-                                start_day: window.start.day,
-                                end_month: window.end.month,
-                                end_day: window.end.day,
-                                harvested_part: window.harvested_part,
-                            })
-                            .collect(),
-                    }),
-            },
-            &mut *storage,
-        )
-        .map_err(|error| match error {
+        let event = HarvestObservationsReviewed {
+            orchard_id,
+            owner,
+            observation_ids: request.observation_ids,
+            window_change: request
+                .window_change
+                .map(|change| OrchardHarvestWindowsReplaced {
+                    orchard_id,
+                    owner,
+                    reference_region: change.reference_region,
+                    windows: change
+                        .windows
+                        .into_iter()
+                        .map(|window| AnnualHarvestWindowChanged {
+                            start_month: window.start.month,
+                            start_day: window.start.day,
+                            end_month: window.end.month,
+                            end_day: window.end.day,
+                            harvested_part: window.harvested_part,
+                        })
+                        .collect(),
+                }),
+        };
+        let result = if let Some(window) = request.window {
+            review_harvest_observations_for_window(
+                event,
+                AnnualHarvestWindowChanged {
+                    start_month: window.start.month,
+                    start_day: window.start.day,
+                    end_month: window.end.month,
+                    end_day: window.end.day,
+                    harvested_part: window.harvested_part,
+                },
+                &mut *storage,
+            )
+        } else {
+            review_harvest_observations(event, &mut *storage)
+        };
+        result.map_err(|error| match error {
             HarvestObservationReviewError::InvalidObservationSelection => StatusCode::CONFLICT,
             HarvestObservationReviewError::InvalidWindowChange(
                 PlantHarvestWindowsReplacementError::InvalidAnnualDate

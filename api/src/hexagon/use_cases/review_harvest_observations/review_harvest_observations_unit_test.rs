@@ -140,6 +140,190 @@ fn reviewed_evidence_cannot_be_removed_by_undoing_the_visit() {
     assert!(storage.harvest_run(run_id).unwrap().unwrap().completed);
 }
 
+#[test]
+fn review_one_window_preserves_other_windows_and_the_same_trees_other_observations() {
+    let (mut storage, ids) = observations_for_two_windows();
+    let original = storage
+        .orchard_harvest_windows(OrchardId(7), owner())
+        .unwrap();
+    review_harvest_observations_for_window(
+        review(ids[..2].to_vec(), Some(change(15))),
+        september_window(),
+        &mut storage,
+    )
+    .unwrap();
+    let windows = storage
+        .orchard_harvest_windows(OrchardId(7), owner())
+        .unwrap();
+    assert_eq!(windows.len(), original.len());
+    assert_eq!(windows[0].start.day, 15);
+    assert_eq!(windows[0].data_origin, HarvestDataOrigin::FieldObservation);
+    assert_eq!(windows[0].source_url, None);
+    assert_eq!(windows[1..], original[1..]);
+    let points = storage.harvest_observations(OrchardId(7), owner()).unwrap();
+    assert_eq!(
+        points
+            .iter()
+            .map(|point| point.reviewed)
+            .collect::<Vec<_>>(),
+        vec![true, true, false, false]
+    );
+    assert_eq!(points[0].tree_id, points[2].tree_id);
+    let mut june = september_window();
+    june.start_month = 6;
+    june.end_month = 6;
+    review_harvest_observations_for_window(review(vec![ids[2]], None), june, &mut storage).unwrap();
+    assert!(storage.harvest_observations(OrchardId(7), owner()).unwrap()[2].reviewed);
+    assert_eq!(
+        storage
+            .orchard_harvest_windows(OrchardId(7), owner())
+            .unwrap(),
+        windows
+    );
+}
+
+#[test]
+fn a_window_review_rejects_other_periods_parts_and_removed_windows_without_mutation() {
+    let (mut storage, ids) = observations_for_two_windows();
+    let original = storage
+        .orchard_harvest_windows(OrchardId(7), owner())
+        .unwrap();
+    for selection in [vec![ids[0], ids[2]], vec![ids[3]]] {
+        assert_eq!(
+            review_harvest_observations_for_window(
+                review(selection, Some(change(15))),
+                september_window(),
+                &mut storage,
+            ),
+            Err(HarvestObservationReviewError::InvalidObservationSelection)
+        );
+    }
+    let mut removed = september_window();
+    removed.start_day = 2;
+    assert_eq!(
+        review_harvest_observations_for_window(
+            review(vec![ids[0]], Some(change(15))),
+            removed,
+            &mut storage,
+        ),
+        Err(HarvestObservationReviewError::InvalidObservationSelection)
+    );
+    assert_eq!(
+        storage
+            .orchard_harvest_windows(OrchardId(7), owner())
+            .unwrap(),
+        original
+    );
+    assert!(
+        storage
+            .harvest_observations(OrchardId(7), owner())
+            .unwrap()
+            .iter()
+            .all(|point| !point.reviewed)
+    );
+}
+
+#[test]
+fn a_window_review_cannot_add_or_delete_windows() {
+    let (mut storage, ids) = observations_for_two_windows();
+    let original = storage
+        .orchard_harvest_windows(OrchardId(7), owner())
+        .unwrap();
+    for count in [0, 2] {
+        let mut replacement = change(15);
+        replacement.windows = vec![september_window(); count];
+        assert_eq!(
+            review_harvest_observations_for_window(
+                review(vec![ids[0]], Some(replacement)),
+                september_window(),
+                &mut storage,
+            ),
+            Err(HarvestObservationReviewError::InvalidObservationSelection)
+        );
+    }
+    assert_eq!(
+        storage
+            .orchard_harvest_windows(OrchardId(7), owner())
+            .unwrap(),
+        original
+    );
+    assert!(
+        storage
+            .harvest_observations(OrchardId(7), owner())
+            .unwrap()
+            .iter()
+            .all(|point| !point.reviewed)
+    );
+}
+
+#[test]
+fn failed_window_review_rolls_back_the_single_edit_and_review_status() {
+    let (mut storage, ids) = observations_for_two_windows();
+    let original = storage
+        .orchard_harvest_windows(OrchardId(7), owner())
+        .unwrap();
+    let mut storage = storage.with_commit_failure();
+    assert!(
+        review_harvest_observations_for_window(
+            review(ids[..2].to_vec(), Some(change(15))),
+            september_window(),
+            &mut storage,
+        )
+        .is_err()
+    );
+    assert_eq!(
+        storage
+            .orchard_harvest_windows(OrchardId(7), owner())
+            .unwrap(),
+        original
+    );
+    assert!(
+        storage
+            .harvest_observations(OrchardId(7), owner())
+            .unwrap()
+            .iter()
+            .all(|point| !point.reviewed)
+    );
+}
+
+fn september_window() -> AnnualHarvestWindowChanged {
+    change(1).windows[0]
+}
+
+fn observations_for_two_windows() -> (InMemoryOrchardStorage, Vec<u64>) {
+    let (mut storage, mut ids, _) = observations();
+    let mut windows = storage
+        .orchard_harvest_windows(OrchardId(7), owner())
+        .unwrap();
+    windows[0].data_origin = HarvestDataOrigin::ExternalReference;
+    windows[0].source_url = Some("https://example.com/september".into());
+    let mut june = windows[0].clone();
+    june.start.month = 6;
+    june.end.month = 6;
+    june.reference_region = Some("Lyon".into());
+    june.source_url = Some("https://example.com/june".into());
+    let mut flower = windows[0].clone();
+    flower.harvested_part = HarvestedPart::Flower;
+    windows.extend([june, flower]);
+    let mut point = storage.harvest_observations(OrchardId(7), owner()).unwrap()[0].clone();
+    storage
+        .transaction(|storage| {
+            storage.replace_orchard_harvest_windows(OrchardId(7), owner(), windows)?;
+            point.period.start.month = 6;
+            point.period.end.month = 6;
+            point.recorded_on.month = 6;
+            ids.push(storage.save_harvest_observation(point.clone())?);
+            point.period.start.month = 9;
+            point.period.end.month = 9;
+            point.recorded_on.month = 9;
+            point.harvested_parts = vec![HarvestedPart::Flower];
+            ids.push(storage.save_harvest_observation(point)?);
+            Ok::<_, orchard_api::hexagon::ports::OrchardStorageError>(())
+        })
+        .unwrap();
+    (storage, ids)
+}
+
 fn observations() -> (InMemoryOrchardStorage, Vec<u64>, HarvestRunId) {
     let mut storage = fixture::storage_with_fruit_window();
     let run = fixture::start(&mut storage, "2026-09-28").unwrap();

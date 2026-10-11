@@ -621,6 +621,19 @@
         background: white;
         color: #245c2a;
       }
+      #harvest-previous-tree {
+        align-items: center;
+        border-radius: 50%;
+        flex: 0 0 40px;
+        height: 40px;
+        justify-content: center;
+        min-width: 40px;
+        padding: 0;
+        width: 40px;
+      }
+      #harvest-previous-tree:not([hidden]) {
+        display: inline-flex;
+      }
       .harvest-tree-actions {
         display: flex;
         gap: 7px;
@@ -958,6 +971,9 @@
       .harvest-editor-actions {
         display: flex;
         gap: 5px;
+      }
+      .harvest-editor-actions[hidden] {
+        display: none;
       }
       .harvest-editor button {
         border: 1px solid #777;
@@ -1702,6 +1718,9 @@
         #harvest-tree-banner > div:first-child {
           min-width: 0;
         }
+        #harvest-tree-banner > div:first-child {
+          flex: 1;
+        }
         #watering-tree-name,
         #harvest-tree-name {
           font-size: 14px;
@@ -1721,7 +1740,6 @@
         }
         #watering-done,
         #watering-mark-dead,
-        #harvest-previous-tree,
         #harvest-complete-tree,
         #harvest-defer-tree,
         #harvest-extend-window,
@@ -1826,7 +1844,6 @@
       #harvest-review-dialog button:disabled { cursor: default; opacity: 0.6; }
       .harvest-review-points { display: grid; gap: 10px; margin: 16px 0; }
       .harvest-review-point { display: flex; gap: 10px; align-items: start; padding: 10px; background: #f4f7f1; border-radius: 6px; }
-      .harvest-review-point input { margin-top: 3px; flex-shrink: 0; }
       .harvest-review-button { margin-left: 5px; }
       .harvest-review-button[hidden] { display: none; }
       .harvest-tree-actions { flex-wrap: wrap; }
@@ -2104,7 +2121,11 @@
         </div>
       </div>
       <div class="harvest-tree-actions">
-        <button id="harvest-previous-tree" type="button" hidden>Previous tree</button>
+        <button id="harvest-previous-tree" type="button" aria-label="Previous tree" title="Previous tree" hidden>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M20 12H4M10 6l-6 6 6 6" />
+          </svg>
+        </button>
         <button id="harvest-complete-tree" type="button">Tree empty</button>
         <button id="harvest-defer-tree" type="button">Fruit left</button>
       </div>
@@ -2380,8 +2401,8 @@
     </dialog>
     <script type="module">
       import { createHarvestObservationTimeline } from "./harvest-observation-timeline.mjs?v=1";
-      import { remainingFruitVisit, hasWindowObservations, speciesNeedsHarvestReview, harvestVisitLabel, harvestEvidenceLabel, firstRecordedFruit } from "./harvest-visit.mjs?v=2";
-      import { harvestObservationPath, pendingObservationIds, harvestReviewRequest } from "./harvest-review.mjs?v=1";
+      import { remainingFruitVisit, speciesNeedsHarvestReview, harvestVisitLabel, harvestEvidenceLabel, firstRecordedFruit } from "./harvest-visit.mjs?v=2";
+      import { harvestObservationPath, pendingObservationIds, harvestReviewRequest, observationsForHarvestWindow } from "./harvest-review.mjs?v=2";
       import {
         HARVEST_PIN_ICONS,
         harvestPartSelectedByDefault,
@@ -5873,7 +5894,7 @@
           progress.resolved_tree_count ?? progress.handled_tree_count ?? 0;
         const routeRank =
           progress.next_tree.route_rank ?? progress.next_tree.row_rank ?? resolvedCount + 1;
-        harvestTreeProgress.textContent = `${progress.target_label || "Harvest"} · tree ${routeRank} of ${progress.total_tree_count} · ${resolvedCount} done`;
+        harvestTreeProgress.textContent = `Tree ${routeRank} of ${progress.total_tree_count} · ${resolvedCount} done`;
         harvestTreeBanner.hidden = false;
         harvestTreeError.textContent = "";
         harvestTreeError.hidden = true;
@@ -6454,14 +6475,17 @@
         container.className = "harvest-schedule-window";
         const entries = harvestWindowPresentations(windows);
         if (entries.length === 0) container.textContent = "Not set";
-        for (const { dates, origin } of entries) {
+        for (const [index, { dates, origin }] of entries.entries()) {
           const entry = document.createElement("span");
           entry.className = "harvest-window-entry";
           entry.textContent = dates;
           if (origin) entry.append(createHarvestWindowOrigin(origin));
+          if (schedule && currentAccess.orchardId) {
+            const window = schedule.harvestWindows.filter((window) => window?.start && window?.end)[index];
+            entry.append(createHarvestReviewButton(schedule, window));
+          }
           container.append(entry);
         }
-        if (schedule && currentAccess.orchardId) container.append(createHarvestReviewButton(schedule));
         return container;
       }
 
@@ -6471,13 +6495,12 @@
       document.getElementById("harvest-review-close").addEventListener("click", () => harvestReviewDialog.close());
       harvestReviewDialog.addEventListener("close", () => { harvestReviewSession += 1; });
 
-      function createHarvestReviewButton(schedule) {
+      function createHarvestReviewButton(schedule, window) {
         const button = document.createElement("button");
-        button.hidden = true;
-        button.hidden = !hasWindowObservations(orchardHarvestObservations, schedule);
+        button.hidden = observationsForHarvestWindow(orchardHarvestObservations, schedule, window).length === 0;
         button.type = "button";
         button.className = "harvest-origin-button harvest-review-button";
-        button.title = `Review harvest observations for ${schedule.label}`;
+        button.title = `Review harvest observations for ${schedule.label} · ${window.start} → ${window.end} · ${window.harvested_part || "fruit"}`;
         button.setAttribute("aria-label", button.title);
         button.setAttribute("aria-haspopup", "dialog");
         const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -6490,7 +6513,7 @@
         path.setAttribute("d", "M9 4H5v17h14V4h-4 M9 2h6v5H9Z M8 12l2 2 5-5 M8 18h8");
         icon.append(path);
         button.append(icon);
-        button.addEventListener("click", () => showHarvestReview(schedule));
+        button.addEventListener("click", () => showHarvestReview(schedule, window));
         return button;
       }
 
@@ -6514,10 +6537,10 @@
         if (!harvestReviewDialog.open) harvestReviewDialog.showModal();
       }
 
-      async function showHarvestReview(schedule) {
+      async function showHarvestReview(schedule, window) {
         const session = ++harvestReviewSession;
         const access = currentAccess;
-        document.getElementById("harvest-review-title").textContent = `Harvest observations · ${schedule.label}`;
+        document.getElementById("harvest-review-title").textContent = `Harvest observations · ${schedule.label} · ${window.start} → ${window.end} · ${window.harvested_part || "fruit"}`;
         harvestReviewContent.textContent = "Loading observations…";
         if (!harvestReviewDialog.open) harvestReviewDialog.showModal();
         try {
@@ -6527,36 +6550,26 @@
           if (!response.ok) throw new Error("Could not load harvest observations. Please try again.");
           const points = await response.json();
           if (session !== harvestReviewSession || currentAccess !== access) return;
-          renderHarvestReview(schedule, points, access);
+          renderHarvestReview(schedule, window, observationsForHarvestWindow(points, schedule, window), access);
         } catch (error) {
           if (session === harvestReviewSession) harvestReviewContent.textContent = error.message;
         }
       }
 
-      function renderHarvestReview(schedule, points, access) {
+      function renderHarvestReview(schedule, window, points, access) {
         const reviewSession = harvestReviewSession;
         const pending = pendingObservationIds(points);
-        const selected = new Set(pending);
         const summary = document.createElement("p");
-        summary.textContent = `${pending.length} unreviewed observation${pending.length === 1 ? "" : "s"}. Select the points to review. Closing leaves them unreviewed.`;
-        const currentWindows = document.createElement("p");
-        currentWindows.textContent = `Current windows: ${formatHarvestWindows(schedule.harvestWindows)}`;
+        summary.textContent = `${pending.length} unreviewed observation${pending.length === 1 ? "" : "s"} for this window. Closing leaves them unreviewed.`;
+        const currentWindow = document.createElement("p");
+        currentWindow.textContent = `Current window: ${window.start} → ${window.end} · ${window.harvested_part || "fruit"}`;
         const list = document.createElement("div");
         list.className = "harvest-review-points";
-        if (!points.length) list.textContent = "No harvest observations for this species or cultivar yet.";
+        if (!points.length) list.textContent = "No harvest observations for this window yet.";
         const canReview = isEditable();
         for (const point of [...points].reverse()) {
-          const label = document.createElement("label");
-          label.className = "harvest-review-point";
-          const checkbox = document.createElement("input");
-          checkbox.type = "checkbox";
-          checkbox.checked = !point.reviewed;
-          checkbox.disabled = point.reviewed || !canReview;
-          checkbox.setAttribute("aria-label", `Select observation ${point.id}`);
-          checkbox.addEventListener("change", () => {
-            if (checkbox.checked) selected.add(point.id); else selected.delete(point.id);
-            keep.disabled = update.disabled = selected.size === 0;
-          });
+          const entry = document.createElement("div");
+          entry.className = "harvest-review-point";
           const text = document.createElement("span");
           const name = orchardFeatures.find((feature) => String(feature.id) === String(point.tree_id))?.properties?.name;
           text.textContent = `${name || "Tree"} #${point.tree_id} · ${harvestVisitLabel(point)} · ${harvestPartsLabel(point.harvested_parts)} · Tour #${point.harvest_run_id}${point.reviewed ? " · Reviewed" : " · Unreviewed"}`;
@@ -6568,8 +6581,8 @@
           const timeline = createHarvestObservationTimeline(point);
           if (timeline) details.append(timeline);
           details.append(evidence);
-          label.append(checkbox, details);
-          list.append(label);
+          entry.append(details);
+          list.append(entry);
         }
         const error = document.createElement("p");
         error.className = "workflow-error";
@@ -6579,57 +6592,54 @@
         actions.className = "harvest-editor-actions";
         const keep = document.createElement("button");
         keep.type = "button";
-        keep.textContent = "Keep windows and mark reviewed";
+        keep.textContent = "Keep window and mark reviewed";
         const update = document.createElement("button");
         update.type = "button";
-        update.textContent = "Update windows…";
+        update.textContent = "Edit this window…";
         keep.disabled = update.disabled = pending.length === 0;
         const editor = document.createElement("div");
         editor.hidden = true;
         if (canReview) actions.append(keep, update);
         keep.addEventListener("click", async () => {
           keep.disabled = update.disabled = true;
-          list.querySelectorAll("input").forEach((input) => { input.disabled = true; });
           error.hidden = true;
           try {
-            await submitHarvestReview(schedule, [...selected], null, access);
-            if (reviewSession === harvestReviewSession && harvestReviewDialog.open) await showHarvestReview(schedule);
+            await submitHarvestReview(schedule, window, pending, null, access);
+            if (reviewSession === harvestReviewSession && harvestReviewDialog.open) await showHarvestReview(schedule, window);
           } catch (requestError) {
             if (reviewSession !== harvestReviewSession) return;
             error.textContent = requestError.message;
             error.hidden = false;
-            keep.disabled = update.disabled = selected.size === 0;
-            list.querySelectorAll("input").forEach((input, index) => { input.disabled = [...points].reverse()[index].reviewed; });
+            keep.disabled = update.disabled = pending.length === 0;
           }
         });
         update.addEventListener("click", () => {
-          const ids = [...selected];
           actions.hidden = true;
-          list.querySelectorAll("input").forEach((input) => { input.disabled = true; });
           editor.hidden = false;
-          showHarvestEditor(editor, schedule, {
-            title: "Update windows and review selected observations",
-            saveLabel: "Update windows and mark reviewed",
+          showHarvestEditor(editor, { ...schedule, harvestWindows: [window] }, {
+            title: "Edit this harvest window",
+            saveLabel: "Save window and mark reviewed",
+            singleWindow: true,
             refreshAfterSave: false,
-            restore: () => renderHarvestReview(schedule, points, access),
+            restore: () => renderHarvestReview(schedule, window, points, access),
             onSave: async (_, referenceRegion, windows) => {
-              await submitHarvestReview(schedule, ids, { reference_region: referenceRegion, windows }, access);
+              await submitHarvestReview(schedule, window, pending, { reference_region: referenceRegion, windows }, access);
               if (reviewSession === harvestReviewSession) harvestReviewDialog.close();
               await loadOrchardTrees();
             },
           });
         });
-        harvestReviewContent.replaceChildren(summary, currentWindows, list, error, actions, editor);
+        harvestReviewContent.replaceChildren(summary, currentWindow, list, error, actions, editor);
       }
 
-      async function submitHarvestReview(schedule, ids, windowChange, access) {
+      async function submitHarvestReview(schedule, window, ids, windowChange, access) {
         if (currentAccess !== access || !isEditable()) throw new Error("Orchard access changed. Reopen the review.");
         const response = await fetch(orchardResourceUrl(access, harvestObservationPath(schedule)), {
           method: "POST",
           headers: { "content-type": "application/json", ...accessHeaders(access) },
-          body: JSON.stringify(harvestReviewRequest(ids, windowChange)),
+          body: JSON.stringify(harvestReviewRequest(ids, windowChange, window)),
         });
-        if (response.status === 409) throw new Error("Some observations were already reviewed or undone. Close and reopen the review.");
+        if (response.status === 409) throw new Error("This window or its observations changed. Close and reopen the review.");
         if (!response.ok) throw new Error("Could not save the review. Check the dates and try again.");
         await loadHarvestObservations();
       }
@@ -6646,10 +6656,6 @@
         if (schedule) {
           children.push(createHarvestWindows(schedule.harvestWindows, { ...schedule, label: speciesSummary.taxonName }));
         }
-        if (!schedule && currentAccess.orchardId) children.push(createHarvestReviewButton({
-          plantIdentityId: speciesSummary.plantIdentityId, cultivarId: null,
-          label: speciesSummary.taxonName, harvestWindows: [],
-        }));
         const actions = document.createElement("div");
         actions.className = "inventory-species-actions";
         if (schedule && isEditable()) {
@@ -6741,7 +6747,8 @@
         scheduleRow,
         schedule,
         { restore = renderHarvestSchedule, title: editorTitle = schedule.label,
-          onSave = updateHarvestWindows, saveLabel = "OK", refreshAfterSave = true } = {},
+          onSave = updateHarvestWindows, saveLabel = "OK", refreshAfterSave = true,
+          singleWindow = false } = {},
       ) {
         const form = document.createElement("form");
         form.className = "harvest-editor";
@@ -6782,15 +6789,9 @@
         save.type = "submit";
         save.textContent = saveLabel;
         actions.append(cancel, save);
-        form.append(
-          title,
-          referenceRegion,
-          windowList,
-          addWindow,
-          clearHint,
-          error,
-          actions,
-        );
+        form.append(title, referenceRegion, windowList);
+        if (!singleWindow) form.append(addWindow, clearHint);
+        form.append(error, actions);
 
         function addHarvestWindowRow(window = {}) {
           const editor = {
@@ -6815,8 +6816,8 @@
             editor.startInput.label,
             editor.endInput.label,
             editor.harvestedPartInput.label,
-            remove,
           );
+          if (!singleWindow) editor.row.append(remove);
           windowEditors.push(editor);
           windowList.append(editor.row);
           editor.startInput.input.focus();

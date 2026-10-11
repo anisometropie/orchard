@@ -2455,6 +2455,8 @@ async fn harvesters_collect_observations_but_only_the_owner_can_review_and_chang
     );
     let windows = serde_json::json!({ "reference_region": "France", "windows": [{
         "start": { "month": 9, "day": 1 }, "end": { "month": 9, "day": 30 }, "harvested_part": "fruit"
+    }, {
+        "start": { "month": 6, "day": 1 }, "end": { "month": 6, "day": 30 }, "harvested_part": "fruit"
     }] });
     assert_eq!(
         client
@@ -2512,9 +2514,12 @@ async fn harvesters_collect_observations_but_only_the_owner_can_review_and_chang
     assert_eq!(points[0]["recorded_on"], "2026-09-28");
     assert_eq!(points[0]["window_end"], "2026-09-30");
     assert_eq!(points[0]["reviewed"], false);
+    let selected_window = windows["windows"][0].clone();
     let mut changed_windows = windows;
+    changed_windows["windows"] = serde_json::json!([selected_window]);
+    changed_windows["reference_region"] = serde_json::json!("Paris");
     changed_windows["windows"][0]["start"]["day"] = serde_json::json!(15);
-    let review = serde_json::json!({ "observation_ids": [points[0]["id"]], "window_change": changed_windows });
+    let review = serde_json::json!({ "observation_ids": [points[0]["id"]], "window": selected_window, "window_change": changed_windows });
     assert_eq!(
         client
             .post(&review_url)
@@ -2525,6 +2530,19 @@ async fn harvesters_collect_observations_but_only_the_owner_can_review_and_chang
             .unwrap()
             .status(),
         StatusCode::FORBIDDEN
+    );
+    let mut wrong_window = review.clone();
+    wrong_window["window"]["start"]["day"] = serde_json::json!(2);
+    assert_eq!(
+        client
+            .post(&review_url)
+            .header(header::COOKIE, &cookie)
+            .json(&wrong_window)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
     );
     assert_eq!(
         client
@@ -2567,10 +2585,21 @@ async fn harvesters_collect_observations_but_only_the_owner_can_review_and_chang
         .json::<serde_json::Value>()
         .await
         .unwrap();
-    assert_eq!(
-        map["features"][0]["properties"]["harvest_windows"][0]["start"],
-        "09-15"
-    );
+    let saved_windows = map["features"][0]["properties"]["harvest_windows"]
+        .as_array()
+        .unwrap();
+    assert_eq!(saved_windows.len(), 2);
+    let edited = saved_windows
+        .iter()
+        .find(|window| window["start"] == "09-15")
+        .unwrap();
+    assert_eq!(edited["reference_region"], "Paris");
+    let other = saved_windows
+        .iter()
+        .find(|window| window["start"] == "06-01")
+        .unwrap();
+    assert_eq!(other["end"], "06-30");
+    assert_eq!(other["reference_region"], "France");
     let history = client
         .get(format!("{}/orchards/7/run-history", server.url()))
         .header(header::COOKIE, &cookie)
