@@ -1327,6 +1327,13 @@
         display: none;
       }
       @media (max-width: 620px) {
+        .harvest-tree-actions .harvest-action-label-end {
+          display: block;
+        }
+        #harvest-complete-tree,
+        #harvest-defer-tree {
+          padding-inline: 19px;
+        }
         #map-toolbar {
           left: 10px;
           top: 10px;
@@ -1752,6 +1759,10 @@
           min-height: 40px;
           min-width: 0;
           padding: 5px 8px;
+        }
+        #harvest-complete-tree,
+        #harvest-defer-tree {
+          padding-inline: 13px;
         }
         #watering-done {
           flex: 0 0 auto;
@@ -2286,8 +2297,8 @@
             <path d="M20 12H4M10 6l-6 6 6 6" />
           </svg>
         </button>
-        <button id="harvest-complete-tree" type="button">Tree empty</button>
-        <button id="harvest-defer-tree" type="button">Fruit left</button>
+        <button id="harvest-complete-tree" type="button">Tree <span class="harvest-action-label-end">empty</span></button>
+        <button id="harvest-defer-tree" type="button">Fruit <span class="harvest-action-label-end">left</span></button>
       </div>
       <div id="harvest-visit-details" hidden>
         <div id="harvest-empty-choices" hidden>
@@ -6076,7 +6087,8 @@
           progress.resolved_tree_count ?? progress.handled_tree_count ?? 0;
         const routeRank =
           progress.next_tree.route_rank ?? progress.next_tree.row_rank ?? resolvedCount + 1;
-        harvestTreeProgress.textContent = `Tree ${routeRank} of ${progress.total_tree_count} · ${resolvedCount} done`;
+        const partsLabel = harvestPartsLabel(progress.next_tree.harvested_parts);
+        harvestTreeProgress.textContent = `${partsLabel} · Tree ${routeRank} of ${progress.total_tree_count} · ${resolvedCount} done`;
         harvestTreeBanner.hidden = false;
         harvestTreeError.textContent = "";
         harvestTreeError.hidden = true;
