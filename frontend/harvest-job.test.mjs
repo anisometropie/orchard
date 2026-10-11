@@ -226,6 +226,7 @@ function harvestPartFiltersDisabledAfterCompletion() {
     clearHarvestRouteSources() {},
     clearHarvestExtensionDecision() {},
     clearHarvestVisitDraft() {},
+    resetHarvestCameraMode() {},
     refreshHarvestJobControls() {},
     renderMapMode() {},
     layoutMapControls() {},

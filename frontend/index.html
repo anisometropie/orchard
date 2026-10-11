@@ -638,7 +638,8 @@
         display: flex;
         gap: 7px;
       }
-      #watering-zoom-controls {
+      #watering-zoom-controls,
+      #harvest-zoom-controls {
         display: none;
       }
       .map-mode-switch {
@@ -1801,7 +1802,8 @@
           font-size: 11px;
           max-width: 210px;
         }
-        #watering-zoom-controls:not([hidden]) {
+        #watering-zoom-controls:not([hidden]),
+        #harvest-zoom-controls:not([hidden]) {
           bottom: max(18px, env(safe-area-inset-bottom));
           display: grid;
           gap: 12px;
@@ -1811,7 +1813,8 @@
           transform: translateX(-50%);
           z-index: 45;
         }
-        #watering-zoom-controls button {
+        #watering-zoom-controls button,
+        #harvest-zoom-controls button {
           align-items: center;
           background: rgba(255, 255, 255, 0.98);
           border: 2px solid #245c2a;
@@ -1826,7 +1829,8 @@
           padding: 0 0 4px;
           width: 64px;
         }
-        #watering-zoom-controls button[aria-pressed="true"] {
+        #watering-zoom-controls button[aria-pressed="true"],
+        #harvest-zoom-controls button[aria-pressed="true"] {
           background: #245c2a;
           color: white;
         }
@@ -2339,6 +2343,24 @@
         −
       </button>
     </div>
+    <div id="harvest-zoom-controls" role="group" aria-label="Harvest map zoom" hidden>
+      <button
+        id="harvest-zoom-close"
+        type="button"
+        aria-label="Close view, about 10 metres"
+        aria-pressed="false"
+      >
+        +
+      </button>
+      <button
+        id="harvest-zoom-wide"
+        type="button"
+        aria-label="Wide orchard view"
+        aria-pressed="true"
+      >
+        −
+      </button>
+    </div>
     <div id="top-right-controls">
       <button
         id="mobile-top-right-menu-toggle"
@@ -2838,6 +2860,9 @@
       let wateringCameraMode = "wide";
       let wateringWideZoomLevel = null;
       let wateringCameraFrame = null;
+      let harvestCameraMode = "wide";
+      let harvestWideZoomLevel = null;
+      let harvestCameraFrame = null;
       let harvestProgress = null;
       let harvestRoute = [];
       let harvestUndoRunId = null;
@@ -3019,6 +3044,9 @@
         "harvest-tree-progress",
       );
       const harvestTreeError = document.getElementById("harvest-tree-error");
+      const harvestZoomControls = document.getElementById("harvest-zoom-controls");
+      const harvestZoomClose = document.getElementById("harvest-zoom-close");
+      const harvestZoomWide = document.getElementById("harvest-zoom-wide");
       const harvestExtensionDecision = document.getElementById(
         "harvest-extension-decision",
       );
@@ -5054,8 +5082,12 @@
       }
 
       function wateringCameraPadding() {
+        return tourCameraPadding(wateringTreeBanner, wateringZoomControls);
+      }
+
+      function tourCameraPadding(treeBanner, zoomControls) {
         const pinHeight = 54 * 1.55;
-        const bannerBottom = wateringTreeBanner.getBoundingClientRect().bottom;
+        const bannerBottom = treeBanner.getBoundingClientRect().bottom;
         if (!compactMobileLayout.matches) {
           const topPadding = Math.max(
             0,
@@ -5066,9 +5098,9 @@
           );
           return { top: topPadding, right: 0, bottom: 0, left: 0 };
         }
-        const zoomControlHeight = wateringZoomControls.hidden
+        const zoomControlHeight = zoomControls.hidden
           ? 0
-          : wateringZoomControls.getBoundingClientRect().height;
+          : zoomControls.getBoundingClientRect().height;
         return {
           top: Math.ceil(bannerBottom + 20 + pinHeight),
           right: 20,
@@ -5077,7 +5109,8 @@
         };
       }
 
-      function baseWateringWideZoom(padding) {
+      function baseTourWideZoom(padding) {
+        const minimumWideZoom = Math.min(20, map.getMaxZoom());
         const coordinates = orchardFeatures
           .map((feature) => feature.geometry?.coordinates)
           .filter(
@@ -5090,19 +5123,22 @@
             Number(longitude),
             Number(latitude),
           ]);
-        if (coordinates.length < 2) return Math.min(map.getZoom(), 20);
+        if (coordinates.length < 2) return minimumWideZoom;
         const bounds = coordinates.slice(1).reduce(
           (currentBounds, coordinate) => currentBounds.extend(coordinate),
           new maplibregl.LngLatBounds(coordinates[0], coordinates[0]),
         );
         const fittedCamera = map.cameraForBounds(bounds, { padding });
-        if (!fittedCamera) return Math.min(map.getZoom(), 20);
-        return Math.min(fittedCamera.zoom + Math.log2(2.25), map.getMaxZoom());
+        if (!fittedCamera) return minimumWideZoom;
+        return Math.min(
+          Math.max(minimumWideZoom, fittedCamera.zoom + Math.log2(2.25)),
+          map.getMaxZoom(),
+        );
       }
 
       function wideWateringZoom(padding, source, tree) {
         const baseZoom =
-          wateringWideZoomLevel ??= baseWateringWideZoom(padding);
+          wateringWideZoomLevel ??= baseTourWideZoom(padding);
         const mapBounds = map.getCanvas().getBoundingClientRect();
         return adaptiveWateringWideZoom({
           baseZoom,
@@ -5114,7 +5150,7 @@
         });
       }
 
-      function closeWateringZoom(latitude, padding) {
+      function closeTourZoom(latitude, padding) {
         const usableWidth = Math.max(
           160,
           window.innerWidth - padding.left - padding.right,
@@ -5146,7 +5182,7 @@
           compactMobileLayout.matches && wateringCameraMode === "wide";
         const zoom = compactMobileLayout.matches
           ? wateringCameraMode === "close"
-            ? closeWateringZoom(tree.latitude, padding)
+            ? closeTourZoom(tree.latitude, padding)
             : wideWateringZoom(padding, wateringSource, tree)
           : Math.max(map.getZoom(), 21);
         map.easeTo({
@@ -5911,13 +5947,71 @@
           );
         renderMapMode();
         if (refocus && harvestProgress?.next_tree) {
-          requestAnimationFrame(() => focusCurrentHarvestTree(cameraDuration));
+          applyHarvestCameraMode(harvestCameraMode, {
+            duration: cameraDuration,
+            afterLayout: true,
+          });
         }
+      }
+
+      function renderHarvestCameraMode() {
+        harvestZoomClose.setAttribute("aria-pressed", String(harvestCameraMode === "close"));
+        harvestZoomWide.setAttribute("aria-pressed", String(harvestCameraMode === "wide"));
+      }
+
+      function resetHarvestCameraMode() {
+        harvestCameraMode = "wide";
+        harvestWideZoomLevel = null;
+        if (harvestCameraFrame != null) {
+          cancelAnimationFrame(harvestCameraFrame);
+          harvestCameraFrame = null;
+        }
+        harvestZoomControls.hidden = true;
+        renderHarvestCameraMode();
+      }
+
+      function applyHarvestCameraMode(
+        mode,
+        { duration = 450, afterLayout = false } = {},
+      ) {
+        harvestCameraMode = mode;
+        renderHarvestCameraMode();
+        if (harvestCameraFrame != null) {
+          cancelAnimationFrame(harvestCameraFrame);
+          harvestCameraFrame = null;
+        }
+        const applyCamera = () => {
+          harvestCameraFrame = null;
+          if (!harvestProgress?.next_tree) return;
+          map.stop();
+          focusCurrentHarvestTree(duration);
+        };
+        if (!afterLayout) {
+          applyCamera();
+          return;
+        }
+        harvestCameraFrame = requestAnimationFrame(() => {
+          harvestCameraFrame = requestAnimationFrame(applyCamera);
+        });
       }
 
       function focusCurrentHarvestTree(duration = 650) {
         const tree = harvestProgress?.next_tree;
         if (!tree) return;
+        if (compactMobileLayout.matches) {
+          const padding = tourCameraPadding(harvestTreeBanner, harvestZoomControls);
+          const zoom = harvestCameraMode === "close"
+            ? closeTourZoom(tree.latitude, padding)
+            : (harvestWideZoomLevel ??= baseTourWideZoom(padding));
+          map.easeTo({
+            center: [tree.longitude, tree.latitude],
+            zoom,
+            duration,
+            padding,
+            retainPadding: false,
+          });
+          return;
+        }
         const top = Math.max(
           0,
           Math.min(
@@ -6014,6 +6108,7 @@
       ) {
         harvestProgress = null;
         harvestRoute = [];
+        resetHarvestCameraMode();
         if (!preserveUndo) harvestUndoRunId = null;
         clearHarvestExtensionDecision();
         clearHarvestVisitDraft();
@@ -6043,6 +6138,10 @@
       }
 
       function showHarvestProgress(progress, { cameraDuration = 650 } = {}) {
+        if (progress?.next_tree &&
+            (!harvestProgress || progress.run_id !== harvestProgress.run_id)) {
+          resetHarvestCameraMode();
+        }
         harvestProgress = progress?.next_tree ? progress : null;
         harvestRoute = progress?.route || [];
         if (!progress?.next_tree) {
@@ -6090,6 +6189,8 @@
         const partsLabel = harvestPartsLabel(progress.next_tree.harvested_parts);
         harvestTreeProgress.textContent = `${partsLabel} · Tree ${routeRank} of ${progress.total_tree_count} · ${resolvedCount} done`;
         harvestTreeBanner.hidden = false;
+        harvestZoomControls.hidden = false;
+        renderHarvestCameraMode();
         harvestTreeError.textContent = "";
         harvestTreeError.hidden = true;
         harvestPreviousTree.hidden = harvestUndoRunId == null;
@@ -7466,6 +7567,7 @@
         wateringTreeBanner.hidden = true;
         wateringZoomControls.hidden = true;
         harvestTreeBanner.hidden = true;
+        resetHarvestCameraMode();
         clearHarvestRouteSources();
         renderWateringCameraMode();
         wateringMenuStatus.hidden = true;
@@ -7615,6 +7717,7 @@
           clearHarvestExtensionDecision();
           clearHarvestVisitDraft();
           harvestTreeBanner.hidden = true;
+          resetHarvestCameraMode();
           clearHarvestRouteSources();
         }
         loginToggle.hidden = loggedIn;
@@ -8359,6 +8462,12 @@
       });
       wateringZoomWide.addEventListener("click", () => {
         applyWateringCameraMode("wide");
+      });
+      harvestZoomClose.addEventListener("click", () => {
+        applyHarvestCameraMode("close");
+      });
+      harvestZoomWide.addEventListener("click", () => {
+        applyHarvestCameraMode("wide");
       });
       rowOrderToggle.addEventListener("click", () => {
         setWorkflowPanel(rowOrderPanel.hidden ? rowOrderPanel : null);
