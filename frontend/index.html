@@ -517,6 +517,26 @@
       .history-tree-list li {
         line-height: 1.35;
       }
+      .history-tree-heading {
+        align-items: center;
+        display: flex;
+        gap: 6px;
+        justify-content: space-between;
+      }
+      #history-panel .history-legacy-action {
+        align-items: center;
+        background: transparent;
+        border: 0;
+        color: #245c2a;
+        display: inline-flex;
+        flex: 0 0 28px;
+        height: 28px;
+        justify-content: center;
+        margin: 0;
+        min-height: 28px;
+        padding: 4px;
+        width: 28px;
+      }
       .history-tree-detail {
         color: #555;
         display: block;
@@ -4094,7 +4114,7 @@
               button.setAttribute("aria-label", button.title);
               button.setAttribute("aria-haspopup", "dialog");
               button.append(createInventoryActionIcon("review"));
-              button.addEventListener("click", () => showStandaloneHarvestObservation(feature));
+              button.addEventListener("click", () => showHarvestObservation(feature));
               actions.append(button);
             } else if (action === "filter") {
               const selection = speciesFilterSelection(properties);
@@ -6809,12 +6829,12 @@
       document.getElementById("harvest-observation-close").addEventListener("click", () => harvestObservationDialog.close());
       harvestObservationDialog.addEventListener("close", () => { harvestObservationSession += 1; });
 
-      function showStandaloneHarvestObservation(feature) {
-        if (!canHarvestOrchard(currentAccess)) return;
+      function showHarvestObservation(feature, legacyVisit = null) {
+        if (legacyVisit ? !isEditable() : !canHarvestOrchard(currentAccess)) return;
         const access = currentAccess;
         const session = ++harvestObservationSession;
         closeTreeTooltip();
-        document.getElementById("harvest-observation-title").textContent = `Harvest observation · ${feature.properties.name || "Tree"} #${feature.id}`;
+        document.getElementById("harvest-observation-title").textContent = `${legacyVisit ? "Classify legacy observation" : "Harvest observation"} · ${feature.properties.name || "Tree"} #${feature.id}`;
         const form = document.createElement("form");
         form.className = "harvest-observation-form";
         function field(text, type) {
@@ -6829,8 +6849,11 @@
         }
         const date = field("Observation date", "date");
         date.input.required = true;
-        date.input.value = localIsoDate();
+        date.input.value = legacyVisit?.tree.outcome.recorded_on || localIsoDate();
+        date.label.hidden = !!legacyVisit;
         const part = harvestedPartInput("Harvested part", normalizeHarvestWindows(feature.properties.harvest_windows)[0]?.harvested_part || "fruit");
+        if (legacyVisit) part.input.value = legacyVisit.tree.harvested_parts[0];
+        part.label.hidden = !!legacyVisit;
         form.append(part.label);
         const period = field("Harvest period", "select");
         const year = field("Season start year", "number");
@@ -6891,7 +6914,18 @@
           updatePeriodHint();
         });
         year.input.addEventListener("input", updatePeriodHint);
-        updatePeriodChoices();
+        if (legacyVisit) {
+          period.label.hidden = year.label.hidden = periodHint.hidden = true;
+          const original = document.createElement("p");
+          original.className = "workflow-help";
+          original.textContent = `${harvestOutcomeLabel(legacyVisit.tree.outcome)} · Tour #${legacyVisit.runId} · ${harvestPartsLabel(legacyVisit.tree.harvested_parts)} · window ${legacyVisit.tree.window_start} to ${legacyVisit.tree.window_end}`;
+          const hint = document.createElement("p");
+          hint.className = "workflow-help";
+          hint.textContent = "Choose what you observed on that visit. The original tour entry is kept.";
+          form.prepend(original, hint);
+        } else {
+          updatePeriodChoices();
+        }
         const kind = field("Observation", "select");
         for (const [value, text] of [["fruit_remaining", "Still on tree"], ["harvested_all", "Harvested all"], ["empty_on_arrival", "Empty on arrival"], ["all_wasted", "All wasted"]]) {
           const option = document.createElement("option");
@@ -6899,7 +6933,20 @@
           option.textContent = text;
           kind.input.append(option);
         }
+        if (legacyVisit) {
+          kind.input.required = true;
+          if (legacyVisit.tree.outcome.kind === "harvested_everything") {
+            kind.input.value = "harvested_all";
+          } else {
+            const placeholder = document.createElement("option");
+            placeholder.value = "";
+            placeholder.textContent = "Choose an observation";
+            kind.input.prepend(placeholder);
+            kind.input.value = "";
+          }
+        }
         const facts = document.createElement("fieldset");
+        facts.hidden = kind.input.value !== "fruit_remaining";
         const legend = document.createElement("legend");
         legend.textContent = "What remains?";
         facts.append(legend);
@@ -6933,21 +6980,26 @@
           if (save.disabled) return;
           error.hidden = true;
           try {
-            if (currentAccess !== access || !canHarvestOrchard(access)) throw new Error("Orchard access changed. Reopen the observation.");
-            const request = standaloneObservationRequest({
+            if (currentAccess !== access || (legacyVisit ? !isEditable() : !canHarvestOrchard(access))) throw new Error("Orchard access changed. Reopen the observation.");
+            const visitRequest = standaloneObservationRequest({
               recordedOn: date.input.value, part: part.input.value, kind: kind.input.value,
               fruitState: Object.fromEntries(Object.entries(fruitInputs).map(([key, input]) => [key, input.checked])),
               window: windows[Number(period.input.value)] || null, startYear: year.input.value,
             });
+            const request = legacyVisit ? { kind: visitRequest.kind, ...(visitRequest.fruit_state ? { fruit_state: visitRequest.fruit_state } : {}) } : visitRequest;
+            const path = legacyVisit ? `harvest-runs/${legacyVisit.runId}/trees/${feature.id}/legacy-observation` : `trees/${feature.id}/harvest-observations`;
             save.disabled = true;
             save.textContent = "Saving…";
-            const response = await fetch(orchardResourceUrl(access, `trees/${feature.id}/harvest-observations`), {
+            const response = await fetch(orchardResourceUrl(access, path), {
               method: "POST", headers: { "content-type": "application/json", ...accessHeaders(access) }, body: JSON.stringify(request),
             });
-            if (response.status === 409) throw new Error("This harvest period changed. Reopen the tree and record again.");
+            if (response.status === 409) throw new Error(legacyVisit ? "This visit already has an observation or changed. Reopen the run history." : "This harvest period changed. Reopen the tree and record again.");
             if (!response.ok) throw new Error("Could not save the observation. Check the date and try again.");
             if (session === harvestObservationSession && currentAccess === access) harvestObservationDialog.close();
-            if (currentAccess === access) loadHarvestObservations().catch(console.error);
+            if (currentAccess === access) {
+              loadHarvestObservations().catch(console.error);
+              if (legacyVisit) loadRunHistory();
+            }
           } catch (requestError) {
             if (session !== harvestObservationSession || currentAccess !== access) return;
             error.textContent = requestError.message;
@@ -8335,6 +8387,7 @@
         const cards = runs.map((run) => {
           const card = document.createElement("details");
           card.className = "history-run";
+          card.dataset.runId = String(run.run_id);
           const summary = document.createElement("summary");
           summary.textContent = `#${run.run_id} · ${run.target_label} · ${harvestRunStatus(run)} · ${historyDateTime(run.completed_at_unix_seconds)}`;
           const meta = document.createElement("div");
@@ -8343,12 +8396,32 @@
           const trees = document.createElement("ol");
           trees.className = "history-tree-list";
           trees.append(
-            ...visibleHarvestTrees(run).map((tree) =>
-              historyTreeItem(tree.name, [
+            ...visibleHarvestTrees(run).map((tree) => {
+              const item = historyTreeItem(tree.name, [
                 harvestOutcomeLabel(tree.outcome),
                 `${harvestPartsLabel(tree.harvested_parts)} · window ${tree.window_start} to ${tree.window_end}`,
-              ]),
-            ),
+                ...(tree.observation ? [`classified as: ${harvestVisitLabel(tree.observation)}`] : []),
+              ]);
+              if (isEditable() && tree.needs_legacy_classification) {
+                const classify = document.createElement("button");
+                classify.type = "button";
+                classify.className = "secondary history-legacy-action";
+                classify.append(createInventoryActionIcon("review"));
+                classify.title = "Classify legacy observation";
+                classify.setAttribute("aria-label", `Classify legacy observation for ${tree.name} #${tree.tree_id}`);
+                classify.setAttribute("aria-haspopup", "dialog");
+                classify.addEventListener("click", () => {
+                  const feature = orchardFeatures.find((feature) => String(feature.id) === String(tree.tree_id)) || { id: tree.tree_id, properties: { name: tree.name, harvest_windows: [] } };
+                  showHarvestObservation(feature, { runId: run.run_id, tree });
+                });
+                const heading = document.createElement("span");
+                heading.className = "history-tree-heading";
+                const title = item.querySelector("strong");
+                title.replaceWith(heading);
+                heading.append(title, classify);
+              }
+              return item;
+            }),
           );
           card.append(summary, meta, trees);
           return card;
@@ -8358,6 +8431,8 @@
 
       async function loadRunHistory() {
         if (!isEditable()) return;
+        const access = currentAccess;
+        const expanded = new Set([...harvestHistoryList.querySelectorAll("details[open][data-run-id]")].map((card) => card.dataset.runId));
         historyError.hidden = true;
         historyStatus.textContent = "Loading run history…";
         historyStatus.hidden = false;
@@ -8370,8 +8445,10 @@
           );
           if (!response.ok) throw new Error("Could not load run history.");
           const history = await response.json();
+          if (currentAccess !== access) return;
           renderWateringHistory(history.watering_runs || []);
           renderHarvestHistory(history.harvest_runs || []);
+          harvestHistoryList.querySelectorAll("details[data-run-id]").forEach((card) => { card.open = expanded.has(card.dataset.runId); });
           historyStatus.hidden = true;
         } catch (error) {
           historyError.textContent = error.message;

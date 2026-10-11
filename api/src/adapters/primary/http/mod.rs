@@ -1,3 +1,7 @@
+use crate::hexagon::use_cases::classify_legacy_harvest_observation::{
+    LegacyHarvestObservationClassified, LegacyHarvestObservationError,
+    classify_legacy_harvest_observation,
+};
 use crate::hexagon::models::{
     HarvestFruitState, HarvestObservation, HarvestObservationKind, harvest_window_evidence,
 };
@@ -308,6 +312,10 @@ where
         .route(
             "/orchards/{orchard_id}/harvest-runs/{harvest_run_id}/observations",
             post(record_harvest_observation_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-runs/{harvest_run_id}/trees/{tree_id}/legacy-observation",
+            post(classify_legacy_harvest_observation_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/harvest-observations",
@@ -812,6 +820,10 @@ fn harvest_run_history_json(run: HarvestRunHistory) -> Value {
             "window_start": tree.period.start.to_string(),
             "window_end": tree.period.end.to_string(),
             "outcome": harvest_history_outcome_json(tree.outcome),
+            "needs_legacy_classification": tree.needs_legacy_classification,
+            "observation": tree.observation.as_ref().map(|point| json!({
+                "id": point.id, "kind": point.kind, "fruit_state": point.observed_fruit_state(), "reviewed": point.reviewed,
+            })),
         })).collect::<Vec<_>>(),
     })
 }
@@ -2968,6 +2980,59 @@ struct StandaloneObservationWindowRequest {
     start: AnnualDate,
     end: AnnualDate,
     start_year: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyHarvestObservationRequest {
+    kind: HarvestObservationKind,
+    fruit_state: Option<HarvestFruitState>,
+}
+
+async fn classify_legacy_harvest_observation_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, run_id, tree_id)): Path<(u64, u64, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<LegacyHarvestObservationRequest>, JsonRejection>,
+) -> Result<Response, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session_token = owner_session_token(&headers)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session_token)?;
+        match classify_legacy_harvest_observation(
+            LegacyHarvestObservationClassified {
+                orchard_id,
+                harvest_run_id: HarvestRunId(run_id),
+                tree_id: TreeId(tree_id),
+                kind: request.kind,
+                fruit_state: request.fruit_state,
+            },
+            &mut *storage,
+        ) {
+            Ok(id) => Ok((StatusCode::CREATED, Json(json!({ "id": id }))).into_response()),
+            Err(LegacyHarvestObservationError::InvalidFruitState) => Err(StatusCode::BAD_REQUEST),
+            Err(
+                LegacyHarvestObservationError::RunNotFound
+                | LegacyHarvestObservationError::TreeNotInRun,
+            ) => Err(StatusCode::NOT_FOUND),
+            Err(LegacyHarvestObservationError::AlreadyClassified) => Ok(harvest_conflict_response(
+                "legacy_observation_classified",
+                "This visit already has an observation. Reopen the run history.",
+            )),
+            Err(
+                LegacyHarvestObservationError::RunNotCompleted
+                | LegacyHarvestObservationError::NotLegacyVisit,
+            ) => Err(StatusCode::CONFLICT),
+            Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        }
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
 }
 
 async fn record_standalone_harvest_observation_handler<U>(

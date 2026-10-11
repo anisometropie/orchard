@@ -225,6 +225,13 @@ outside a tour, even when no harvest period exists. Choose the date and harveste
 part. A saved period can be selected with its season start year; observations
 may fall before or after it. Individual observations do not advance a tour.
 
+In **History → Harvest**, expand a run and use **Classify legacy observation**
+beside a tree's old harvested-everything, done-for-now, or done-for-window entry.
+Choose harvested all, empty on arrival, all wasted, or the observed remaining
+fruit states. Saving adds one linked observation with that visit's original
+date, parts, and period, while keeping its original tour outcome. Cancel leaves
+it unchanged. Classified visits show their observation instead of the button.
+
 Observations with **No recorded period** appear as dated cues in the species or
 cultivar's harvest editor. Cues match the harvested parts being edited. **OK**
 saves dates and leaves cues unreviewed; **Save and mark cues reviewed** saves the

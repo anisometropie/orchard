@@ -1,6 +1,6 @@
 use crate::hexagon::models::{
-    HarvestDate, HarvestPeriod, HarvestRunId, HarvestRunTarget, HarvestTreeOutcome, HarvestedPart,
-    OrchardId, OrchardTree, TreeId, WateringRunId,
+    HarvestDate, HarvestObservation, HarvestPeriod, HarvestRunId, HarvestRunTarget,
+    HarvestTreeOutcome, HarvestedPart, OrchardId, OrchardTree, TreeId, WateringRunId,
 };
 use crate::hexagon::ports::{AccessControl, OrchardStorage};
 use crate::hexagon::use_cases::authorize_orchard_owner::{
@@ -37,6 +37,8 @@ pub struct HarvestRunHistoryTree {
     pub harvested_parts: Vec<HarvestedPart>,
     pub period: HarvestPeriod,
     pub outcome: HarvestTreeOutcome,
+    pub needs_legacy_classification: bool,
+    pub observation: Option<HarvestObservation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -115,6 +117,9 @@ where
             })
         })
         .collect::<Result<Vec<_>, OrchardRunHistoryError>>()?;
+    let observations = storage
+        .harvest_observations_in_orchard(event.orchard_id)
+        .map_err(|_| OrchardRunHistoryError::HistoryCouldNotBeRead)?;
     let harvest_runs = storage
         .completed_harvest_runs(event.orchard_id)
         .map_err(|_| OrchardRunHistoryError::HistoryCouldNotBeRead)?
@@ -134,12 +139,22 @@ where
                 .into_iter()
                 .filter_map(|run_tree| run_tree.outcome.map(|outcome| (run_tree, outcome)))
                 .map(|(run_tree, outcome)| {
+                    let legacy_date = outcome.legacy_observation_date();
+                    let observation = legacy_date
+                        .and_then(|date| {
+                            observations.iter().find(|point| {
+                                point.matches_run_visit(run.id, run_tree.tree_id, date)
+                            })
+                        })
+                        .cloned();
                     Ok(HarvestRunHistoryTree {
                         tree_id: run_tree.tree_id,
                         name: tree_name(&trees, run_tree.tree_id)?,
                         harvested_parts: run_tree.harvested_parts,
                         period: run_tree.period,
                         outcome,
+                        needs_legacy_classification: legacy_date.is_some() && observation.is_none(),
+                        observation,
                     })
                 })
                 .collect::<Result<Vec<_>, OrchardRunHistoryError>>()?;

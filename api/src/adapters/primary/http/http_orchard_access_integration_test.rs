@@ -2935,3 +2935,227 @@ async fn standalone_harvest_observations_work_without_a_window_and_become_review
         StatusCode::NO_CONTENT
     );
 }
+
+#[tokio::test]
+async fn legacy_harvest_observations_can_be_classified_once_by_the_owner_from_run_history() {
+    let mut storage = owned_storage();
+    let date = HarvestDate::new(2026, 1, 5).unwrap();
+    let period = HarvestPeriod {
+        start: HarvestDate::new(2025, 12, 10).unwrap(),
+        end: HarvestDate::new(2026, 1, 20).unwrap(),
+    };
+    let mut run_ids = Vec::new();
+    for outcome in [
+        HarvestTreeOutcome::HarvestedEverything { harvested_on: date },
+        HarvestTreeOutcome::Deferred {
+            deferred_on: date,
+            retry_on: date.add_days(7).unwrap(),
+        },
+        HarvestTreeOutcome::DoneForWindow { recorded_on: date },
+    ] {
+        let id = storage
+            .transaction(|storage| {
+                storage.create_harvest_run(
+                    OrchardId(7),
+                    HarvestRunTarget::All,
+                    &[HarvestedPart::Fruit, HarvestedPart::Flower],
+                    date,
+                    &[HarvestRunTree {
+                        tree_id: TreeId(1),
+                        harvested_parts: vec![HarvestedPart::Fruit, HarvestedPart::Flower],
+                        period,
+                        outcome: None,
+                    }],
+                )
+            })
+            .unwrap();
+        storage
+            .transaction(|storage| {
+                storage.record_harvest_tree_outcome(id, TreeId(1), outcome)?;
+                storage.complete_harvest_run(id)
+            })
+            .unwrap();
+        run_ids.push(id.0);
+    }
+    let server = start_http_server(storage, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = Client::new();
+    let cookie = login_cookie(&client, server.url()).await;
+    let share = create_harvest_watering_share_token(&client, server.url(), &cookie).await;
+    let history_url = format!("{}/orchards/7/run-history", server.url());
+    let history = client
+        .get(&history_url)
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert!(
+        history["harvest_runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|run| run["trees"][0]["needs_legacy_classification"] == true
+                && run["trees"][0]["observation"].is_null())
+    );
+    let record_url = |run| {
+        format!(
+            "{}/orchards/7/harvest-runs/{run}/trees/1/legacy-observation",
+            server.url()
+        )
+    };
+    let event = serde_json::json!({ "kind": "harvested_all" });
+    assert_eq!(
+        client
+            .post(record_url(run_ids[0]))
+            .json(&event)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .post(record_url(run_ids[0]))
+            .header("x-orchard-share-token", &share)
+            .json(&event)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .post(format!(
+                "{}/orchards/8/harvest-runs/{}/trees/1/legacy-observation",
+                server.url(),
+                run_ids[0]
+            ))
+            .header(header::COOKIE, &cookie)
+            .json(&event)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        client
+            .post(record_url(999))
+            .header(header::COOKIE, &cookie)
+            .json(&event)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let mut bad = event.clone();
+    bad["action_date"] = serde_json::json!("2026-09-28");
+    assert_eq!(
+        client
+            .post(record_url(run_ids[0]))
+            .header(header::COOKIE, &cookie)
+            .json(&bad)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        client
+            .post(record_url(run_ids[0]))
+            .header(header::COOKIE, &cookie)
+            .json(&event)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        client
+            .post(record_url(run_ids[0]))
+            .header(header::COOKIE, &cookie)
+            .json(&event)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let mixed = serde_json::json!({ "kind": "fruit_remaining", "fruit_state": { "ready": true, "unripe": true, "wasted": true } });
+    assert_eq!(
+        client
+            .post(record_url(run_ids[1]))
+            .header(header::COOKIE, &cookie)
+            .json(&mixed)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CREATED
+    );
+    let empty = serde_json::json!({ "kind": "empty_on_arrival" });
+    assert_eq!(
+        client
+            .post(record_url(run_ids[2]))
+            .header(header::COOKIE, &cookie)
+            .json(&empty)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CREATED
+    );
+    let after = client
+        .get(&history_url)
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    for (before, run) in history["harvest_runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(after["harvest_runs"].as_array().unwrap())
+    {
+        assert_eq!(run["trees"][0]["outcome"], before["trees"][0]["outcome"]);
+        assert_eq!(
+            run["completed_at_unix_seconds"],
+            before["completed_at_unix_seconds"]
+        );
+        assert_eq!(run["trees"][0]["needs_legacy_classification"], false);
+        assert!(!run["trees"][0]["observation"].is_null());
+    }
+    let points = client
+        .get(format!("{}/orchards/7/harvest-observations", server.url()))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(points.as_array().unwrap().len(), 3);
+    for (point, run_id) in points.as_array().unwrap().iter().zip(run_ids) {
+        assert_eq!(point["harvest_run_id"], run_id);
+        assert_eq!(point["recorded_on"], "2026-01-05");
+        assert_eq!(point["window_start"], "2025-12-10");
+        assert_eq!(point["window_end"], "2026-01-20");
+        assert_eq!(
+            point["harvested_parts"],
+            serde_json::json!(["fruit", "flower"])
+        );
+        assert_eq!(point["reviewed"], false);
+    }
+}

@@ -8,6 +8,7 @@ pub mod cancel_harvest_run;
 pub mod cancel_watering_run;
 pub mod change_orchard_share_permissions;
 pub mod change_tree_condition;
+pub mod classify_legacy_harvest_observation;
 pub mod create_tree;
 pub mod defer_harvest_tree;
 pub mod delete_tree_photo;

@@ -219,3 +219,7 @@ path = "src/hexagon/use_cases/list_orchard_harvest_observations/list_orchard_har
 [[test]]
 name = "record_standalone_harvest_observation_unit"
 path = "src/hexagon/use_cases/record_standalone_harvest_observation/record_standalone_harvest_observation_unit_test.rs"
+
+[[test]]
+name = "classify_legacy_harvest_observation_unit"
+path = "src/hexagon/use_cases/classify_legacy_harvest_observation/classify_legacy_harvest_observation_unit_test.rs"

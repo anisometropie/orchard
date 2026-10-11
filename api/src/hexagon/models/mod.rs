@@ -12,7 +12,7 @@ pub use harvest::{
     CompletedHarvestRun, HarvestDate, HarvestFruitState, HarvestObservation,
     HarvestObservationKind, HarvestPeriod, HarvestRun, HarvestRunId, HarvestRunTarget,
     HarvestRunTree, HarvestTreeActionUndo, HarvestTreeOutcome, HarvestTreeOutcomeRecord,
-    HarvestWindowExtension,
+    HarvestWindowExtension, InvalidHarvestFruitState,
 };
 pub(crate) use harvest::{
     EligibleHarvestTree, concrete_harvest_period, current_harvest_part_periods,

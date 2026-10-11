@@ -34,7 +34,10 @@ pub fn record_harvest_visit(
 ) -> Result<HarvestProgress, HarvestVisitRecordingError> {
     let recorded_on = HarvestDate::parse_iso(&event.action_date)
         .ok_or(HarvestVisitRecordingError::InvalidActionDate)?;
-    let fruit_state = visit_fruit_state(event.kind, event.fruit_state)?;
+    let fruit_state = event
+        .kind
+        .fruit_state(event.fruit_state)
+        .map_err(|_| HarvestVisitRecordingError::InvalidFruitState)?;
     storage.transaction(|orchard| {
         orchard.lock_orchard_runs(event.orchard_id)?;
         let mut run = orchard
@@ -162,33 +165,4 @@ impl From<OrchardStorageError> for HarvestVisitRecordingError {
     fn from(_: OrchardStorageError) -> Self {
         Self::TreeCouldNotBeRecorded
     }
-}
-
-pub(super) fn visit_fruit_state(
-    kind: HarvestObservationKind,
-    supplied: Option<HarvestFruitState>,
-) -> Result<Option<HarvestFruitState>, HarvestVisitRecordingError> {
-    if kind == HarvestObservationKind::FruitRemaining {
-        return supplied
-            .filter(|state| state.ready || state.unripe)
-            .map(Some)
-            .ok_or(HarvestVisitRecordingError::InvalidFruitState);
-    }
-    if supplied.is_some() {
-        return Err(HarvestVisitRecordingError::InvalidFruitState);
-    }
-    Ok(match kind {
-        HarvestObservationKind::HarvestedAll => Some(HarvestFruitState {
-            ready: true,
-            ..Default::default()
-        }),
-        HarvestObservationKind::EmptyOnArrival => Some(HarvestFruitState::default()),
-        HarvestObservationKind::AllWasted => Some(HarvestFruitState {
-            wasted: true,
-            ..Default::default()
-        }),
-        // Keep the meaning and representation of legacy observations unchanged.
-        HarvestObservationKind::TooSoon | HarvestObservationKind::TooLate => None,
-        HarvestObservationKind::FruitRemaining => unreachable!(),
-    })
 }

@@ -55,6 +55,7 @@ pub fn assert_observations_are_scoped_ordered_and_atomic(storage: &mut impl Orch
     assert!(storage.harvest_observations(orchard_id, cultivar).unwrap().is_empty());
     assert_visit_facts_round_trip(storage, orchard_id, species);
     assert_standalone_cues_can_be_saved_and_reviewed_atomically(storage, orchard_id, species);
+    assert_legacy_visits_classify_once_with_the_original_snapshot(storage, orchard_id);
 }
 
 pub fn assert_visit_facts_round_trip(storage: &mut impl OrchardStorage, orchard_id: OrchardId, species: HarvestScheduleOwner) {
@@ -209,4 +210,97 @@ pub fn assert_standalone_cues_can_be_saved_and_reviewed_atomically(
         }
         assert_eq!(*point, expected);
     }
+}
+
+pub fn assert_legacy_visits_classify_once_with_the_original_snapshot(
+    storage: &mut impl OrchardStorage,
+    orchard_id: OrchardId,
+) {
+    use orchard_api::hexagon::use_cases::classify_legacy_harvest_observation::*;
+    let date = HarvestDate::new(2026, 1, 5).unwrap();
+    let period = HarvestPeriod {
+        start: HarvestDate::new(2025, 12, 10).unwrap(),
+        end: HarvestDate::new(2026, 1, 20).unwrap(),
+    };
+    let parts = vec![HarvestedPart::Fruit, HarvestedPart::Flower];
+    let run_id = storage
+        .transaction(|storage| {
+            storage.create_harvest_run(
+                orchard_id,
+                HarvestRunTarget::All,
+                &parts,
+                date,
+                &[HarvestRunTree {
+                    tree_id: TreeId(1),
+                    harvested_parts: parts.clone(),
+                    period,
+                    outcome: None,
+                }],
+            )
+        })
+        .unwrap();
+    storage
+        .transaction(|storage| {
+            storage.record_harvest_tree_outcome(
+                run_id,
+                TreeId(1),
+                HarvestTreeOutcome::Deferred {
+                    deferred_on: date,
+                    retry_on: date.add_days(7).unwrap(),
+                },
+            )?;
+            storage.complete_harvest_run(run_id)
+        })
+        .unwrap();
+    let before = storage.harvest_run(run_id).unwrap().unwrap();
+    let event = || LegacyHarvestObservationClassified {
+        orchard_id,
+        harvest_run_id: run_id,
+        tree_id: TreeId(1),
+        kind: HarvestObservationKind::FruitRemaining,
+        fruit_state: Some(HarvestFruitState {
+            ready: true,
+            unripe: true,
+            wasted: false,
+        }),
+    };
+    let id = classify_legacy_harvest_observation(event(), storage).unwrap();
+    assert_eq!(
+        classify_legacy_harvest_observation(event(), storage),
+        Err(LegacyHarvestObservationError::AlreadyClassified)
+    );
+    let points = storage.harvest_observations_in_orchard(orchard_id).unwrap();
+    let point = points.iter().find(|point| point.id == id).unwrap();
+    assert_eq!(point.harvest_run_id, Some(run_id));
+    assert_eq!(point.period, Some(period));
+    assert_eq!(point.recorded_on, date);
+    assert_eq!(
+        point.harvested_parts,
+        before.ordered_trees[0].harvested_parts
+    );
+    assert!(
+        parts
+            .iter()
+            .all(|part| point.harvested_parts.contains(part))
+    );
+    assert_eq!(point.fruit_state, event().fruit_state);
+    assert!(!point.reviewed);
+    assert_eq!(
+        points
+            .iter()
+            .filter(|point| point.harvest_run_id == Some(run_id))
+            .count(),
+        1
+    );
+    assert_eq!(storage.harvest_run(run_id).unwrap().unwrap(), before);
+    assert_eq!(
+        storage
+            .completed_harvest_runs(orchard_id)
+            .unwrap()
+            .iter()
+            .find(|run| run.id == run_id)
+            .unwrap()
+            .ordered_trees,
+        before.ordered_trees
+    );
 }

@@ -1,4 +1,3 @@
-use super::record_harvest_visit::visit_fruit_state;
 use crate::hexagon::models::{
     AnnualDate, HarvestDate, HarvestFruitState, HarvestObservation, HarvestObservationKind,
     HarvestScheduleOwner, HarvestedPart, OrchardId, TreeId, concrete_harvest_period,
@@ -37,8 +36,10 @@ pub fn record_standalone_harvest_observation(
 ) -> Result<u64, StandaloneHarvestObservationError> {
     use StandaloneHarvestObservationError::*;
     let recorded_on = HarvestDate::parse_iso(&event.action_date).ok_or(InvalidActionDate)?;
-    let fruit_state =
-        visit_fruit_state(event.kind, event.fruit_state).map_err(|_| InvalidFruitState)?;
+    let fruit_state = event
+        .kind
+        .fruit_state(event.fruit_state)
+        .map_err(|_| InvalidFruitState)?;
     storage.transaction(|orchard| {
         orchard.lock_orchard_runs(event.orchard_id)?;
         let trees = orchard.trees_in_orchard(event.orchard_id)?;

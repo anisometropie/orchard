@@ -76,7 +76,7 @@ fn list_completed_watering_and_partial_harvest_runs_with_ordered_tree_details() 
     let history = list_orchard_run_history(
         OrchardRunHistoryRequested {
             orchard_id: OrchardId(7),
-            session_token,
+            session_token: session_token.clone(),
         },
         &mut storage,
     )
@@ -105,6 +105,45 @@ fn list_completed_watering_and_partial_harvest_runs_with_ordered_tree_details() 
         history.harvest_runs[0].trees[0].outcome,
         HarvestTreeOutcome::HarvestedEverything { .. }
     ));
+    assert!(history.harvest_runs[0].trees[0].needs_legacy_classification);
+    assert!(history.harvest_runs[0].trees[0].observation.is_none());
+    use orchard_api::hexagon::use_cases::classify_legacy_harvest_observation::*;
+    classify_legacy_harvest_observation(
+        LegacyHarvestObservationClassified {
+            orchard_id: OrchardId(7),
+            harvest_run_id,
+            tree_id: TreeId(1),
+            kind: orchard_api::hexagon::models::HarvestObservationKind::HarvestedAll,
+            fruit_state: None,
+        },
+        &mut storage,
+    )
+    .unwrap();
+    let after = list_orchard_run_history(
+        OrchardRunHistoryRequested {
+            orchard_id: OrchardId(7),
+            session_token,
+        },
+        &mut storage,
+    )
+    .unwrap();
+    assert!(!after.harvest_runs[0].trees[0].needs_legacy_classification);
+    assert_eq!(
+        after.harvest_runs[0].trees[0]
+            .observation
+            .as_ref()
+            .unwrap()
+            .kind,
+        orchard_api::hexagon::models::HarvestObservationKind::HarvestedAll
+    );
+    assert_eq!(
+        after.harvest_runs[0].trees[0].outcome,
+        history.harvest_runs[0].trees[0].outcome
+    );
+    assert_eq!(
+        after.harvest_runs[0].completed_at_unix_seconds,
+        history.harvest_runs[0].completed_at_unix_seconds
+    );
 }
 
 fn harvest_tree(tree_id: TreeId) -> HarvestRunTree {

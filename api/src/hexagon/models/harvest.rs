@@ -133,6 +133,17 @@ pub enum HarvestTreeOutcome {
     },
 }
 
+impl HarvestTreeOutcome {
+    pub fn legacy_observation_date(self) -> Option<HarvestDate> {
+        match self {
+            Self::HarvestedEverything { harvested_on } => Some(harvested_on),
+            Self::Deferred { deferred_on, .. } => Some(deferred_on),
+            Self::DoneForWindow { recorded_on } => Some(recorded_on),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HarvestRunTree {
     pub tree_id: TreeId,
@@ -418,6 +429,34 @@ pub enum HarvestObservationKind {
 }
 
 impl HarvestObservationKind {
+    pub fn fruit_state(
+        self,
+        supplied: Option<HarvestFruitState>,
+    ) -> Result<Option<HarvestFruitState>, InvalidHarvestFruitState> {
+        if self == Self::FruitRemaining {
+            return supplied
+                .filter(|state| state.ready || state.unripe)
+                .map(Some)
+                .ok_or(InvalidHarvestFruitState);
+        }
+        if supplied.is_some() {
+            return Err(InvalidHarvestFruitState);
+        }
+        Ok(match self {
+            Self::HarvestedAll => Some(HarvestFruitState {
+                ready: true,
+                ..Default::default()
+            }),
+            Self::EmptyOnArrival => Some(HarvestFruitState::default()),
+            Self::AllWasted => Some(HarvestFruitState {
+                wasted: true,
+                ..Default::default()
+            }),
+            Self::TooSoon | Self::TooLate => None,
+            Self::FruitRemaining => unreachable!(),
+        })
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::TooSoon => "too_soon",
@@ -449,6 +488,9 @@ pub struct HarvestFruitState {
     pub wasted: bool,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct InvalidHarvestFruitState;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HarvestObservation {
     pub id: u64,
@@ -466,6 +508,16 @@ pub struct HarvestObservation {
 }
 
 impl HarvestObservation {
+    pub fn matches_run_visit(
+        &self,
+        run_id: HarvestRunId,
+        tree_id: TreeId,
+        recorded_on: HarvestDate,
+    ) -> bool {
+        self.harvest_run_id == Some(run_id)
+            && self.tree_id == tree_id
+            && self.recorded_on == recorded_on
+    }
     pub fn has_timing_evidence(&self) -> bool {
         self.kind != HarvestObservationKind::EmptyOnArrival
     }
