@@ -2715,9 +2715,10 @@
         harvestOutcomeLabel,
         harvestPartsLabel,
         harvestRunStatus,
+        harvestTreeHistoryDetails,
         visibleHarvestTrees,
         wateringTreeOutcomeLabel,
-      } from "./run-history.mjs?v=3";
+      } from "./run-history.mjs?v=4";
       import {
         adaptiveWateringWideZoom,
         availableWateringRuns,
@@ -8413,11 +8414,7 @@
           trees.className = "history-tree-list";
           trees.append(
             ...visibleHarvestTrees(run).map((tree) => {
-              const item = historyTreeItem(tree.name, [
-                harvestOutcomeLabel(tree.outcome),
-                `${harvestPartsLabel(tree.harvested_parts)} · window ${tree.window_start} to ${tree.window_end}`,
-                ...(tree.observation ? [`classified as: ${harvestVisitLabel(tree.observation)}`] : []),
-              ]);
+              const item = historyTreeItem(tree.name, harvestTreeHistoryDetails(tree));
               if (isEditable() && tree.needs_legacy_classification) {
                 const classify = document.createElement("button");
                 classify.type = "button";

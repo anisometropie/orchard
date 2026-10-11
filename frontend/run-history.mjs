@@ -1,3 +1,5 @@
+import { harvestVisitLabel } from "./harvest-visit.mjs?v=3";
+
 const HARVEST_PART_LABELS = Object.freeze({
   cone: "cones",
   flower: "flowers",
@@ -51,4 +53,26 @@ export function harvestOutcomeLabel(outcome) {
     default:
       return "Not handled";
   }
+}
+
+export function harvestTreeHistoryDetails(tree) {
+  const observationKinds = {
+    harvested_everything: ["harvested_all"],
+    empty_on_arrival: ["empty_on_arrival"],
+    fruit_remaining: ["fruit_remaining"],
+    too_soon: ["too_soon"],
+    too_late: ["too_late", "all_wasted"],
+  };
+  const observationMatchesOutcome = tree.observation &&
+    observationKinds[tree.outcome?.kind]?.includes(tree.observation.kind);
+  const outcome = observationMatchesOutcome
+    ? `${harvestVisitLabel(tree.observation)} on ${tree.outcome.recorded_on}${tree.outcome.retry_on ? ` · retry ${tree.outcome.retry_on}` : ""}`
+    : harvestOutcomeLabel(tree.outcome);
+  return [
+    outcome,
+    `${harvestPartsLabel(tree.harvested_parts)} · window ${tree.window_start} to ${tree.window_end}`,
+    ...(tree.observation && !observationMatchesOutcome
+      ? [`classified as: ${harvestVisitLabel(tree.observation)}`]
+      : []),
+  ];
 }
