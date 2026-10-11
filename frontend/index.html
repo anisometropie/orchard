@@ -465,7 +465,21 @@
         min-height: 44px;
       }
       #history-panel {
+        flex-direction: column;
+        max-height: calc(100vh - 88px);
+        max-height: calc(100dvh - 88px);
+        overflow: hidden;
         width: min(460px, calc(100vw - 40px));
+      }
+      #history-panel:not([hidden]) {
+        display: flex;
+      }
+      .history-scroll {
+        margin-right: -8px;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-right: 8px;
       }
       .history-tabs {
         display: grid;
@@ -2287,22 +2301,24 @@
       <p id="row-order-error" class="workflow-error" role="alert" hidden></p>
     </section>
     <section id="history-panel" class="workflow-panel" aria-labelledby="history-title" hidden>
-      <header>
-        <h2 id="history-title">Run history</h2>
-        <button id="history-close" class="workflow-panel-close" type="button" aria-label="Close run history">×</button>
-      </header>
-      <p id="history-status" class="workflow-status">Loading run history…</p>
-      <p id="history-error" class="workflow-error" role="alert" hidden></p>
-      <div class="history-tabs" role="tablist" aria-label="Run type">
-        <button id="watering-history-tab" class="history-tab" type="button" role="tab" aria-controls="watering-history-view" aria-selected="true">Watering</button>
-        <button id="harvest-history-tab" class="history-tab" type="button" role="tab" aria-controls="harvest-history-view" aria-selected="false">Harvest</button>
+      <div class="history-scroll">
+        <header>
+          <h2 id="history-title">Run history</h2>
+          <button id="history-close" class="workflow-panel-close" type="button" aria-label="Close run history">×</button>
+        </header>
+        <p id="history-status" class="workflow-status">Loading run history…</p>
+        <p id="history-error" class="workflow-error" role="alert" hidden></p>
+        <div class="history-tabs" role="tablist" aria-label="Run type">
+          <button id="watering-history-tab" class="history-tab" type="button" role="tab" aria-controls="watering-history-view" aria-selected="true">Watering</button>
+          <button id="harvest-history-tab" class="history-tab" type="button" role="tab" aria-controls="harvest-history-view" aria-selected="false">Harvest</button>
+        </div>
+        <section id="watering-history-view" class="history-view" role="tabpanel" aria-labelledby="watering-history-tab">
+          <div id="watering-history-list" class="history-list"></div>
+        </section>
+        <section id="harvest-history-view" class="history-view" role="tabpanel" aria-labelledby="harvest-history-tab" hidden>
+          <div id="harvest-history-list" class="history-list"></div>
+        </section>
       </div>
-      <section id="watering-history-view" class="history-view" role="tabpanel" aria-labelledby="watering-history-tab">
-        <div id="watering-history-list" class="history-list"></div>
-      </section>
-      <section id="harvest-history-view" class="history-view" role="tabpanel" aria-labelledby="harvest-history-tab" hidden>
-        <div id="harvest-history-list" class="history-list"></div>
-      </section>
     </section>
     <section id="watering-tree-banner" aria-live="polite" hidden>
       <div>
@@ -3223,7 +3239,7 @@
 
       function placeWorkflowPanelsBelowToolbar() {
         if (mapToolbar.hidden) return;
-        const panels = [wateringPanel, harvestTourPanel, rowOrderPanel, inventoryPanel];
+        const panels = [wateringPanel, harvestTourPanel, rowOrderPanel, historyPanel, inventoryPanel];
         if (compactMobileLayout.matches) {
           panels.forEach((panel) => {
             panel.style.removeProperty("top");
@@ -3242,7 +3258,7 @@
         panels.forEach((panel) => {
           panel.style.top = `${top}px`;
           panel.style.maxHeight = `${Math.max(
-            120,
+            panel === historyPanel ? 0 : 120,
             window.innerHeight - top - viewportInset,
           )}px`;
         });
