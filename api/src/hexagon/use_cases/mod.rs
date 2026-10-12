@@ -1,4 +1,5 @@
 pub mod add_tree_photo;
+pub mod assess_harvest_window;
 pub mod authorize_orchard_harvester;
 pub mod authorize_orchard_owner;
 pub mod authorize_orchard_photographer;
@@ -52,3 +53,7 @@ pub mod review_harvest_observations;
 pub mod list_orchard_harvest_observations;
 pub mod record_harvest_visit;
 pub mod record_standalone_harvest_observation;
+
+pub mod validate_harvest_window;
+
+pub mod restore_external_harvest_reference;

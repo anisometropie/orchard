@@ -38,6 +38,8 @@ pub struct AnnualHarvestWindow {
     pub harvested_part: HarvestedPart,
     pub data_origin: HarvestDataOrigin,
     pub source_url: Option<String>,
+    #[serde(default)]
+    pub validated: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]

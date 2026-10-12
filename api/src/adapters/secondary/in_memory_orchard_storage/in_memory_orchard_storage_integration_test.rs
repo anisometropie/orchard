@@ -16,6 +16,7 @@ fn harvest_window_edits_honor_the_source_preservation_contract() {
     mod harvest_window_edit_contract;
     let (mut storage, _) = InMemoryOrchardStorage::new();
     harvest_window_edit_contract::assert_harvest_window_edits_preserve_sources(&mut storage);
+    harvest_window_edit_contract::assert_window_validation_persists_independently(&mut storage);
 }
 
 #[test]

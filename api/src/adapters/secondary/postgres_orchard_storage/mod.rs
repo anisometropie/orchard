@@ -649,10 +649,10 @@ impl OrchardStorage for PostgresOrchardStorage {
                     "INSERT INTO plant_harvest_windows (
                         plant_identity_id, cultivar_id,
                         start_month, start_day, end_month, end_day,
-                        reference_region, harvested_part, data_origin, source_url
+                        reference_region, harvested_part, data_origin, source_url, validated
                      ) VALUES ($1, $2, $3, $4, $5, $6, $7,
                                $8::text::harvested_part,
-                               $9::text::harvest_data_origin, $10)",
+                               $9::text::harvest_data_origin, $10, $11)",
                     &[
                         &plant_identity_id,
                         &cultivar_id,
@@ -664,6 +664,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                         &window.harvested_part.as_str(),
                         &window.data_origin.as_str(),
                         &window.source_url,
+                        &window.validated,
                     ],
                 )
                 .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
@@ -725,10 +726,10 @@ impl OrchardStorage for PostgresOrchardStorage {
                     "INSERT INTO plant_harvest_windows (
                         orchard_id, plant_identity_id, cultivar_id,
                         start_month, start_day, end_month, end_day,
-                        reference_region, harvested_part, data_origin, source_url
+                        reference_region, harvested_part, data_origin, source_url, validated
                      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                                $9::text::harvested_part,
-                               $10::text::harvest_data_origin, $11)",
+                               $10::text::harvest_data_origin, $11, $12)",
                     &[
                         &orchard_id,
                         &plant_identity_id,
@@ -741,6 +742,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                         &window.harvested_part.as_str(),
                         &window.data_origin.as_str(),
                         &window.source_url,
+                        &window.validated,
                     ],
                 )
                 .map_err(|_| OrchardStorageError::HarvestWindowsCouldNotBeReplaced)?;
@@ -858,7 +860,8 @@ impl OrchardStorage for PostgresOrchardStorage {
                             'reference_region', w.reference_region,
                             'harvested_part', w.harvested_part,
                             'data_origin', w.data_origin,
-                            'source_url', w.source_url
+                            'source_url', w.source_url,
+                            'validated', w.validated
                         ) ORDER BY w.start_month, w.start_day, w.end_month, w.end_day, w.id
                     )::text AS windows
                     FROM plant_harvest_windows w
@@ -910,7 +913,8 @@ impl OrchardStorage for PostgresOrchardStorage {
                             'reference_region', w.reference_region,
                             'harvested_part', w.harvested_part,
                             'data_origin', w.data_origin,
-                            'source_url', w.source_url
+                            'source_url', w.source_url,
+                            'validated', w.validated
                         ) ORDER BY w.start_month, w.start_day, w.end_month, w.end_day, w.id
                     )::text AS windows
                     FROM plant_harvest_windows w
@@ -1668,7 +1672,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                 "UPDATE plant_harvest_windows
                  SET end_month = $12, end_day = $13,
                      data_origin = 'field_observation'::harvest_data_origin,
-                     source_url = NULL
+                     source_url = NULL, validated = FALSE
                  WHERE orchard_id = $1
                    AND plant_identity_id = $2
                    AND cultivar_id IS NOT DISTINCT FROM $3
@@ -1677,7 +1681,8 @@ impl OrchardStorage for PostgresOrchardStorage {
                    AND harvested_part = $8::text::harvested_part
                    AND reference_region IS NOT DISTINCT FROM $9
                    AND data_origin = $10::text::harvest_data_origin
-                   AND source_url IS NOT DISTINCT FROM $11",
+                   AND source_url IS NOT DISTINCT FROM $11
+                   AND validated = $14",
                 &[
                     &orchard_id,
                     &plant_identity_id,
@@ -1692,6 +1697,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                     &current.source_url,
                     &i16::from(extension.new_end.month),
                     &i16::from(extension.new_end.day),
+                    &current.validated,
                 ],
             )
             .map_err(|_| OrchardStorageError::HarvestWindowCouldNotBeExtended)?;
@@ -1736,7 +1742,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                 "UPDATE plant_harvest_windows
                  SET end_month = $10, end_day = $11,
                      data_origin = $12::text::harvest_data_origin,
-                     source_url = $13
+                     source_url = $13, validated = $14
                  WHERE orchard_id = $1
                    AND plant_identity_id = $2
                    AND cultivar_id IS NOT DISTINCT FROM $3
@@ -1745,7 +1751,8 @@ impl OrchardStorage for PostgresOrchardStorage {
                    AND harvested_part = $8::text::harvested_part
                    AND reference_region IS NOT DISTINCT FROM $9
                    AND data_origin = 'field_observation'::harvest_data_origin
-                   AND source_url IS NULL",
+                   AND source_url IS NULL
+                   AND validated = FALSE",
                 &[
                     &orchard_id,
                     &plant_identity_id,
@@ -1760,6 +1767,7 @@ impl OrchardStorage for PostgresOrchardStorage {
                     &i16::from(original.end.day),
                     &original_data_origin,
                     &original.source_url,
+                    &original.validated,
                 ],
             )
             .map_err(|_| OrchardStorageError::HarvestWindowCouldNotBeExtended)?;
@@ -2484,7 +2492,7 @@ fn read_harvest_windows(
             'start', json_build_object('month', start_month, 'day', start_day),
             'end', json_build_object('month', end_month, 'day', end_day),
             'reference_region', reference_region, 'harvested_part', harvested_part,
-            'data_origin', data_origin, 'source_url', source_url
+            'data_origin', data_origin, 'source_url', source_url, 'validated', validated
          )::text FROM plant_harvest_windows
          WHERE ($1::bigint IS NULL OR orchard_id = $1)
            AND ((plant_identity_id = $2::bigint AND cultivar_id IS NULL)
@@ -2514,6 +2522,7 @@ fn harvest_windows_from_row(
         harvested_part: HarvestedPart,
         data_origin: HarvestDataOrigin,
         source_url: Option<String>,
+        validated: bool,
     }
 
     let values = serde_json::from_str::<Vec<StoredHarvestWindow>>(&row.get::<_, String>(24))
@@ -2528,6 +2537,7 @@ fn harvest_windows_from_row(
                 harvested_part: window.harvested_part,
                 data_origin: window.data_origin,
                 source_url: window.source_url,
+                validated: window.validated,
             })
         })
         .collect()

@@ -379,3 +379,113 @@ fn change(start_day: u8) -> OrchardHarvestWindowsReplaced {
         }],
     }
 }
+
+#[test]
+fn saving_an_edited_window_can_explicitly_validate_its_new_dates_and_review_only_its_points() {
+    let (mut storage, ids) = observations_for_two_windows();
+    let original = storage
+        .orchard_harvest_windows(OrchardId(7), owner())
+        .unwrap();
+    let before_points = storage.harvest_observations(OrchardId(7), owner()).unwrap();
+    review_harvest_observations_and_validate_window(
+        review(ids[..2].to_vec(), Some(change(15))),
+        september_window(),
+        &mut storage,
+    )
+    .unwrap();
+    let windows = storage
+        .orchard_harvest_windows(OrchardId(7), owner())
+        .unwrap();
+    assert_eq!(windows[0].start.day, 15);
+    assert!(windows[0].validated);
+    assert_eq!(windows[0].data_origin, HarvestDataOrigin::FieldObservation);
+    assert_eq!(windows[1..], original[1..]);
+    let mut expected = before_points;
+    expected[0].reviewed = true;
+    expected[1].reviewed = true;
+    assert_eq!(
+        storage.harvest_observations(OrchardId(7), owner()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn edited_dates_remain_unvalidated_without_the_explicit_checkmark() {
+    let (mut storage, ids) = observations_for_two_windows();
+    review_harvest_observations_for_window(
+        review(ids[..2].to_vec(), Some(change(15))),
+        september_window(),
+        &mut storage,
+    )
+    .unwrap();
+    assert!(
+        !storage
+            .orchard_harvest_windows(OrchardId(7), owner())
+            .unwrap()[0]
+            .validated
+    );
+}
+
+#[test]
+fn an_edited_window_can_be_validated_using_already_reviewed_observations() {
+    let (mut storage, ids) = observations_for_two_windows();
+    review_harvest_observations_for_window(
+        review(ids[..2].to_vec(), None),
+        september_window(),
+        &mut storage,
+    )
+    .unwrap();
+    let points = storage.harvest_observations(OrchardId(7), owner()).unwrap();
+    review_harvest_observations_and_validate_window(
+        review(vec![], Some(change(15))),
+        september_window(),
+        &mut storage,
+    )
+    .unwrap();
+    assert!(
+        storage
+            .orchard_harvest_windows(OrchardId(7), owner())
+            .unwrap()[0]
+            .validated
+    );
+    assert_eq!(
+        storage.harvest_observations(OrchardId(7), owner()).unwrap(),
+        points
+    );
+    assert_eq!(
+        review_harvest_observations_and_validate_window(
+            review(vec![], None),
+            september_window(),
+            &mut storage
+        ),
+        Err(HarvestObservationReviewError::InvalidObservationSelection)
+    );
+}
+
+#[test]
+fn a_failed_combined_save_never_changes_the_dates_validation_or_reviewed_points() {
+    let (storage, ids) = observations_for_two_windows();
+    let mut storage = storage.with_commit_failure();
+    let windows = storage
+        .orchard_harvest_windows(OrchardId(7), owner())
+        .unwrap();
+    let points = storage.harvest_observations(OrchardId(7), owner()).unwrap();
+    assert_eq!(
+        review_harvest_observations_and_validate_window(
+            review(ids[..2].to_vec(), Some(change(15))),
+            september_window(),
+            &mut storage
+        ),
+        Err(HarvestObservationReviewError::CouldNotReview)
+    );
+    assert_eq!(
+        storage
+            .orchard_harvest_windows(OrchardId(7), owner())
+            .unwrap(),
+        windows
+    );
+    assert_eq!(
+        storage.harvest_observations(OrchardId(7), owner()).unwrap(),
+        points
+    );
+}

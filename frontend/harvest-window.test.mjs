@@ -16,7 +16,7 @@ test("show each window's own observation or external-reference origin", () => {
     { start: "06-10", end: "06-20", data_origin: "field_observation" },
     { start: "08-01", end: "09-20", data_origin: "external_reference", source_url: "https://example.com/harvest" },
   ])), [
-    { dates: "06-10 → 06-20", origin: { icon: "eye", label: "Field observation", sourceUrl: null } },
+    { dates: "06-10 → 06-20", origin: null },
     { dates: "08-01 → 09-20", origin: { icon: "scroll", label: "External reference", sourceUrl: "https://example.com/harvest" } },
   ]);
   assert.deepEqual(harvestWindowPresentations([]), []);
@@ -32,7 +32,7 @@ test("reference links allow web URLs only and handle missing sources honestly", 
   }
   assert.equal(harvestWindowOrigin({ data_origin: "external_reference", source_url: "http://example.com/harvest" }).sourceUrl,
     "http://example.com/harvest");
-  assert.equal(harvestWindowOrigin({ data_origin: "field_observation", source_url: "https://example.com/old" }).sourceUrl, null);
+  assert.equal(harvestWindowOrigin({ data_origin: "field_observation", source_url: "https://example.com/old" }), null);
 });
 
 test("format every configured harvest window for display", () => {
@@ -149,3 +149,8 @@ function tree(id, harvestStart, harvestEnd, overrides = {}) {
     },
   };
 }
+
+
+test("field observation validation requires the explicit saved flag", () => {
+  assert.deepEqual(harvestWindowOrigin({ data_origin: "field_observation", validated: true }), { icon: "eye", label: "Field observation", sourceUrl: null });
+});

@@ -68,6 +68,7 @@ fn replace_multiple_windows_and_clear_them() {
                 harvested_part: HarvestedPart::Fruit,
                 data_origin: HarvestDataOrigin::FieldObservation,
                 source_url: None,
+                validated: false,
             },
             AnnualHarvestWindow {
                 start: AnnualDate { month: 8, day: 10 },
@@ -76,6 +77,7 @@ fn replace_multiple_windows_and_clear_them() {
                 harvested_part: HarvestedPart::Fruit,
                 data_origin: HarvestDataOrigin::FieldObservation,
                 source_url: None,
+                validated: false,
             },
         ]
     );
@@ -276,6 +278,7 @@ fn saving_unchanged_windows_preserves_metadata_but_a_part_or_region_change_is_an
                 harvested_part: HarvestedPart::Flower,
                 data_origin: HarvestDataOrigin::FieldObservation,
                 source_url: None,
+                validated: false,
                 ..original.clone()
             },
         ),
@@ -286,6 +289,7 @@ fn saving_unchanged_windows_preserves_metadata_but_a_part_or_region_change_is_an
                 reference_region: Some("Paris, France".into()),
                 data_origin: HarvestDataOrigin::FieldObservation,
                 source_url: None,
+                validated: false,
                 ..original.clone()
             },
         ),
@@ -368,6 +372,7 @@ fn reference_window(
         harvested_part: HarvestedPart::Fruit,
         data_origin: HarvestDataOrigin::ExternalReference,
         source_url: Some(format!("https://example.com/harvest/{start_month}")),
+        validated: false,
     }
 }
 

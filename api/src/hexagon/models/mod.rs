@@ -1,5 +1,6 @@
 mod harvest;
 mod harvest_evidence;
+mod harvest_validation;
 mod legacy_tree_source;
 mod map_configuration;
 mod orchard_access;
@@ -51,3 +52,7 @@ pub struct OrchardTree {
 }
 
 pub use harvest_evidence::{HarvestWindowEvidence, harvest_window_evidence};
+
+pub use harvest_validation::{
+    HarvestValidationEvidence, HarvestWindowSelection, harvest_validation_evidence,
+};

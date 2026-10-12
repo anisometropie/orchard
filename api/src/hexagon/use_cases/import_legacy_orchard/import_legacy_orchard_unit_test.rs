@@ -106,6 +106,7 @@ fn preserve_a_legacy_harvest_window_on_its_cultivar() {
         harvested_part: HarvestedPart::Fruit,
         data_origin: HarvestDataOrigin::FieldObservation,
         source_url: None,
+        validated: false,
     };
     raspberry.harvest_window = Some(harvest_window.clone());
 
@@ -140,6 +141,7 @@ fn reject_conflicting_legacy_windows_for_the_same_cultivar_before_importing() {
         harvested_part: HarvestedPart::Fruit,
         data_origin: HarvestDataOrigin::FieldObservation,
         source_url: None,
+        validated: false,
     });
     let mut second = surprise_dautomne(209);
     second.harvest_window = Some(AnnualHarvestWindow {
@@ -149,6 +151,7 @@ fn reject_conflicting_legacy_windows_for_the_same_cultivar_before_importing() {
         harvested_part: HarvestedPart::Fruit,
         data_origin: HarvestDataOrigin::FieldObservation,
         source_url: None,
+        validated: false,
     });
 
     assert_eq!(

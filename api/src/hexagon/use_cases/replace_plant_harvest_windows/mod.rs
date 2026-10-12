@@ -58,6 +58,7 @@ pub fn replace_plant_harvest_windows(
                 harvested_part: window.harvested_part,
                 data_origin: HarvestDataOrigin::FieldObservation,
                 source_url: None,
+                validated: false,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -106,6 +107,7 @@ pub(crate) fn replace_orchard_harvest_windows_in_transaction(
                 harvested_part: window.harvested_part,
                 data_origin: HarvestDataOrigin::FieldObservation,
                 source_url: None,
+                validated: false,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -136,6 +138,7 @@ fn preserve_unchanged_window_origins(
             let saved = saved_windows.remove(index);
             window.data_origin = saved.data_origin;
             window.source_url = saved.source_url;
+            window.validated = saved.validated;
         }
     }
 }

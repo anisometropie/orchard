@@ -991,6 +991,8 @@
       .harvest-editor input {
         width: 110px;
       }
+      .harvest-editor .harvest-editor-validation { align-items: center; display: flex; font-size: 12px; gap: 6px; }
+      .harvest-editor .harvest-editor-validation input { accent-color: #245c2a; flex: none; height: 18px; margin: 0; width: 18px; }
       .harvest-window-list {
         display: grid;
         gap: 5px;
@@ -1901,6 +1903,9 @@
       .harvest-observation-form select { box-sizing: border-box; font: inherit; min-height: 40px; min-width: 0; width: 100%; }
       .harvest-observation-form fieldset { display: flex; flex-wrap: wrap; gap: 12px; margin: 0; border: 1px solid #d4dfce; }
       .harvest-observation-form [hidden], .harvest-cues[hidden] { display: none; }
+      .harvest-validation-guidance { background: #fff4dd; border-left: 3px solid #a96500; font-weight: 600; padding: 8px 10px; }
+      .harvest-validation-guidance[data-tone="supported"] { background: #eaf4e9; border-color: #245c2a; }
+      .harvest-validate-window { align-items: center; display: inline-flex; gap: 4px; justify-content: center; }
       .harvest-cues { min-width: 0; overflow-wrap: anywhere; }
       .harvest-cues p { margin: 6px 0; }
       .harvest-review-points { display: grid; gap: 10px; margin: 16px 0; }
@@ -2651,7 +2656,7 @@
       import { observationWindows, observationPeriod, nearestObservationSeason, standaloneObservationRequest, unreviewedObservationCues } from "./standalone-harvest-observation.mjs?v=1";
       import { createHarvestObservationTimeline } from "./harvest-observation-timeline.mjs?v=2";
       import { remainingFruitVisit, speciesNeedsHarvestReview, harvestVisitLabel, harvestEvidenceLabel, firstRecordedFruit } from "./harvest-visit.mjs?v=3";
-      import { harvestObservationPath, pendingObservationIds, harvestReviewRequest, observationsForHarvestWindow } from "./harvest-review.mjs?v=2";
+      import { harvestObservationPath, pendingObservationIds, harvestReviewRequest, observationsForHarvestWindow, harvestWindowValidationPath, harvestWindowValidationRequest, harvestWindowValidationQuery, harvestValidationGuidance } from "./harvest-review.mjs?v=4";
       import {
         HARVEST_PIN_ICONS,
         harvestPartSelectedByDefault,
@@ -2690,7 +2695,7 @@
         harvestAvailabilitySummary,
         harvestWindowPresentations,
         parseAnnualDate,
-      } from "./harvest-window.mjs?v=6";
+      } from "./harvest-window.mjs?v=8";
       import {
         availableHarvestSpecies,
         harvestConflictMessage,
@@ -3531,6 +3536,7 @@
 
       function createInventoryActionIcon(name) {
         const artwork = {
+          check: ["M5 12l4 4L19 6", [5, 6, 14, 10]],
           edit: ["M5 16 16 5l3 3L8 19l-4 1 1-4Z M14 7l3 3", [4, 5, 15, 15]],
           filter: ["M4 5.5h16L13.5 13v6h-3v-6L4 5.5z", [4, 5.5, 16, 13.5]],
           eye: ["M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z", [2, 5, 20, 14]],
@@ -7037,7 +7043,7 @@
 
       function createHarvestReviewButton(schedule, window) {
         const button = document.createElement("button");
-        button.hidden = observationsForHarvestWindow(orchardHarvestObservations, schedule, window).length === 0;
+        button.hidden = !isEditable() && observationsForHarvestWindow(orchardHarvestObservations, schedule, window).length === 0;
         button.type = "button";
         button.className = "harvest-origin-button harvest-review-button";
         button.title = `Review harvest observations for ${schedule.label} · ${window.start} → ${window.end} · ${window.harvested_part || "fruit"}`;
@@ -7075,25 +7081,38 @@
         harvestReviewContent.textContent = "Loading observations…";
         if (!harvestReviewDialog.open) harvestReviewDialog.showModal();
         try {
-          const response = await fetch(orchardResourceUrl(access, harvestObservationPath(schedule)), {
-            headers: accessHeaders(access), cache: "no-store",
-          });
-          if (!response.ok) throw new Error("Could not load harvest observations. Please try again.");
-          const points = await response.json();
+          const [response, assessmentResponse] = await Promise.all([
+            fetch(orchardResourceUrl(access, harvestObservationPath(schedule)), { headers: accessHeaders(access), cache: "no-store" }),
+            fetch(orchardResourceUrl(access, `${harvestWindowValidationPath(schedule)}?${harvestWindowValidationQuery(window)}`), { headers: accessHeaders(access), cache: "no-store" }),
+          ]);
+          if (!response.ok || !assessmentResponse.ok) throw new Error("Could not load harvest observations and validation guidance. Please try again.");
+          const [points, assessment] = await Promise.all([response.json(), assessmentResponse.json()]);
           if (session !== harvestReviewSession || currentAccess !== access) return;
-          renderHarvestReview(schedule, window, observationsForHarvestWindow(points, schedule, window), access);
+          renderHarvestReview(schedule, window, observationsForHarvestWindow(points, schedule, window), access, assessment);
         } catch (error) {
           if (session === harvestReviewSession) harvestReviewContent.textContent = error.message;
         }
       }
 
-      function renderHarvestReview(schedule, window, points, access) {
+      function renderHarvestReview(schedule, window, points, access, assessment) {
         const reviewSession = harvestReviewSession;
         const pending = pendingObservationIds(points);
         const summary = document.createElement("p");
         summary.textContent = `${pending.length} unreviewed observation${pending.length === 1 ? "" : "s"} for this window. Closing leaves them unreviewed.`;
         const currentWindow = document.createElement("p");
         currentWindow.textContent = `Current window: ${window.start} → ${window.end} · ${window.harvested_part || "fruit"}`;
+        const validationStatus = document.createElement("p");
+        validationStatus.className = "harvest-validation-status";
+        validationStatus.textContent = assessment.validated ? "✓ Field observation · validated"
+          : assessment.data_origin === "external_reference" ? "External reference · not validated" : "Window not validated";
+        const guidance = document.createElement("p");
+        guidance.className = "harvest-validation-guidance";
+        const advice = harvestValidationGuidance(assessment);
+        guidance.dataset.tone = advice.tone;
+        guidance.textContent = advice.text;
+        const explanation = document.createElement("small");
+        explanation.className = "workflow-help";
+        explanation.textContent = "Guidance looks for unripe → ready near the start and ready → fully wasted near the end, on the same tree and season, within 7 days of each boundary. Reviewing observations or saving dates alone does not validate the window. Use the checkmark to validate explicitly.";
         const list = document.createElement("div");
         list.className = "harvest-review-points";
         if (!points.length) list.textContent = "No harvest observations for this window yet.";
@@ -7140,12 +7159,51 @@
         const update = document.createElement("button");
         update.type = "button";
         update.textContent = "Edit this window…";
-        keep.disabled = update.disabled = pending.length === 0;
+        keep.disabled = pending.length === 0;
         const editor = document.createElement("div");
         editor.hidden = true;
-        if (canReview) actions.append(keep, update);
+        const validate = document.createElement("button");
+        validate.type = "button";
+        validate.className = "harvest-validate-window";
+        validate.append(createInventoryActionIcon("check"), document.createTextNode(assessment.validated ? " Window validated" : " Validate this window"));
+        validate.disabled = assessment.validated;
+        const backToReference = document.createElement("button");
+        backToReference.type = "button";
+        backToReference.className = "secondary";
+        backToReference.textContent = "Back to external reference";
+        if (canReview) {
+          actions.append(keep, update, validate);
+          if (assessment.data_origin === "field_observation") actions.append(backToReference);
+        }
+        const setActionsBusy = (busy) => {
+          keep.disabled = busy || pending.length === 0;
+          update.disabled = busy;
+          validate.disabled = busy || assessment.validated;
+          backToReference.disabled = busy;
+        };
+        const changeWindowOrigin = async (method) => {
+          setActionsBusy(true);
+          error.hidden = true;
+          try {
+            if (currentAccess !== access || !isEditable()) throw new Error("Orchard access changed. Reopen the review.");
+            const response = await fetch(orchardResourceUrl(access, harvestWindowValidationPath(schedule)), {
+              method, headers: { "content-type": "application/json", ...accessHeaders(access) },
+              body: JSON.stringify(harvestWindowValidationRequest(window)),
+            });
+            if (response.status === 409) throw new Error("This window changed. Close and reopen the review.");
+            if (!response.ok) throw new Error(method === "DELETE" ? "Could not return this window to external reference. Please try again." : "Could not validate this window. Please try again.");
+            await loadOrchardTrees();
+            if (reviewSession === harvestReviewSession && harvestReviewDialog.open && currentAccess === access) await showHarvestReview(schedule, window);
+          } catch (requestError) {
+            if (reviewSession !== harvestReviewSession || currentAccess !== access) return;
+            error.textContent = requestError.message; error.hidden = false;
+            setActionsBusy(false);
+          }
+        };
+        validate.addEventListener("click", () => changeWindowOrigin("POST"));
+        backToReference.addEventListener("click", () => changeWindowOrigin("DELETE"));
         keep.addEventListener("click", async () => {
-          keep.disabled = update.disabled = true;
+          setActionsBusy(true);
           error.hidden = true;
           try {
             await submitHarvestReview(schedule, window, pending, null, access);
@@ -7154,7 +7212,7 @@
             if (reviewSession !== harvestReviewSession) return;
             error.textContent = requestError.message;
             error.hidden = false;
-            keep.disabled = update.disabled = pending.length === 0;
+            setActionsBusy(false);
           }
         });
         update.addEventListener("click", () => {
@@ -7164,24 +7222,25 @@
             title: "Edit this harvest window",
             saveLabel: "Save window and mark reviewed",
             singleWindow: true,
+            allowValidation: true,
             refreshAfterSave: false,
-            restore: () => renderHarvestReview(schedule, window, points, access),
-            onSave: async (_, referenceRegion, windows) => {
-              await submitHarvestReview(schedule, window, pending, { reference_region: referenceRegion, windows }, access);
+            restore: () => renderHarvestReview(schedule, window, points, access, assessment),
+            onSave: async (_, referenceRegion, windows, validateWindow) => {
+              await submitHarvestReview(schedule, window, pending, { reference_region: referenceRegion, windows }, access, validateWindow);
               if (reviewSession === harvestReviewSession) harvestReviewDialog.close();
               await loadOrchardTrees();
             },
           });
         });
-        harvestReviewContent.replaceChildren(summary, currentWindow, list, error, actions, editor);
+        harvestReviewContent.replaceChildren(summary, currentWindow, validationStatus, guidance, explanation, list, error, actions, editor);
       }
 
-      async function submitHarvestReview(schedule, window, ids, windowChange, access) {
+      async function submitHarvestReview(schedule, window, ids, windowChange, access, validateWindow = false) {
         if (currentAccess !== access || !isEditable()) throw new Error("Orchard access changed. Reopen the review.");
         const response = await fetch(orchardResourceUrl(access, harvestObservationPath(schedule)), {
           method: "POST",
           headers: { "content-type": "application/json", ...accessHeaders(access) },
-          body: JSON.stringify(harvestReviewRequest(ids, windowChange, window)),
+          body: JSON.stringify(harvestReviewRequest(ids, windowChange, window, validateWindow)),
         });
         if (response.status === 409) throw new Error("This window or its observations changed. Close and reopen the review.");
         if (!response.ok) throw new Error("Could not save the review. Check the dates and try again.");
@@ -7292,7 +7351,7 @@
         schedule,
         { restore = renderHarvestSchedule, title: editorTitle = schedule.label,
           onSave = updateHarvestWindows, saveLabel = "OK", refreshAfterSave = true,
-          singleWindow = false } = {},
+          singleWindow = false, allowValidation = false } = {},
       ) {
         const form = document.createElement("form");
         form.className = "harvest-editor";
@@ -7334,6 +7393,13 @@
         save.type = "submit";
         save.textContent = saveLabel;
         actions.append(cancel, save);
+        const validationChoice = document.createElement("input");
+        validationChoice.type = "checkbox";
+        const validationLabel = document.createElement("label");
+        validationLabel.className = "harvest-editor-validation";
+        validationLabel.append(validationChoice, document.createTextNode("Validate this edited window"));
+        const currentSaveLabel = () => allowValidation && validationChoice.checked ? "Save, validate and mark reviewed" : saveLabel;
+        validationChoice.addEventListener("change", () => { save.textContent = currentSaveLabel(); });
         const cues = document.createElement("section");
         cues.className = "harvest-cues";
         const saveAndReview = document.createElement("button");
@@ -7366,6 +7432,7 @@
           form.append(addWindow, clearHint, cues);
           actions.append(saveAndReview);
         }
+        if (allowValidation) form.append(validationLabel);
         form.append(error, actions);
 
         function addHarvestWindowRow(window = {}) {
@@ -7432,13 +7499,14 @@
           cancel.disabled = true;
           save.disabled = true;
           saveAndReview.disabled = true;
+          validationChoice.disabled = true;
           save.textContent = "Saving…";
           try {
             if (event.submitter === saveAndReview) {
               const ids = unreviewedObservationCues(orchardHarvestObservations, schedule, windows.map((window) => window.harvested_part)).map((point) => point.id);
               await submitHarvestReview(schedule, null, ids, { reference_region: referenceRegionInput.value.trim(), windows }, editorAccess);
             } else {
-              await onSave(schedule, referenceRegionInput.value.trim(), windows);
+              await onSave(schedule, referenceRegionInput.value.trim(), windows, allowValidation && validationChoice.checked);
             }
             if (refreshAfterSave) await loadOrchardTrees();
           } catch (requestError) {
@@ -7455,7 +7523,8 @@
             cancel.disabled = false;
             save.disabled = false;
             saveAndReview.disabled = false;
-            save.textContent = saveLabel;
+            validationChoice.disabled = false;
+            save.textContent = currentSaveLabel();
           }
         });
 

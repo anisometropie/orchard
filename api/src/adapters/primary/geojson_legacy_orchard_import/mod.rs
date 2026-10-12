@@ -138,6 +138,7 @@ fn parse_legacy_harvest_window(
             harvested_part: HarvestedPart::Fruit,
             data_origin: HarvestDataOrigin::FieldObservation,
             source_url: None,
+            validated: false,
         })),
         _ => None,
     }
@@ -370,6 +371,7 @@ mod legacy_harvest_window_unit_test {
                 harvested_part: HarvestedPart::Fruit,
                 data_origin: HarvestDataOrigin::FieldObservation,
                 source_url: None,
+                validated: false,
             }))
         );
     }

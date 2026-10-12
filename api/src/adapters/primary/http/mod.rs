@@ -1,3 +1,14 @@
+use crate::hexagon::use_cases::restore_external_harvest_reference::{
+    ExternalHarvestReferenceRestored, ExternalHarvestReferenceRestorationError,
+    restore_external_harvest_reference,
+};
+use crate::hexagon::models::HarvestWindowSelection;
+use crate::hexagon::use_cases::assess_harvest_window::{
+    HarvestWindowAssessmentError, HarvestWindowAssessmentRequested, assess_harvest_window,
+};
+use crate::hexagon::use_cases::validate_harvest_window::{
+    HarvestWindowValidated, HarvestWindowValidationError, validate_harvest_window,
+};
 use crate::hexagon::use_cases::classify_legacy_harvest_observation::{
     LegacyHarvestObservationClassified, LegacyHarvestObservationError,
     classify_legacy_harvest_observation,
@@ -16,7 +27,7 @@ use crate::hexagon::use_cases::record_standalone_harvest_observation::{
 };
 use crate::hexagon::use_cases::review_harvest_observations::{
     HarvestObservationReviewError, HarvestObservationsReviewed, review_harvest_observations,
-    review_harvest_observations_for_window,
+    review_harvest_observations_for_window, review_harvest_observations_and_validate_window,
 };
 use std::{
     net::SocketAddr,
@@ -329,6 +340,12 @@ where
             "/orchards/{orchard_id}/harvest-observations/{owner_kind}/{owner_id}",
             get(list_harvest_observations_handler::<U>)
                 .post(review_harvest_observations_handler::<U>),
+        )
+        .route(
+            "/orchards/{orchard_id}/harvest-window-validation/{owner_kind}/{owner_id}",
+            get(assess_harvest_window_handler::<U>)
+                .post(validate_harvest_window_handler::<U>)
+                .delete(restore_external_harvest_reference_handler::<U>),
         )
         .route(
             "/orchards/{orchard_id}/harvest-run",
@@ -2728,6 +2745,7 @@ fn orchard_geojson(trees: Vec<OrchardTree>) -> Value {
                     "harvested_part": window.harvested_part,
                     "data_origin": window.data_origin,
                     "source_url": window.source_url,
+                    "validated": window.validated,
                 })
             })
             .collect::<Vec<_>>();
@@ -3188,6 +3206,8 @@ where
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReviewHarvestObservationsRequest {
+    #[serde(default)]
+    validate_window: bool,
     observation_ids: Vec<u64>,
     window_change: Option<ReplaceHarvestWindowsRequest>,
     window: Option<HarvestWindowRequest>,
@@ -3233,17 +3253,20 @@ where
                 }),
         };
         let result = if let Some(window) = request.window {
-            review_harvest_observations_for_window(
-                event,
-                AnnualHarvestWindowChanged {
-                    start_month: window.start.month,
-                    start_day: window.start.day,
-                    end_month: window.end.month,
-                    end_day: window.end.day,
-                    harvested_part: window.harvested_part,
-                },
-                &mut *storage,
-            )
+            let window = AnnualHarvestWindowChanged {
+                start_month: window.start.month,
+                start_day: window.start.day,
+                end_month: window.end.month,
+                end_day: window.end.day,
+                harvested_part: window.harvested_part,
+            };
+            if request.validate_window {
+                review_harvest_observations_and_validate_window(event, window, &mut *storage)
+            } else {
+                review_harvest_observations_for_window(event, window, &mut *storage)
+            }
+        } else if request.validate_window {
+            return Err(StatusCode::BAD_REQUEST);
         } else {
             review_harvest_observations(event, &mut *storage)
         };
@@ -3256,6 +3279,167 @@ where
             HarvestObservationReviewError::InvalidWindowChange(
                 PlantHarvestWindowsReplacementError::OwnerNotFound,
             ) => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        Ok(StatusCode::NO_CONTENT)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HarvestWindowValidationQuery {
+    start_month: u8,
+    start_day: u8,
+    end_month: u8,
+    end_day: u8,
+    harvested_part: HarvestedPart,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HarvestWindowSelectionRequest {
+    window: HarvestWindowRequest,
+}
+
+fn harvest_window_selection(
+    start: AnnualDate,
+    end: AnnualDate,
+    harvested_part: HarvestedPart,
+) -> Result<HarvestWindowSelection, StatusCode> {
+    let start = AnnualDate::new(start.month, start.day).ok_or(StatusCode::BAD_REQUEST)?;
+    let end = AnnualDate::new(end.month, end.day).ok_or(StatusCode::BAD_REQUEST)?;
+    Ok(HarvestWindowSelection {
+        start,
+        end,
+        harvested_part,
+    })
+}
+
+async fn assess_harvest_window_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, kind, owner_id)): Path<(u64, String, u64)>,
+    headers: HeaderMap,
+    Query(query): Query<HarvestWindowValidationQuery>,
+) -> Result<Json<Value>, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let credential = orchard_read_credential(&headers)?;
+    let owner = observation_owner(&kind, owner_id)?;
+    let window = harvest_window_selection(
+        AnnualDate {
+            month: query.start_month,
+            day: query.start_day,
+        },
+        AnnualDate {
+            month: query.end_month,
+            day: query.end_day,
+        },
+        query.harvested_part,
+    )?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_orchard_reader(
+            OrchardReadAccessRequested {
+                orchard_id,
+                credential,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            OrchardReadAccessError::AccessNotFound => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        let report = assess_harvest_window(
+            HarvestWindowAssessmentRequested {
+                orchard_id,
+                owner,
+                window,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            HarvestWindowAssessmentError::WindowNotFound => StatusCode::CONFLICT,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        Ok(Json(json!(report)))
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn validate_harvest_window_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, kind, owner_id)): Path<(u64, String, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<HarvestWindowSelectionRequest>, JsonRejection>,
+) -> Result<StatusCode, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session = owner_session_token(&headers)?;
+    let owner = observation_owner(&kind, owner_id)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    let window = harvest_window_selection(
+        request.window.start,
+        request.window.end,
+        request.window.harvested_part,
+    )?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session)?;
+        validate_harvest_window(
+            HarvestWindowValidated {
+                orchard_id,
+                owner,
+                window,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            HarvestWindowValidationError::WindowNotFound => StatusCode::CONFLICT,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+        Ok(StatusCode::NO_CONTENT)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+}
+
+async fn restore_external_harvest_reference_handler<U>(
+    State(storage): State<Arc<Mutex<U>>>,
+    Path((orchard_id, kind, owner_id)): Path<(u64, String, u64)>,
+    headers: HeaderMap,
+    request: Result<Json<HarvestWindowSelectionRequest>, JsonRejection>,
+) -> Result<StatusCode, StatusCode>
+where
+    U: AccessControl + OrchardStorage + Send + 'static,
+{
+    let session = owner_session_token(&headers)?;
+    let owner = observation_owner(&kind, owner_id)?;
+    let Json(request) = request.map_err(|_| StatusCode::BAD_REQUEST)?;
+    let window = harvest_window_selection(
+        request.window.start,
+        request.window.end,
+        request.window.harvested_part,
+    )?;
+    tokio::task::spawn_blocking(move || {
+        let mut storage = storage.lock().unwrap();
+        let orchard_id = OrchardId(orchard_id);
+        authorize_owner_access(&mut *storage, orchard_id, session)?;
+        restore_external_harvest_reference(
+            ExternalHarvestReferenceRestored {
+                orchard_id,
+                owner,
+                window,
+            },
+            &mut *storage,
+        )
+        .map_err(|error| match error {
+            ExternalHarvestReferenceRestorationError::WindowNotFound => StatusCode::CONFLICT,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         })?;
         Ok(StatusCode::NO_CONTENT)

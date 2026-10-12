@@ -197,9 +197,9 @@ and finishes the tree. The follow-up panel collapses after saving, leaving room
 for the map. These visits never automatically change harvest windows.
 
 Open **Tree inventory → Species planted** and use the clipboard review icon
-beside the exact species or cultivar's window. The icon appears only when that
-species or cultivar has fruit observations; empty-on-arrival records alone do
-not show it. Reviewed observations keep the icon available.
+beside the exact species or cultivar's window. The owner can open every window to assess or explicitly validate it, including
+when its dates were just edited. Readers see the icon only when that species or
+cultivar has fruit observations. Reviewed observations keep the icon available.
 
 The review shows the raw fruit states, visited tree, tour, part, date, saved
 window, and review status. Timing hints compare the visit with its saved window;
@@ -209,6 +209,28 @@ evidence. Hints are evidence for manual review, not automatic date changes.
 Choose **Keep window and mark reviewed**, or **Edit this window…** followed by
 **Save window and mark reviewed**. Each review applies to one specific window.
 Closing leaves points unreviewed.
+
+Saving observations, reviewing them, and editing dates never validate a window.
+The eye icon with **Field observation** means that the window has been explicitly
+validated against observations. It stays absent for unvalidated local dates. In the window's review,
+click the checkmark **Validate this window** when you judge the evidence sufficient.
+Only that window gets the field-observation flag and eye icon. Validation is separate
+from marking observations reviewed. **Back to external reference** clears validation
+for that window and restores its external-source label, keeping its dates,
+observations and any retained reference link. Unchanged saves preserve validation, while
+changed dates, parts, or reference regions require validation again. When editing
+from the review panel, check **Validate this edited window** to save the replacement
+window, validate it, and mark pending observations reviewed in one atomic operation.
+The option starts unchecked; leaving it unchecked keeps changed dates unvalidated.
+Reviewed observations remain available when editing and validating a window.
+
+The review strongly warns when boundary evidence is missing or observations
+suggest the dates need review. It suggests support for each boundary when visits
+on the same tree and season bracket **unripe → ready** at the start or
+**ready → fully wasted** at the end, within seven days of that boundary. These
+are advisory checks; the owner can validate despite a warning. Existing windows
+are not assumed validated just because they previously had a field-observation
+source label.
 
 The **Trees** inventory also shows harvest history, including empty-on-arrival
 visits and the first recorded fruit date. When planting is dated, the history
@@ -240,7 +262,8 @@ of a period rather than inventing a historical period.
 
 This feature requires migrations `029_add_harvest_observations.sql`,
 `030_rework_harvest_visit_facts.sql`, and
-`031_add_standalone_harvest_observations.sql` and the updated API. Follow the migration
+`031_add_standalone_harvest_observations.sql`,
+`032_add_harvest_window_validation.sql` and the updated API. Follow the migration
 deployment sequence above. Migration 030 cannot be reverted while new visit
 facts exist, and migration 031 cannot be reverted while individual observations
 exist, so rollback cannot silently discard production history.

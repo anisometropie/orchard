@@ -22,7 +22,9 @@ export function formatHarvestWindows(windows) {
 
 export function harvestWindowOrigin(window) {
   if (window.data_origin === "field_observation") {
-    return { icon: "eye", label: "Field observation", sourceUrl: null };
+    return window.validated
+      ? { icon: "eye", label: "Field observation", sourceUrl: null }
+      : null;
   }
   if (window.data_origin !== "external_reference") return null;
   let sourceUrl = null;

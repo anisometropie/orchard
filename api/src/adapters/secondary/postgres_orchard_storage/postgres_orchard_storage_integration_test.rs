@@ -749,6 +749,7 @@ fn persist_resumable_harvest_progress_history_and_exact_window_extension() {
         harvested_part: HarvestedPart::Fruit,
         data_origin: HarvestDataOrigin::ExternalReference,
         source_url: Some("https://example.com/current".into()),
+        validated: false,
     };
     let extended_end = HarvestDate::new(2026, 10, 1).unwrap();
     storage
@@ -954,6 +955,7 @@ fn persist_and_atomically_undo_a_completed_harvest_action_and_its_extension() {
         harvested_part: HarvestedPart::Fruit,
         data_origin: HarvestDataOrigin::ExternalReference,
         source_url: Some("https://example.com/original".into()),
+        validated: false,
     };
     let extension = HarvestWindowExtension {
         owner: HarvestScheduleOwner::PlantIdentity(PlantIdentityId(1)),
@@ -1530,6 +1532,7 @@ fn read_and_clear_exact_cultivar_or_cultivarless_harvest_schedules() {
         harvested_part: HarvestedPart::Fruit,
         data_origin: HarvestDataOrigin::ExternalReference,
         source_url: Some("https://example.com/harvest".into()),
+        validated: false,
     };
     let cultivar_windows = vec![
         AnnualHarvestWindow {
@@ -1539,6 +1542,7 @@ fn read_and_clear_exact_cultivar_or_cultivarless_harvest_schedules() {
             harvested_part: HarvestedPart::Fruit,
             data_origin: HarvestDataOrigin::FieldObservation,
             source_url: None,
+            validated: false,
         },
         AnnualHarvestWindow {
             start: AnnualDate { month: 9, day: 1 },
@@ -1547,6 +1551,7 @@ fn read_and_clear_exact_cultivar_or_cultivarless_harvest_schedules() {
             harvested_part: HarvestedPart::Fruit,
             data_origin: HarvestDataOrigin::FieldObservation,
             source_url: None,
+            validated: false,
         },
     ];
     let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
@@ -1605,6 +1610,7 @@ fn harvest_window_edits_honor_the_source_preservation_contract() {
         .unwrap();
     let mut storage = PostgresOrchardStorage::connect(&database_url).unwrap();
     harvest_window_edit_contract::assert_harvest_window_edits_preserve_sources(&mut storage);
+    harvest_window_edit_contract::assert_window_validation_persists_independently(&mut storage);
 }
 
 #[test]
@@ -2904,6 +2910,10 @@ fn empty_orchard_database() -> (String, Client) {
              RESTART IDENTITY CASCADE",
         )
         .unwrap();
+    let validation_exists: bool = verification_connection.query_one("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'plant_harvest_windows' AND column_name = 'validated')", &[]).unwrap().get(0);
+    if !validation_exists {
+        verification_connection.batch_execute(include_str!("../../../../db/migrations/032_add_harvest_window_validation.sql")).unwrap();
+    }
     (database_url, verification_connection)
 }
 
@@ -2963,6 +2973,7 @@ fn harvest_observations_honor_the_storage_contract() {
                 harvested_part: HarvestedPart::Fruit,
                 data_origin: HarvestDataOrigin::ExternalReference,
                 source_url: Some("https://example.com".into()),
+                validated: false,
             }];
             storage.replace_orchard_harvest_windows(OrchardId(1), species, windows.clone())?;
             storage.replace_orchard_harvest_windows(OrchardId(1), cultivar, windows)?;

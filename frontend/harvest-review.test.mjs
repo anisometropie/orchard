@@ -55,3 +55,25 @@ test("a scoped review submits the target window separately from its replacement"
     window: { start: { month: 9, day: 1 }, end: { month: 9, day: 30 }, harvested_part: "fruit" },
   });
 });
+
+test("validation guidance warns about sparse or conflicting evidence and recognizes both supported boundaries", async () => {
+  const { harvestValidationGuidance, harvestWindowValidationRequest, harvestWindowValidationPath } = await import("./harvest-review.mjs");
+  const evidence = {observation_count:1,start_supported:false,end_supported:false,conflicting_observations:0};
+  assert.match(harvestValidationGuidance({evidence}).text,/Not enough data/);
+  assert.equal(harvestValidationGuidance({evidence:{...evidence,start_supported:true,end_supported:true}}).tone,"supported");
+  assert.equal(harvestValidationGuidance({evidence:{...evidence,start_supported:true,end_supported:true,conflicting_observations:1}}).tone,"warning");
+  assert.match(harvestValidationGuidance({evidence:{...evidence,start_supported:true}}).text,/more evidence is needed around the end/);
+  assert.deepEqual(harvestWindowValidationRequest({start:"09-01",end:"09-30",harvested_part:"fruit"}),{window:{start:{month:9,day:1},end:{month:9,day:30},harvested_part:"fruit"}});
+  assert.equal(harvestWindowValidationPath({plantIdentityId:4,cultivarId:9}),"harvest-window-validation/cultivar/9");
+});
+
+test("the review editor can explicitly validate its single replacement window when saving", () => {
+  const window={start:"09-01",end:"09-30",harvested_part:"fruit"};
+  const change={reference_region:"France",windows:[{start:{month:9,day:15},end:{month:9,day:30},harvested_part:"fruit"}]};
+  assert.equal(harvestReviewRequest([2],change,window,true).validate_window,true);
+  assert.equal("validate_window" in harvestReviewRequest([2],change,window),false);
+  assert.deepEqual(harvestReviewRequest([],change,window,true).observation_ids,[]);
+  assert.throws(()=>harvestReviewRequest([2],null,window,true));
+  assert.throws(()=>harvestReviewRequest([2],change,null,true));
+  assert.throws(()=>harvestReviewRequest([],null,window));
+});

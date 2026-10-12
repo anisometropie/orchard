@@ -26,7 +26,7 @@ pub fn review_harvest_observations(
     event: HarvestObservationsReviewed,
     storage: &mut impl OrchardStorage,
 ) -> Result<(), HarvestObservationReviewError> {
-    review(event, None, storage)
+    review(event, None, false, storage)
 }
 
 pub fn review_harvest_observations_for_window(
@@ -34,15 +34,26 @@ pub fn review_harvest_observations_for_window(
     window: AnnualHarvestWindowChanged,
     storage: &mut impl OrchardStorage,
 ) -> Result<(), HarvestObservationReviewError> {
-    review(event, Some(window), storage)
+    review(event, Some(window), false, storage)
+}
+
+pub fn review_harvest_observations_and_validate_window(
+    event: HarvestObservationsReviewed,
+    window: AnnualHarvestWindowChanged,
+    storage: &mut impl OrchardStorage,
+) -> Result<(), HarvestObservationReviewError> {
+    review(event, Some(window), true, storage)
 }
 
 fn review(
     event: HarvestObservationsReviewed,
     window: Option<AnnualHarvestWindowChanged>,
+    validate_window: bool,
     storage: &mut impl OrchardStorage,
 ) -> Result<(), HarvestObservationReviewError> {
-    if event.observation_ids.is_empty() {
+    if (event.observation_ids.is_empty() && !(window.is_some() && event.window_change.is_some()))
+        || (validate_window && event.window_change.is_none())
+    {
         return Err(HarvestObservationReviewError::InvalidObservationSelection);
     }
     let mut ids = event.observation_ids.clone();
@@ -91,13 +102,15 @@ fn review(
         }
         if let Some(change) = event.window_change {
             if let Some((windows, index)) = scoped_windows {
-                update_reviewed_window(change, windows, index, orchard)?;
+                update_reviewed_window(change, windows, index, validate_window, orchard)?;
             } else {
                 replace_orchard_harvest_windows_in_transaction(change, orchard)
                     .map_err(HarvestObservationReviewError::InvalidWindowChange)?;
             }
         }
-        orchard.review_harvest_observations(event.orchard_id, event.owner, &ids)?;
+        if !ids.is_empty() {
+            orchard.review_harvest_observations(event.orchard_id, event.owner, &ids)?;
+        }
         Ok(())
     })
 }
@@ -106,7 +119,9 @@ fn observation_matches_window(
     point: &HarvestObservation,
     window: AnnualHarvestWindowChanged,
 ) -> bool {
-    let Some(period) = point.period else { return false; };
+    let Some(period) = point.period else {
+        return false;
+    };
     period.start.month == window.start_month
         && period.start.day == window.start_day
         && period.end.month == window.end_month
@@ -118,6 +133,7 @@ fn update_reviewed_window(
     change: OrchardHarvestWindowsReplaced,
     mut windows: Vec<AnnualHarvestWindow>,
     index: usize,
+    validate_window: bool,
     storage: &mut impl OrchardStorage,
 ) -> Result<(), HarvestObservationReviewError> {
     if change.windows.len() != 1 {
@@ -148,7 +164,12 @@ fn update_reviewed_window(
             harvested_part: replacement.harvested_part,
             data_origin: HarvestDataOrigin::FieldObservation,
             source_url: None,
+            validated: false,
         };
+    }
+    if validate_window {
+        windows[index].validated = true;
+        windows[index].data_origin = HarvestDataOrigin::FieldObservation;
     }
     if !storage.replace_orchard_harvest_windows(change.orchard_id, change.owner, windows)? {
         return Err(invalid(PlantHarvestWindowsReplacementError::OwnerNotFound));

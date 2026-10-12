@@ -2161,6 +2161,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
         window.end = extension.new_end;
         window.data_origin = HarvestDataOrigin::FieldObservation;
         window.source_url = None;
+        window.validated = false;
         drop(orchard);
 
         let transaction = self
@@ -2217,6 +2218,7 @@ impl OrchardStorage for InMemoryOrchardStorage {
         extended_window.end = extension.new_end;
         extended_window.data_origin = HarvestDataOrigin::FieldObservation;
         extended_window.source_url = None;
+        extended_window.validated = false;
         let Some(window) = windows
             .iter_mut()
             .find(|window| **window == extended_window)

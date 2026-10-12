@@ -19,7 +19,7 @@ fn migrate_fresh_adopt_legacy_and_reject_checksum_drift() {
         first_run.applied_versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-            26, 27, 28, 29, 30
+            26, 27, 28, 29, 30, 31, 32
         ]
     );
     assert!(!first_run.adopted_legacy_schema);
@@ -31,7 +31,7 @@ fn migrate_fresh_adopt_legacy_and_reject_checksum_drift() {
     assert_eq!(
         migrator.revert_to(10).unwrap().reverted_versions,
         vec![
-            30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11
+            32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11
         ]
     );
     migrator
@@ -43,7 +43,7 @@ fn migrate_fresh_adopt_legacy_and_reject_checksum_drift() {
     assert_eq!(
         adoption.applied_versions,
         vec![
-            11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30
+            11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32
         ]
     );
 
@@ -130,7 +130,7 @@ fn assign_existing_orchard_data_to_the_default_users_orchard_before_adding_authe
     assert_eq!(
         migrator.migrate().unwrap().applied_versions,
         vec![
-            11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30
+            11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32
         ]
     );
 
@@ -240,7 +240,7 @@ fn migrate_existing_share_links_to_the_same_independent_capabilities() {
         .unwrap();
     assert_eq!(
         migrator.migrate().unwrap().applied_versions,
-        vec![24, 25, 26, 27, 28, 29, 30]
+        vec![24, 25, 26, 27, 28, 29, 30, 31, 32]
     );
     let migrated = migrator
         .client()
@@ -478,7 +478,7 @@ fn revert_and_reapply_the_embedded_migration_chain() {
     assert_eq!(
         migrator.revert_to(0).unwrap().reverted_versions,
         vec![
-            30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 8,
+            32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 8,
             7, 6, 5, 4, 3, 2, 1
         ]
     );
@@ -501,7 +501,7 @@ fn revert_and_reapply_the_embedded_migration_chain() {
         migrator.migrate().unwrap().applied_versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-            26, 27, 28, 29, 30
+            26, 27, 28, 29, 30, 31, 32
         ]
     );
 
@@ -724,7 +724,7 @@ fn preserve_representable_orchard_data_while_reverting_to_version_6_and_reapplyi
     assert_eq!(
         migrator.revert_to(6).unwrap().reverted_versions,
         vec![
-            30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 8,
+            32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 8,
             7
         ]
     );
@@ -752,7 +752,7 @@ fn preserve_representable_orchard_data_while_reverting_to_version_6_and_reapplyi
         migrator.migrate().unwrap().applied_versions,
         vec![
             7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
-            30
+            30, 31, 32
         ]
     );
     let version_10_tree = migrator
@@ -969,4 +969,48 @@ fn empty_test_schema(database_url: &str) -> PostgresMigrator {
         )
         .unwrap();
     PostgresMigrator::from_client(client)
+}
+
+#[test]
+fn existing_field_origins_are_not_assumed_validated_and_rollback_preserves_validation() {
+    let database_url = std::env::var("ORCHARD_TEST_DATABASE_URL").unwrap();
+    let mut lock = Client::connect(&database_url, NoTls).unwrap();
+    lock.query_one("SELECT pg_advisory_lock($1)", &[&TEST_DATABASE_LOCK])
+        .unwrap();
+    let mut migrator = empty_test_schema(&database_url);
+    let prior = MIGRATIONS
+        .iter()
+        .copied()
+        .filter(|migration| migration.version <= 31)
+        .collect::<Vec<_>>();
+    migrator.migrate_while_locked(&prior).unwrap();
+    migrator.client().batch_execute("INSERT INTO plant_identities (common_name,botanical_taxon) VALUES ('Apple','{}'); INSERT INTO plant_harvest_windows (plant_identity_id,start_month,start_day,end_month,end_day,harvested_part,data_origin) VALUES (1,9,1,9,30,'fruit','field_observation');").unwrap();
+    assert_eq!(migrator.migrate().unwrap().applied_versions, vec![32]);
+    assert!(
+        !migrator
+            .client()
+            .query_one("SELECT validated FROM plant_harvest_windows", &[])
+            .unwrap()
+            .get::<_, bool>(0)
+    );
+    migrator
+        .client()
+        .batch_execute("UPDATE plant_harvest_windows SET validated=TRUE")
+        .unwrap();
+    assert!(matches!(
+        migrator.revert_to(31),
+        Err(MigrationError::MigrationCouldNotBeReverted { version: 32, .. })
+    ));
+    assert!(
+        migrator
+            .client()
+            .query_one("SELECT validated FROM plant_harvest_windows", &[])
+            .unwrap()
+            .get::<_, bool>(0)
+    );
+    migrator
+        .client()
+        .batch_execute("UPDATE plant_harvest_windows SET validated=FALSE")
+        .unwrap();
+    assert_eq!(migrator.revert_to(31).unwrap().reverted_versions, vec![32]);
 }

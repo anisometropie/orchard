@@ -223,3 +223,15 @@ path = "src/hexagon/use_cases/record_standalone_harvest_observation/record_stand
 [[test]]
 name = "classify_legacy_harvest_observation_unit"
 path = "src/hexagon/use_cases/classify_legacy_harvest_observation/classify_legacy_harvest_observation_unit_test.rs"
+
+[[test]]
+name = "validate_harvest_window_unit"
+path = "src/hexagon/use_cases/validate_harvest_window/validate_harvest_window_unit_test.rs"
+
+[[test]]
+name = "assess_harvest_window_unit"
+path = "src/hexagon/use_cases/assess_harvest_window/assess_harvest_window_unit_test.rs"
+
+[[test]]
+name = "restore_external_harvest_reference_unit"
+path = "src/hexagon/use_cases/restore_external_harvest_reference/restore_external_harvest_reference_unit_test.rs"
