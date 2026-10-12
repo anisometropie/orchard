@@ -537,7 +537,17 @@
         gap: 6px;
         justify-content: space-between;
       }
-      #history-panel .history-legacy-action {
+      .history-tree-heading strong {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .history-tree-actions {
+        display: inline-flex;
+        flex: none;
+        gap: 4px;
+      }
+      #history-panel .history-legacy-action,
+      #history-panel .history-locate-action {
         align-items: center;
         background: transparent;
         border: 0;
@@ -555,6 +565,41 @@
         color: #555;
         display: block;
         font-size: 12px;
+      }
+      #history-return-bookmark {
+        display: none;
+      }
+      #history-return-bookmark svg {
+        height: 24px;
+        width: 24px;
+      }
+      @media (max-width: 760px) {
+        #history-return-bookmark:not([hidden]) {
+          align-items: center;
+          background: white;
+          border: 1px solid #245c2a;
+          border-radius: 0 0 6px 0;
+          box-shadow: 0 2px 6px rgb(0 0 0 / 20%);
+          color: #245c2a;
+          cursor: pointer;
+          display: inline-flex;
+          height: 36px;
+          justify-content: center;
+          left: 0;
+          padding: 6px;
+          position: fixed;
+          top: 0;
+          width: 36px;
+          z-index: 121;
+        }
+        #history-panel.history-map-preview {
+          display: none;
+        }
+      }
+      @media (max-width: 430px) {
+        body:has(#history-return-bookmark:not([hidden])) #map-toolbar {
+          left: 56px;
+        }
       }
       .manual-order-actions {
         display: flex;
@@ -1611,6 +1656,7 @@
           min-height: 44px;
         }
         .workflow-panel,
+        #history-panel,
         #inventory-panel {
           border-radius: 0;
           bottom: 0;
@@ -2325,6 +2371,7 @@
         </section>
       </div>
     </section>
+    <button id="history-return-bookmark" type="button" title="Back to where you were in harvest history" aria-label="Back to where you were in harvest history" hidden></button>
     <section id="watering-tree-banner" aria-live="polite" hidden>
       <div>
         <div id="watering-tree-name"></div>
@@ -3067,6 +3114,9 @@
       const historyToggle = document.getElementById("history-toggle");
       const historyPanel = document.getElementById("history-panel");
       const historyClose = document.getElementById("history-close");
+      const historyReturnBookmark = document.getElementById("history-return-bookmark");
+      historyReturnBookmark.append(createInventoryActionIcon("return"));
+      let historyMapReturnPosition = null;
       const historyStatus = document.getElementById("history-status");
       const historyError = document.getElementById("history-error");
       const wateringHistoryTab = document.getElementById(
@@ -3542,6 +3592,8 @@
           eye: ["M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z", [2, 5, 20, 14]],
           scroll: ["M6 3h13a3 3 0 0 1 3 3v2h-6V6a3 3 0 0 0-6 0v12a3 3 0 0 1-6 0v-2h12v2a3 3 0 0 1-3 3H7 M10 6V5a2 2 0 0 0-4 0v11 M12 10h5 M12 13h5", [4, 3, 18, 18]],
           review: ["M9 4H5v17h14V4h-4 M9 2h6v5H9Z M8 12l2 2 5-5 M8 18h8", [5, 2, 14, 19]],
+          locate: ["M3 12h4 M17 12h4 M12 3v4 M12 17v4 M17 12a5 5 0 1 1-10 0 5 5 0 0 1 10 0Z", [3, 3, 18, 18]],
+          return: ["M209 435C311 412 379 341 379 263C379 173 305 97 209 97H136 M208 26l-72 72 72 71", [136, 26, 243, 409]],
           remove: ["M5 5l14 14 M19 5 5 19", [5, 5, 14, 14]],
         };
         const [pathData, [left, top, width, height]] = artwork[name];
@@ -4209,17 +4261,19 @@
         });
       }
 
-      function openTreeSelectedPopup(feature) {
+      function openTreeSelectedPopup(feature, { nameOnly = false } = {}) {
         closeTreeTooltip();
         closeTreeEditor();
 
+        const content = nameOnly ? document.createElement("strong") : createTreeTooltip(feature, "selected");
+        if (nameOnly) content.textContent = `${feature.properties.name || "Tree"} #${feature.id}`;
         const popup = new maplibregl.Popup({
           closeButton: false,
           closeOnClick: true,
           offset: 12,
         })
           .setLngLat(feature.geometry.coordinates)
-          .setDOMContent(createTreeTooltip(feature, "selected"))
+          .setDOMContent(content)
           .addTo(map);
         treeTooltip = popup;
         treeTooltipTreeId = feature.id;
@@ -4732,6 +4786,9 @@
       }
 
       function setWorkflowPanel(openPanel) {
+        historyPanel.classList.remove("history-map-preview");
+        historyMapReturnPosition = null;
+        historyReturnBookmark.hidden = true;
         if (openPanel !== wateringPanel && placingWaterSource) {
           placingWaterSource = false;
           reopenWateringPanelAfterSourcePlacement = false;
@@ -8484,6 +8541,49 @@
           trees.append(
             ...visibleHarvestTrees(run).map((tree) => {
               const item = historyTreeItem(tree.name, harvestTreeHistoryDetails(tree));
+              const heading = document.createElement("span");
+              heading.className = "history-tree-heading";
+              const title = item.querySelector("strong");
+              title.replaceWith(heading);
+              const actions = document.createElement("span");
+              actions.className = "history-tree-actions";
+              const locate = document.createElement("button");
+              locate.type = "button";
+              locate.className = "secondary history-locate-action";
+              locate.append(createInventoryActionIcon("locate"));
+              const feature = orchardFeatures.find((feature) => String(feature.id) === String(tree.tree_id));
+              locate.disabled = !feature;
+              locate.title = feature ? `Show ${tree.name} #${tree.tree_id} on map` : "This tree is no longer on the map";
+              locate.setAttribute("aria-label", locate.title);
+              locate.addEventListener("click", () => {
+                const currentFeature = orchardFeatures.find((feature) => String(feature.id) === String(tree.tree_id));
+                if (!currentFeature) return;
+                if (window.innerWidth <= 760) {
+                  historyMapReturnPosition ??= {
+                    access: currentAccess,
+                    scrollTop: historyPanel.querySelector(".history-scroll").scrollTop,
+                    expandedRuns: new Set([...harvestHistoryList.querySelectorAll("details[open][data-run-id]")].map((card) => card.dataset.runId)),
+                    trigger: locate,
+                  };
+                  historyReturnBookmark.hidden = false;
+                }
+                historyPanel.classList.add("history-map-preview");
+                const padding = { top: 80, right: 30, bottom: 30, left: 30 };
+                if (window.innerWidth > 760) {
+                  padding.left = historyPanel.getBoundingClientRect().right + 24;
+                }
+                map.stop();
+                map.easeTo({
+                  center: currentFeature.geometry.coordinates,
+                  zoom: Math.max(map.getMinZoom(), Math.min(21, map.getMaxZoom())),
+                  duration: 650,
+                  padding,
+                  retainPadding: false,
+                });
+                openTreeSelectedPopup(currentFeature, { nameOnly: true });
+              });
+              actions.append(locate);
+              heading.append(title, actions);
               if (isEditable() && tree.needs_legacy_classification) {
                 const classify = document.createElement("button");
                 classify.type = "button";
@@ -8496,11 +8596,7 @@
                   const feature = orchardFeatures.find((feature) => String(feature.id) === String(tree.tree_id)) || { id: tree.tree_id, properties: { name: tree.name, harvest_windows: [] } };
                   showHarvestObservation(feature, { runId: run.run_id, tree });
                 });
-                const heading = document.createElement("span");
-                heading.className = "history-tree-heading";
-                const title = item.querySelector("strong");
-                title.replaceWith(heading);
-                heading.append(title, classify);
+                actions.append(classify);
               }
               return item;
             }),
@@ -8798,11 +8894,26 @@
       inventoryToggle.addEventListener("click", () => setInventoryOpen(inventoryPanel.hidden));
       inventoryClose.addEventListener("click", () => setInventoryOpen(false));
       historyToggle.addEventListener("click", async () => {
+        if (historyMapReturnPosition && window.innerWidth <= 760) {
+          historyReturnBookmark.click();
+          return;
+        }
         const opensHistory = historyPanel.hidden;
         setWorkflowPanel(opensHistory ? historyPanel : null);
         if (opensHistory) await loadRunHistory();
       });
       historyClose.addEventListener("click", () => setWorkflowPanel(null));
+      historyReturnBookmark.addEventListener("click", () => {
+        const position = historyMapReturnPosition;
+        if (!position || position.access !== currentAccess) return;
+        setWorkflowPanel(historyPanel);
+        selectHistoryView("harvest");
+        harvestHistoryList.querySelectorAll("details[data-run-id]").forEach((card) => {
+          card.open = position.expandedRuns.has(card.dataset.runId);
+        });
+        historyPanel.querySelector(".history-scroll").scrollTop = position.scrollTop;
+        if (position.trigger.isConnected) position.trigger.focus({ preventScroll: true });
+      });
       wateringHistoryTab.addEventListener("click", () =>
         selectHistoryView("watering"),
       );
